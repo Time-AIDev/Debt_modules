@@ -1,0 +1,119 @@
+/* Volt Debt Console — tokens.
+   The Volt palette (final design, brief §3.1) is the source; every older semantic
+   token below points at it, so each screen follows the palette at once. Yellow is a
+   status ("ทำวันนี้") and the primary action — never "where you are" in the content
+   area. The rail keeps its own --rail* values. */
+:root {
+  /* ---- the Volt palette ---- */
+  --volt-yellow: #FFC700;
+  --volt-yellow-hover: #F5BE00;
+  --volt-yellow-100: #FFE27A;
+  --volt-yellow-tint: #FFF6D6;
+  --volt-ink: #111E2A;
+  --volt-ink-2: #58626A;
+  --volt-red: #D93F35;
+  --volt-red-100: #EB9994;
+  --volt-red-tint: #FBE6E4;
+  --volt-red-text: #B3342B;
+  --volt-green: #88C083;
+  --volt-green-tint: #E8F3E6;
+  --volt-white: #FFFFFF;
+  --volt-warm: #F1EEE8;
+  --volt-hover: #F7F5F1;
+  --volt-line: #E4DFD6;
+  --volt-line-btn: #C9C2B5;
+  --volt-line-ctl: #8A949C;
+  --volt-scrim: rgba(17, 30, 42, .32);
+  --volt-shadow: 0 12px 32px rgba(17, 30, 42, .16);
+
+  /* ---- semantic tokens, remapped onto the palette ---- */
+  --ink-900: var(--volt-ink);
+  --ink-800: var(--volt-ink);
+  --ink-700: var(--volt-ink-2);
+  --ink-600: var(--volt-ink-2);
+  --ink-500: var(--volt-ink-2);
+  --ink-400: var(--volt-line-ctl);
+
+  --surface-0: var(--volt-white);
+  --surface-50: var(--volt-hover);
+  --surface-100: var(--volt-warm);
+  --surface-200: var(--volt-line);
+  --line-default: var(--volt-line);
+  --line-strong: var(--volt-line-ctl);
+
+  --brand-050: var(--volt-yellow-tint);
+  --brand-500: var(--volt-yellow);
+
+  /* Legacy status/severity tokens: kept readable for their remaining users until
+     each screen moves to the status icons (lib/status.js). No blue, no purple. */
+  --viz-sev-1: var(--volt-line);
+  --viz-sev-2: var(--volt-line-btn);
+  --viz-sev-3: var(--volt-line-ctl);
+  --viz-sev-4: var(--volt-ink-2);
+  --viz-sev-5: var(--volt-ink);
+
+  --status-current: var(--volt-green);
+  --status-current-bg: var(--volt-green-tint);
+  --status-pending: var(--volt-ink);
+  --status-pending-bg: var(--volt-warm);
+  --status-overdue: var(--volt-red-text);
+  --status-overdue-bg: var(--volt-red-tint);
+  --status-held: var(--volt-ink-2);
+  --status-held-bg: var(--volt-warm);
+
+  --band-early-bg: var(--volt-warm);
+  --band-early-fg: var(--volt-ink);
+  --band-mid-bg: var(--volt-warm);
+  --band-mid-fg: var(--volt-yellow);
+  --band-npl-bg: var(--volt-warm);
+  --band-npl-fg: var(--volt-ink);
+
+  --reg-open: var(--volt-ink-2);
+  --reg-open-tint: var(--volt-warm);
+  --reg-open-line: var(--volt-line);
+
+  --rail: #101318;
+  --rail-ink: #8b93a1;
+  --rail-ink-on: #ffffff;
+  --rail-line: #232830;
+  --rail-eyebrow: #6b7280;
+
+  --font-sans: "IBM Plex Sans", "IBM Plex Sans Thai", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, Menlo, monospace;
+
+  --row-h: 44px;
+  --rail-w: 248px;
+
+  color-scheme: light;
+}
+
+/* Dark: light is the designed theme; dark only has to stay usable. Grounds, lines and
+   ink flip; tints darken; the glyph fills (yellow, red, green) stay. */
+[data-theme="dark"] {
+  --volt-ink: #EEF1F4;
+  --volt-ink-2: #A9B2BB;
+  --volt-white: #171B21;
+  --volt-warm: #0F1216;
+  --volt-hover: #1E232A;
+  --volt-line: #2B3139;
+  --volt-line-btn: #465059;
+  --volt-line-ctl: #6B7580;
+  --volt-yellow-100: #5C4A0A;
+  --volt-yellow-tint: #3A300A;
+  --volt-red-100: #6E2C27;
+  --volt-red-tint: #3A1A18;
+  --volt-red-text: #F19A93;
+  --volt-green-tint: #16301A;
+  --volt-scrim: rgba(0, 0, 0, .5);
+  --volt-shadow: 0 12px 32px rgba(0, 0, 0, .5);
+
+  --rail: #0b0d11;
+  --rail-ink: #7d8593;
+  --rail-line: #1d2229;
+
+  color-scheme: dark;
+}
+
+[data-density="compact"] {
+  --row-h: 36px;
+}

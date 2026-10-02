@@ -1,0 +1,31 @@
+/* screens — the screens the final design did not draw (ภาพรวม, ปฏิทิน, สมุดงาน, รอตรวจ,
+   ใบแจ้งหนี้ก่อนติดตั้ง, เงินเข้าและ PEAK, รายงาน, ตั้งค่า, บันทึกการใช้งาน), on the Volt palette.
+   The shared parts (buttons, fields, pills, chips, cards, tables, drawers) are base.css / shell.css. */
+
+/* A screen's head card: the id block left, figures and actions right. No coloured edge —
+   yellow is a status and the primary action, never decoration. */
+.scr-head { display: flex; align-items: flex-start; gap: 14px; flex-wrap: wrap; padding: 14px 16px; }
+.scr-head__id { flex: 1 1 220px; min-width: min(220px, 100%); display: flex; flex-direction: column; gap: 4px; }
+.scr-head__id h1 { font-size: 22px; line-height: 28px; font-weight: 600; color: var(--volt-ink); }
+.scr-head__chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.scr-head__act { display: flex; flex-direction: column; align-items: flex-end; gap: 8px; text-align: right; }
+.scr-head__buttons { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+
+/* Meta 12/16 ink-2 (also the reason line under a disabled control) · a fact value 18/24 600. */
+.scr-meta { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.scr-value { font-size: 18px; line-height: 24px; font-weight: 600; color: var(--volt-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* Fact cells: white, a hairline between cells. */
+.scr-facts { display: flex; flex-wrap: wrap; border-top: 1px solid var(--volt-line); }
+.card > .scr-facts:first-child { border-top: 0; }
+.scr-fact { flex: 1 1 156px; min-width: 156px; padding: 10px 12px; display: flex; flex-direction: column; gap: 2px; border-right: 1px solid var(--volt-line); }
+.scr-fact:last-child { border-right: 0; }
+
+/* A name that opens its case stays ink, like every name. */
+.scr-link { color: var(--volt-ink); }
+.scr-link:hover { color: var(--volt-ink); text-decoration-thickness: 2px; }
+
+/* A list group's head: the status icon before its words. */
+
+/* สมุดงาน: the search keeps its own width in the one-line lens bar. */
+.lensbar .lensbar__search { width: 220px; flex: none; }

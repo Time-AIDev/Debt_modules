@@ -1,0 +1,34 @@
+# What gcloud uploads to the Cloud Build staging bucket when deploy_gcp.sh runs
+# `gcloud run deploy --source backend`.
+#
+# Without this file gcloud ships the whole directory. The root .gitignore does not
+# save you: gcloud looks for an ignore file in the SOURCE directory, and backend/
+# has no .gitignore of its own.
+#
+# WHAT STAYS OUT, and why each one matters:
+#   .env                  live Odoo and PEAK UAT credentials — API key, passwords, token
+#   var/master_sheet.txt  the source sheet, carrying phone numbers BEFORE masking
+#   .venv                 44 MB the image never uses; the Dockerfile pip installs
+#                         from requirements.txt
+#
+# WHAT GOES, and why it is not an oversight:
+#   static/                the built interface. The Dockerfile's `COPY stati[c] ./static`
+#                           needs it, or the deploy serves an API with no interface.
+#
+# `var/*` and not `var/`: any NEW file dropped into var/ stays excluded by default,
+# which is the safe direction for a folder that has held raw personal data. (The
+# Odoo snapshot file it once re-included went with the sale.order sync, 2026-09-25.)
+
+.env
+.env.*
+!.env.example
+
+var/*
+
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+
+.git
+.gcloudignore

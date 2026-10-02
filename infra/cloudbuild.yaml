@@ -1,0 +1,56 @@
+# §10.2 — Cloud Build. Migrations run as a Cloud Run Job BEFORE the new revision
+# takes traffic (§5.4 debt-migrate, §10.3), so a failed migration never reaches users.
+steps:
+  - id: test
+    name: python:3.12-slim
+    entrypoint: bash
+    args:
+      - -c
+      - |
+        cd backend
+        pip install --no-cache-dir -r requirements.txt
+        # NOT `pytest -q`: pytest.ini already sets -q, and doubling it
+        # double-suppresses into bare dots that read like a failure.
+        pytest
+
+  - id: build-api
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-api:${SHORT_SHA}', 'backend']
+    waitFor: ['test']
+
+  - id: build-web
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-web:${SHORT_SHA}', 'frontend']
+    waitFor: ['-']
+
+  - id: push
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '--all-tags', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-api']
+    waitFor: ['build-api']
+
+  - id: migrate
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args: ['run', 'jobs', 'execute', 'debt-migrate', '--region', '${_REGION}', '--wait']
+    waitFor: ['push']
+
+  - id: deploy-api
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - debt-api
+      - --image=${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-api:${SHORT_SHA}
+      - --region=${_REGION}
+      # Production promotes behind a 10% canary for 15 minutes (ADR-010 item 5).
+      # Rollback is a traffic switch to the previous revision.
+      - --no-traffic
+      - --tag=candidate
+    waitFor: ['migrate']
+
+substitutions:
+  _REGION: asia-southeast1
+
+options:
+  logging: CLOUD_LOGGING_ONLY

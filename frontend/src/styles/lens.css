@@ -1,0 +1,274 @@
+/* Lens-level layout: the toolbar, the record card grid, the ladder path, tabs,
+   timelines, key-value rows and the month grid. */
+
+.lensbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-height: 34px;
+}
+.lensbar__title { font-size: 15px; font-weight: 600; color: var(--ink-900); }
+.lensbar__meta { font-size: 11.5px; color: var(--ink-500); }
+.lensbar__hint { font-size: 11.5px; color: var(--ink-500); margin-top: -6px; }
+.lensbar__search { width: 220px; }
+
+/* ---- record ---- */
+
+.record__head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  flex-wrap: wrap;
+  padding: 14px 16px;
+  border-left: 4px solid var(--viz-sev-3);
+}
+.record__id { min-width: min(220px, 100%); flex: 1 1 220px; }
+.record__chips { display: flex; align-items: center; gap: 6px; margin-bottom: 3px; flex-wrap: wrap; }
+.record__id h1 { font-size: 22px; line-height: 28px; font-weight: 600; color: var(--ink-900); margin-bottom: 4px; }
+.record__sub { font-size: 12px; color: var(--ink-500); }
+.record__act { display: flex; flex-direction: column; align-items: flex-end; gap: 9px; }
+.record__score { display: flex; align-items: baseline; gap: 9px; }
+.record__scoreValue { font-size: 26px; line-height: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.record__buttons { display: flex; gap: 6px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
+
+.record__fields {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  background: var(--surface-50);
+}
+.record__field {
+  flex: 1 1 156px;
+  min-width: 156px;
+  padding: 9px 16px;
+  border-right: 1px solid var(--line-default);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+/* F03 / feedback-r2 TASK-003: "paid / total" is the field the team reads first. */
+.record__field--emphasis .record__value { font-size: 26px; color: var(--volt-ink); }
+.record__value { font-size: 15px; font-weight: 600; color: var(--ink-900); }
+.record__note { font-size: 10.5px; color: var(--ink-500); line-height: 1.35; }
+
+.record__moneyValue { font-size: 19px; line-height: 24px; font-weight: 600; color: var(--ink-900); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+
+/* ---- lists inside cards ---- */
+
+
+.rows { display: flex; flex-direction: column; }
+.rows__row { display: flex; align-items: center; gap: 8px; padding: 6px 0; border-bottom: 1px solid var(--volt-line); font-size: 14px; line-height: 20px; }
+.rows__main { flex: 1; min-width: 0; }
+
+.monthgrid { display: flex; gap: 4px; flex-wrap: wrap; }
+.monthgrid__cell {
+  width: 34px;
+  height: 26px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+}
+/* Instalment cells (lib/status.js cellStatus): paid green · overdue red · not due warm ·
+   the sheet grid's link-sent yellow-100 and closed line. F14 / TASK-007: a partly paid
+   cycle is half paid, half outstanding. */
+.monthgrid__cell--paid { background: var(--volt-green); border-color: var(--volt-green); color: #111E2A; }
+.monthgrid__cell--late { background: var(--volt-red); border-color: var(--volt-red); color: #FFFFFF; }
+.monthgrid__cell--notdue { background: var(--volt-warm); color: var(--volt-ink-2); }
+.monthgrid__cell--link { background: var(--volt-yellow-100); border-color: var(--volt-yellow-100); color: var(--volt-ink); }
+.monthgrid__cell--closed { background: var(--volt-line); color: var(--volt-ink); }
+.monthgrid__cell--part { background: linear-gradient(90deg, var(--volt-green) 50%, var(--volt-red) 50%); color: #111E2A; }
+.monthgrid__cell--pending { width: 62px; height: 34px; flex-direction: column; outline: 2px solid var(--volt-yellow); outline-offset: -2px; }
+.monthgrid__cell--pending small { display: block; font-size: 9px; line-height: 10px; font-weight: 700; }
+.legend { display: flex; gap: 14px; margin-top: 10px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); flex-wrap: wrap; }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend i { width: 10px; height: 10px; border-radius: 2px; display: inline-block; }
+
+/* ---- drawer internals ---- */
+
+.drawer__grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.drawer__hint { margin: 0; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.drawer__alt { display: flex; gap: 6px; flex-wrap: wrap; }
+
+
+/* ---- settings: the register's three columns, per the design ---- */
+
+.setHead { padding: 14px 16px; }
+.setHead h1 { font: 600 20px/28px var(--font-sans); color: var(--volt-ink); margin: 0 0 3px; }
+.setHead p { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+
+.setgrid__head {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  padding: 9px 14px;
+  background: var(--volt-hover);
+  border-top: 1px solid var(--volt-line);
+  border-bottom: 1px solid var(--volt-line);
+}
+.setgrid__head span { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--volt-ink-2); }
+.setrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--line-default);
+}
+.setrow:last-child { border-bottom: 0; }
+.setrow__main { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.setrow__label { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.setrow__labelText {
+  position: relative;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink-900);
+  cursor: help;
+  border-bottom: 1px dotted var(--line-strong);
+}
+.setrow__labelText::after {
+  content: attr(data-key);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  margin-top: 5px;
+  z-index: 30;
+  padding: 3px 7px;
+  border-radius: 5px;
+  background: var(--ink-900);
+  color: var(--surface-0);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 400;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .12s;
+}
+.setrow__labelText:hover::after,
+.setrow__labelText:focus-visible::after { opacity: 1; }
+.setrow__note { font-size: 11.5px; color: var(--ink-600); line-height: 1.4; overflow-wrap: anywhere; }
+.setrow__meta { font-size: 11px; color: var(--ink-500); }
+
+.setcell {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--volt-line);
+  background: var(--volt-white);
+}
+/* The column of the role you are in now: warm + the inset ink bar ("where you are"), never yellow. */
+.setcell--on { background: var(--volt-warm); box-shadow: inset 3px 0 0 var(--volt-ink); }
+.setcell__value { font-size: 14px; font-weight: 500; color: var(--volt-ink); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.setcell__note { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.setcell__edit { display: flex; gap: 6px; align-items: center; }
+.setcell__edit .field { min-height: 32px; font-size: 13px; }
+.field--locked { border-style: dashed; background: var(--volt-warm); color: var(--volt-ink-2); cursor: not-allowed; }
+
+.user__name { display: block; font-size: 13px; font-weight: 600; color: var(--ink-900); }
+
+@container (max-width: 760px) {
+  .setgrid__head { display: none; }
+  .setrow { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---- data sources ---- */
+
+.pick { display: inline-flex; border: 1px solid var(--line-default); border-radius: 7px; overflow: hidden; }
+.pick__opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11.5px;
+  color: var(--ink-600);
+  cursor: pointer;
+  background: var(--surface-0);
+}
+.pick__opt + .pick__opt { border-left: 1px solid var(--line-default); }
+.pick__opt--on { background: var(--status-pending-bg); color: var(--status-pending); font-weight: 600; }
+.pick__opt input { margin: 0; }
+
+/* the house rule: a page's own footnotes never open by default */
+.page-note { font-size: 11.5px; color: var(--ink-500); }
+.page-note > summary { cursor: pointer; }
+.page-note > p { margin: 6px 0 0; line-height: 1.5; }
+
+
+/* ---- calendar ---- */
+
+.cal__weekdays { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); background: var(--volt-hover); border-bottom: 1px solid var(--volt-line); }
+.cal__weekday { padding: 8px 10px; font-size: 12px; line-height: 16px; font-weight: 500; color: var(--volt-ink-2); border-right: 1px solid var(--volt-line); }
+.cal__nav { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.cal__nav .field { width: 150px; }
+.cal__grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.cal__day { min-height: 92px; padding: 7px 8px; border-right: 1px solid var(--volt-line); border-bottom: 1px solid var(--volt-line); }
+.cal__day--out { background: var(--volt-hover); }
+/* Today is "where you are": warm + the inset ink bar, never yellow (a status). */
+.cal__day--today { background: var(--volt-warm); box-shadow: inset 3px 0 0 var(--volt-ink); }
+.cal__dayHead { display: flex; align-items: center; gap: 6px; margin-bottom: 5px; }
+.cal__num { width: 22px; height: 22px; border-radius: 5px; display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.cal__day--today .cal__num { background: var(--volt-ink); font-weight: 600; color: var(--volt-white); }
+.cal__total { margin-left: auto; font-size: 12px; color: var(--volt-ink-2); font-variant-numeric: tabular-nums; }
+.cal__chips { display: flex; flex-direction: column; gap: 3px; }
+/* A chip = the kind's status icon + its words (shape carries the meaning). */
+.cal__chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  min-height: 22px;
+  text-align: left;
+  padding: 2px 6px 2px 4px;
+  border: 1px solid var(--volt-line);
+  border-radius: 4px;
+  font: inherit;
+  font-size: 12px;
+  line-height: 16px;
+  background: var(--volt-white);
+  color: var(--volt-ink);
+  cursor: pointer;
+  overflow: hidden;
+  white-space: nowrap;
+}
+.cal__chip > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.cal__chip:hover { background: var(--volt-hover); border-color: var(--volt-line-btn); }
+.cal__more { font-size: 12px; color: var(--volt-ink-2); }
+.cal__link { border: 0; padding: 0; background: transparent; text-align: left; cursor: pointer; color: var(--volt-ink); font: inherit; font-size: 13px; }
+.cal__link:hover { text-decoration: underline; }
+
+@media (max-width: 860px) {
+  .record__act { align-items: flex-start; }
+  .record__buttons { justify-content: flex-start; }
+  .drawer__grid2 { grid-template-columns: 1fr; }
+  .cal__day { min-height: 72px; }
+}
+
+/* The payment position — the served block beside the status chip (payment_position.py). */
+.pp { display: block; font-size: 11.5px; color: var(--ink-600); }
+.pp__line { display: block; margin: 0; }
+.pp__prov { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin-top: 2px; }
+.pp__source { font-weight: 600; color: var(--ink-800); }
+.pp__asof { color: var(--ink-500); }
+.pp__asof--unknown { color: var(--status-held); }
+.pp__stale { display: inline-flex; align-items: center; gap: 4px; color: var(--volt-ink); white-space: nowrap; }
+.pp__note { display: block; margin-top: 2px; color: var(--ink-500); font-size: 11px; }
+.pp--compact { display: inline; }
+.pp--compact .pp__source { font-weight: 400; color: inherit; }
+
+/* ---- feedback round 2 — phase 2 (TASK-013/014/016/030) ---- */
+
+/* F07: every calendar chip carries its kind's status icon; PTP, the most urgent, is bold. */
+.cal__legend { margin-top: 0; padding: 10px 12px; font-size: 12px; line-height: 16px; color: var(--volt-ink); border-bottom: 1px solid var(--volt-line); }
+.cal__chip--ptp { font-weight: 600; }
+
+/* F16 / TASK-025: the PTP report's own filter row. */
+.ptpfilters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+.ptpfilters label { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }

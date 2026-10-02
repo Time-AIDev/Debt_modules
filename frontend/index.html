@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="th">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- The light ground, for the paint that happens BEFORE React mounts. From then on
+         prefs.jsx owns this tag and rewrites it from the page's own computed
+         background on every theme change, so this value is a first-frame default and
+         not a second source of truth. -->
+    <meta name="theme-color" content="#f9fafb" />
+    <!-- The tab carried `href="data:,"` — a deliberately EMPTY icon, so every Volt
+         tab was the browser's blank default and told the officer nothing. The mark is
+         the same bolt the rail draws (components/Shell.jsx), inline as a data URI so it
+         costs no request and no dependency. Brand amber on ink: this is identity, which
+         is exactly what --brand-500 is for and the one job house rule 1 reserves it. -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 20 20'%3E%3Crect width='20' height='20' rx='4' fill='%23111827'/%3E%3Cpath d='M11.4 1.6 3.8 11.2h4.3l-.5 7.2 7.6-9.6h-4.3z' fill='%23f2b705'/%3E%3C/svg%3E" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Sans+Thai:wght@400;500;600;700&display=swap" rel="stylesheet" />
+    <title>Volt Debt</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

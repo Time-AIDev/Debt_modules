@@ -1,0 +1,339 @@
+{
+  "fetched_at": "2026-10-02",
+  "region": "asia-southeast1",
+  "currency": "THB",
+  "source": "https://cloudbilling.googleapis.com/v1/services/{service}/skus?currencyCode=THB",
+  "skus": [
+    {
+      "service": "Cloud-SQL",
+      "sku": "0152-2835-C929",
+      "description": "Cloud SQL for PostgreSQL: Regional - vCPU in Singapore",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "h",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "3",
+            "nanos": 883293000
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-SQL",
+      "sku": "37B4-B2B7-C640",
+      "description": "Cloud SQL for PostgreSQL: Regional - RAM in Singapore",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.h",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 658413000
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-SQL",
+      "sku": "5C0F-D226-757F",
+      "description": "Cloud SQL: Backups in Singapore",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.mo",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "3",
+            "nanos": 762360000
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-SQL",
+      "sku": "83A6-DA61-7797",
+      "description": "Cloud SQL for PostgreSQL: Regional - Standard storage in Singapore",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.mo",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "15",
+            "nanos": 990030000
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Run",
+      "sku": "085C-A237-027A",
+      "description": "Services CPU Tier 2  (Request-based billing)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "s",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 1128708
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Run",
+      "sku": "2DA5-55D3-E679",
+      "description": "Requests",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "count",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 0
+          }
+        },
+        {
+          "startUsageAmount": 2000000,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 13437
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Run",
+      "sku": "4350-71E4-3051",
+      "description": "Services Min Instance CPU Tier 2 (Request-based billing)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "s",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 117573
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Run",
+      "sku": "5AF1-E483-6197",
+      "description": "Services Min Instance Memory Tier 2 (Request-based billing)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.s",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 117573
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Run",
+      "sku": "600C-3782-6708",
+      "description": "Services Memory Tier 2 (Request-based billing)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.s",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 117573
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "015F-5732-FFF0",
+      "description": "Networking Cloud Nat Data Processing",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "1",
+            "nanos": 511662500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "17FF-00DE-2217",
+      "description": "Global External Application Load Balancer Inbound Data Processing for Singapore (asia-southeast1)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 302332500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "1A87-DEB9-C4BE",
+      "description": "Networking Cloud Armor Requests",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "count",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 25194
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "32E2-4EFC-EF9F",
+      "description": "Networking Cloud Nat Gateway Uptime",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "h",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 47029500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "4B13-E64F-4A2B",
+      "description": "Networking Cloud Armor Policy",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "mo",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "167",
+            "nanos": 962500002
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "8515-9425-D2CE",
+      "description": "Networking Cloud NAT IP Usage",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "h",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 167962500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "A321-89BD-F5BC",
+      "description": "Networking Cloud Armor Rule",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "mo",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "33",
+            "nanos": 592500000
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "A9BA-43D3-25AD",
+      "description": "Global External Application Load Balancer Outbound Data Processing for Singapore (asia-southeast1)",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 302332500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Networking",
+      "sku": "DEE3-C42E-3E4D",
+      "description": "Cloud Load Balancer Forwarding Rule Minimum Global",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "h",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 839812500
+          }
+        }
+      ]
+    },
+    {
+      "service": "Cloud-Storage",
+      "sku": "76BA-5CAD-4338",
+      "description": "Standard Storage Singapore",
+      "effective": "2026-10-01T07:00:00Z",
+      "usageUnit": "GiBy.mo",
+      "tiers": [
+        {
+          "startUsageAmount": 0,
+          "unitPrice": {
+            "currencyCode": "THB",
+            "units": "0",
+            "nanos": 671850000
+          }
+        }
+      ]
+    }
+  ]
+}

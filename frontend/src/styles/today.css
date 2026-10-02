@@ -1,0 +1,222 @@
+/* today — the Today screen (final design, spec-main) and its own parts. The list
+   panel, groups and rows below are ListPanel's, so Book, Pipeline, Reviews, Payments
+   and NPL wear them too; the shared parts live in base.css / shell.css. */
+
+/* ---- screen frame: the list scrolls; the case grows with the page ---- */
+.today { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
+.today__lens { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; min-height: 40px; min-width: 0; }
+.today__lens > .btn, .today__lens > .seg, .today__lens > .info { flex: none; }
+.today__lens > .btn { margin-left: auto; }
+.today__lens > .seg { box-shadow: inset 0 0 0 1px var(--volt-line); }
+.today__title { font-size: 20px; line-height: 28px; font-weight: 600; color: var(--volt-ink); white-space: nowrap; }
+.today__count { font-size: 13px; line-height: 20px; color: var(--volt-ink-2); white-space: nowrap; }
+.today__divider { flex: none; width: 1px; height: 16px; background: var(--volt-line-btn); }
+/* The freshness said once, on the lens bar's own line (DataFreshness). */
+.today__lens .freshness { flex: 1 1 auto; min-width: 0; margin: 0; line-height: 16px; }
+.today__lens .freshness__line { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Stale: the box takes its own full-width line under the bar and says every word. */
+.today__lens .freshness--stale { order: 1; flex: 1 1 100%; flex-wrap: wrap; row-gap: 4px; padding: 6px 6px 6px 12px; font-size: 12px; }
+.today__lens .freshness--stale .freshness__line { white-space: normal; overflow: visible; }
+.today__lens .freshness--stale > .btn { margin-left: auto; }
+.today__lens:has(> .freshness--stale) .today__divider { display: none; }
+.today:has(.freshness--stale) { --today-stale: 46px; }
+
+.today__work > .panel {
+  height: max(420px, calc(100dvh - 190px - var(--today-stale, 0px)));
+  max-height: calc(100dvh - 32px);
+}
+.today__case { min-width: 0; }
+.today__none {
+  min-height: 420px;
+  padding: 24px;
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-white);
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--volt-ink-2);
+}
+.today__pad { padding: 12px; }
+.today__empty { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 16px 12px; }
+.today__empty .empty { padding: 0; }
+.today__empty .btn { margin-left: -10px; }
+.today__noteLink { white-space: nowrap; color: var(--volt-ink-2); text-decoration: underline; text-decoration-color: var(--volt-line-btn); text-underline-offset: 2px; }
+.today__noteLink:hover { color: var(--volt-ink); text-decoration-color: currentColor; }
+.today__selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--volt-line); background: var(--volt-blue-tint); font-size: 13px; }
+.today__selection strong { flex: 1 1 auto; }
+
+.today--board .board { height: calc(100vh - 190px - var(--today-stale, 0px)); min-height: 420px; }
+.today--board .board__col { max-height: none; }
+
+/* The split survives while the case still has room; below that the two stack. */
+@container (max-width: 900px) {
+  .today__work > .panel { height: auto; max-height: calc(100dvh - 150px); }
+}
+@media (max-width: 1100px) {
+  .today__work > .panel { height: auto; max-height: calc(100dvh - 150px); }
+}
+
+/* ---- the freshness line (DataFreshness: Today, Pipeline, แหล่งข้อมูล) ---- */
+.freshness__line a { color: var(--volt-ink); text-decoration: none; }
+.freshness__line a:hover { text-decoration: underline; }
+.freshness__stale { display: inline-flex; align-items: center; gap: 6px; }
+
+/* ---- the list panel (ListPanel) ---- */
+.panel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-white);
+  position: sticky;
+  top: 16px;
+  max-height: calc(100vh - 150px);
+}
+.panel__head { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--volt-line); }
+.panel__headline { display: flex; align-items: baseline; gap: 8px; }
+.panel__headline h1 { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--volt-ink); }
+.panel__count { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.panel__meta { display: flex; align-items: center; gap: 8px; min-height: 28px; }
+.panel__sub { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.panel__meta .btn--quiet { height: 28px; padding: 0 8px; }
+.panel__head > .field { height: 32px; padding: 0 8px; font-size: 13px; }
+.panel__tools { display: flex; gap: 6px; align-items: center; }
+.panel__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.panel__note {
+  flex: none;
+  display: flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--volt-line);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--volt-ink-2);
+}
+
+/* Groups: a sticky 34px head — caret, the group's status icon, label, count. */
+.group__head {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  border: 0;
+  border-bottom: 1px solid var(--volt-line);
+  background: var(--volt-white);
+  color: var(--volt-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.group__head:hover { background: var(--volt-hover); }
+.group__head:focus-visible { outline-offset: -2px; }
+.group__caret { color: var(--volt-ink-2); }
+.group__label { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.group__count { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+
+/* Rows: three lines, one button; the checkbox is its sibling. Current = warm + ink bar. */
+.row { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--volt-line); background: var(--volt-white); }
+.row:hover { background: var(--volt-hover); }
+.row--current, .row--current:hover { background: var(--volt-warm); box-shadow: inset 3px 0 0 var(--volt-ink); }
+[data-density="comfortable"] .row { padding: 14px 12px; }
+.row__check { flex: none; margin: 2px 0 0; cursor: pointer; }
+.row__btn {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--volt-ink);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row__btn:focus-visible { outline-offset: 3px; }
+.row__line { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.row__line--indent { padding-left: 24px; }
+.row__line--sub { align-items: baseline; font-size: 12px; line-height: 16px; }
+.row__line--chips { align-items: flex-start; }
+.row__name { flex: 1; min-width: 0; font-size: 14px; line-height: 20px; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row__arrears { flex: none; font-size: 14px; line-height: 20px; font-weight: 600; }
+.row__sub { flex: 1; min-width: 0; color: var(--volt-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.row__dpd { flex: none; font-weight: 500; }
+.row__dpd--none { color: var(--volt-ink-2); }
+.row__chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.row__risk { flex: none; font-size: 11px; line-height: 16px; color: var(--volt-ink-2); }
+
+/* ---- the assign bar (AssignBar): SUPERVISOR+, while rows are ticked ---- */
+.assignbar { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--volt-line); background: var(--volt-warm); }
+.assignbar__head { display: flex; align-items: center; gap: 6px; }
+.assignbar__head .btn--quiet { height: 28px; padding: 0 8px; }
+.assignbar__head .info > .btn--quiet:hover { background: var(--volt-line); }
+.assignbar__count { font-size: 13px; line-height: 20px; font-weight: 600; }
+.assignbar__modes { display: flex; background: var(--volt-line); }
+.assignbar__modes .seg__btn { flex: 1; }
+.assignbar__reason { margin-top: -4px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.assignbar__one { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+.assignbar__one .label { min-width: 0; }
+.assignbar__one .field { height: 32px; padding: 0 8px; font-size: 13px; font-weight: 400; }
+.assignbar__go { display: flex; justify-content: flex-end; }
+.assignbar__officers { display: flex; flex-wrap: wrap; gap: 6px; }
+.assignbar__pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--volt-line-btn);
+  border-radius: 999px;
+  font-size: 13px;
+  color: var(--volt-ink-2);
+  cursor: pointer;
+}
+.assignbar__pill--on { border-color: var(--volt-ink); background: var(--volt-white); color: var(--volt-ink); font-weight: 600; }
+.assignbar__pill input { width: 14px; height: 14px; margin: 0; }
+.assignbar__preview { display: flex; align-items: center; gap: 8px; padding: 8px 10px; border: 1px dashed var(--volt-line-ctl); border-radius: 8px; background: var(--volt-white); }
+.assignbar__preview p { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; }
+
+/* ---- the daily summary (DailySummary) ---- */
+.daysum { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border-bottom: 1px solid var(--volt-line); }
+.daysum__head { display: flex; align-items: baseline; gap: 8px; font-size: 12px; line-height: 16px; }
+.daysum__head .eyebrow { flex: 1; }
+.daysum__bar { display: block; height: 6px; overflow: hidden; border-radius: 3px; background: var(--volt-warm); }
+.daysum__bar > span { display: block; height: 100%; border-radius: 3px; background: var(--volt-green); }
+.daysum__grid { display: flex; justify-content: space-between; gap: 8px; margin-top: 2px; }
+.daysum__cell dt { font-size: 11px; line-height: 16px; color: var(--volt-ink-2); white-space: nowrap; }
+.daysum__cell dd { margin: 0; font-size: 15px; line-height: 20px; font-weight: 600; white-space: nowrap; }
+
+/* ---- the portfolio split drawer (AssignSplitDrawer) ---- */
+.drawer__title:has(.info) { display: flex; align-items: center; gap: 6px; }
+.split__tabs { display: flex; }
+.split__tabs .seg__btn { flex: 1; }
+.split__unassigned { font-size: 13px; line-height: 18px; font-weight: 400; color: var(--volt-ink); }
+.split__officers { display: flex; flex-direction: column; gap: 6px; }
+.split__officersHead { display: flex; align-items: center; gap: 4px; }
+.split__officersHead .eyebrow { flex: 1; }
+.split__officersHead .btn--quiet { height: 28px; padding: 0 8px; }
+.split__list { max-height: 220px; overflow-y: auto; border: 1px solid var(--volt-line); border-radius: 8px; }
+.drawer .split__officer { flex-direction: row; align-items: center; gap: 10px; height: 40px; padding: 0 12px; font-size: 14px; cursor: pointer; }
+.split__officer + .split__officer { border-top: 1px solid var(--volt-line); }
+.split__officer:hover { background: var(--volt-hover); }
+.split__name { flex: 1; min-width: 0; }
+.split__load { font-size: 12px; color: var(--volt-ink-2); }
+.drawer .split__check { flex-direction: row; align-items: center; gap: 10px; font-size: 14px; line-height: 20px; cursor: pointer; }
+.split__preview { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border: 1px dashed var(--volt-line-ctl); border-radius: 8px; }
+.split__preview p { font-size: 14px; line-height: 20px; }
+.split__seed { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.split__reason { flex: 1; min-width: 0; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.split__file { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.drawer .split__file .btn { flex: none; flex-direction: row; }
+.split__file .btn:focus-within { outline: 2px solid var(--volt-ink); outline-offset: 2px; }
+.split__fileName { min-width: 0; font-size: 13px; line-height: 18px; font-weight: 400; color: var(--volt-ink-2); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.split__done { display: flex; align-items: center; gap: 6px; font-size: 13px; line-height: 18px; }

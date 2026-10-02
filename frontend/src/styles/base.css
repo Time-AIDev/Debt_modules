@@ -1,0 +1,308 @@
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; }
+
+body {
+  margin: 0;
+  font: 400 14px/20px var(--font-sans);
+  color: var(--volt-ink);
+  background: var(--volt-warm);
+  -webkit-font-smoothing: antialiased;
+  text-wrap: pretty;
+}
+
+a { color: var(--volt-ink-2); }
+a:hover { color: var(--volt-ink); }
+
+button, input, select, textarea { font-family: inherit; }
+
+h1, h2, h3, p, dl, dd, dt { margin: 0; }
+ul { margin: 0; padding: 0; list-style: none; }
+
+.num { font-variant-numeric: tabular-nums; }
+
+:focus-visible {
+  outline: 2px solid var(--volt-ink);
+  outline-offset: 2px;
+}
+.rail :focus-visible { outline-color: #fff; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    transition: none !important;
+    animation: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* ---- shared primitives (final design, brief §3.4) ---- */
+
+/* Buttons: default = secondary; ONE .btn--primary per region. */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid var(--volt-line-btn);
+  border-radius: 8px;
+  background: var(--volt-white);
+  color: var(--volt-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 500;
+  cursor: pointer;
+  white-space: nowrap;
+  text-decoration: none;
+}
+.btn:not(:disabled):hover { background: var(--volt-hover); border-color: var(--volt-line-ctl); color: var(--volt-ink); }
+.btn--primary {
+  padding: 0 16px;
+  border-color: transparent;
+  background: var(--volt-yellow);
+  color: #111E2A;
+  font-weight: 600;
+}
+.btn--primary:not(:disabled):hover { background: var(--volt-yellow-hover); border-color: transparent; color: #111E2A; }
+.btn--quiet { height: 32px; padding: 0 10px; border-color: transparent; background: transparent; color: var(--volt-ink-2); }
+.btn--quiet:not(:disabled):hover { background: var(--volt-warm); border-color: transparent; color: var(--volt-ink); }
+.btn--danger, .btn--danger:not(:disabled):hover { color: var(--volt-red-text); }
+.btn--sm { height: 30px; padding: 0 10px; font-size: 13px; }
+.btn--primary.btn--sm { padding: 0 12px; }
+/* A square icon-only button (always with an aria-label). */
+.btn--icon { width: 28px; height: 28px; padding: 0; }
+/* In-row actions sit at 28. */
+.rows__row .btn--sm, .table .btn--sm { height: 28px; }
+.btn:disabled, .btn[aria-disabled="true"] { opacity: .45; cursor: not-allowed; }
+
+/* Segmented control: a warm track, the chosen option white. */
+.seg {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 8px;
+  background: var(--volt-warm);
+}
+.seg__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--volt-ink);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 400;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.seg__btn--on {
+  background: var(--volt-white);
+  font-weight: 600;
+  box-shadow: 0 1px 2px rgba(17, 30, 42, .12);
+}
+.seg__btn:disabled { opacity: .45; cursor: not-allowed; }
+
+/* Fields: label above (12/16 500 ink-2, gap 4), the red * says "required". */
+.field, input.field, select.field, textarea.field {
+  width: 100%;
+  height: 36px;
+  padding: 0 10px;
+  border-radius: 8px;
+  border: 1px solid var(--volt-line-ctl);
+  background: var(--volt-white);
+  color: var(--volt-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+}
+textarea.field { height: auto; min-height: 72px; padding: 8px 10px; resize: vertical; }
+.field:disabled { background: var(--volt-warm); color: var(--volt-ink-2); cursor: not-allowed; }
+.label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--volt-ink-2);
+}
+.req {
+  margin-left: 2px;
+  font-weight: 600;
+  color: var(--volt-red);
+}
+.field__error { font-size: 12px; line-height: 16px; color: var(--volt-red-text); }
+input[type="checkbox"], input[type="radio"] { width: 16px; height: 16px; accent-color: var(--volt-ink); }
+
+/* Cards: white on the warm page; head 46 with a hairline. */
+.card {
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-white);
+}
+.card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 46px;
+  padding: 8px 16px;
+  border-bottom: 1px solid var(--volt-line);
+}
+.card__head h2 { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--volt-ink); }
+.card__body { padding: 14px 16px; }
+.card__note {
+  padding: 10px 16px;
+  border-top: 1px solid var(--volt-line);
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--volt-ink-2);
+}
+
+/* The field-label voice (12/16 500 ink-2) — no capitals, no tracking (Thai). */
+.eyebrow {
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  color: var(--volt-ink-2);
+}
+
+/* Content tabs: hairline row, the chosen tab ink with an ink underline. */
+.tabs { display: flex; border-bottom: 1px solid var(--volt-line); overflow-x: auto; }
+.tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 40px;
+  padding: 0 12px;
+  margin-bottom: -1px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--volt-ink-2);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tabs__tab:hover { color: var(--volt-ink); }
+.tabs__tab--on { color: var(--volt-ink); font-weight: 600; border-bottom-color: var(--volt-ink); }
+.tabs__count { font-size: 12px; font-weight: 400; color: var(--volt-ink-2); }
+
+/* Key/value rows. */
+.kv { margin: 0; display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 8px 12px; font-size: 14px; line-height: 20px; }
+.kv--narrow { grid-template-columns: 110px minmax(0, 1fr); }
+.kv dt { font-size: 13px; color: var(--volt-ink-2); }
+.kv dd { margin: 0; min-width: 0; color: var(--volt-ink); overflow-wrap: anywhere; }
+
+/* One freshness line per screen (2026-09-20 sync audit): the served source, its
+   import time, the PEAK report date — and the stale action only when behind. */
+.freshness {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--volt-ink-2);
+}
+.freshness__line { min-width: 0; }
+.freshness__line a { color: var(--volt-ink-2); }
+.freshness--stale {
+  padding: 8px 12px;
+  border: 1px solid var(--volt-yellow-100);
+  border-radius: 8px;
+  background: var(--volt-yellow-tint);
+  color: var(--volt-ink);
+  font-size: 13px;
+}
+
+/* Status icon (components/StatusIcon.jsx): shape carries the meaning. */
+.st { flex: none; display: inline-block; vertical-align: middle; }
+
+/* Status pill = icon 14 + word; the ground follows the icon family. */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 22px;
+  padding: 0 8px 0 4px;
+  border-radius: 999px;
+  background: var(--volt-warm);
+  color: var(--volt-ink);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 500;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.pill--do { background: var(--volt-yellow-tint); }
+.pill--problem { background: var(--volt-red-tint); }
+.pill--done { background: var(--volt-green-tint); }
+.pill--warm { background: var(--volt-warm); }
+
+/* Neutral chip: a fact with no status meaning (entity, source, band, DC status…). */
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding: 0 8px;
+  border-radius: 4px;
+  background: var(--volt-warm);
+  color: var(--volt-ink);
+  font-size: 12px;
+  line-height: 16px;
+  font-weight: 400;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+/* Legacy tones (Chip tone=…) on the palette; the text stays ink. */
+.chip--current { background: var(--volt-green-tint); }
+.chip--pending { background: var(--volt-yellow-tint); }
+.chip--overdue { background: var(--volt-red-tint); }
+.chip--held { background: var(--volt-warm); }
+.chip--brand { background: var(--volt-yellow-100); }
+.chip--reg { background: var(--volt-warm); }
+
+.empty {
+  margin: 0;
+  padding: 12px 16px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--volt-ink-2);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 200;
+  background: var(--volt-yellow);
+  color: #111E2A;
+  padding: 8px 14px;
+  border-radius: 0 0 8px 0;
+  font-weight: 600;
+}
+.skip-link:focus { left: 0; }
+
+/* UI icons (components/Icon.jsx): stroke glyphs in currentColor, never squeezed. */
+.icon { flex: none; vertical-align: -3px; }

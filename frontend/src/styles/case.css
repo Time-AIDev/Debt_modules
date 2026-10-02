@@ -1,0 +1,353 @@
+/* case — the customer case (design D's case sheet): one component, three places —
+   the /customers/{uid} page, Today/Workbook, and the CaseSheet pop-up.
+   The shared parts (buttons, chips, pills, cards, tabs, drawers, Problem) live in
+   base.css / shell.css; only the case's own layout is here. */
+
+.case {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--volt-white);
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  color: var(--volt-ink);
+  container-type: inline-size;
+}
+/* The pop-up keeps its own scroll area; cases in the page follow document scroll. */
+/* The sheet's body brings the design's padding; the case fills it edge to edge. */
+.case--sheet { margin: -14px -20px -20px; height: calc(100% + 34px); border: 0; border-radius: 0; }
+.case--sheet .case__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
+.case--sheet > .case__tabs { flex: none; z-index: 5; }
+
+/* ---- header: who is this, what can I do ---- */
+.case__head {
+  flex: none;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px 16px;
+  padding: 14px 20px 12px;
+  border-bottom: 1px solid var(--volt-line);
+}
+.case__top { grid-column: 1 / -1; }
+.case__identity { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.case__top { display: flex; align-items: center; gap: 12px; min-height: 38px; }
+.case__chips { flex: 1 1 auto; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.case__score { flex: none; display: flex; flex-direction: column; align-items: flex-end; }
+.case__scoreLabel { font-size: 11px; line-height: 14px; color: var(--volt-ink-2); }
+.case__scoreValue { font-size: 20px; line-height: 24px; font-weight: 600; }
+.case__close { flex: none; width: 32px; height: 32px; padding: 0; }
+.case__nameRow { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.case__name {
+  margin: 0;
+  min-width: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.case__spacer { flex: 1 1 auto; }
+.case__idRow {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px 8px;
+  min-height: 28px;
+  font-size: 13px;
+  line-height: 18px;
+  color: var(--volt-ink-2);
+}
+.case__idPart { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px 8px; }
+.case__actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; align-self: center; }
+.case__odooLink { color: inherit; text-decoration: underline; text-decoration-color: var(--volt-line-btn); text-underline-offset: 3px; }
+.case__odooLink:hover { text-decoration-color: currentColor; }
+.case__odooLink:focus-visible { outline: 2px solid var(--volt-ink); outline-offset: 2px; border-radius: 2px; }
+
+/* The phone line (PhoneLine.jsx) sits inside the ID row. */
+.record__phone { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 2px; }
+.record__phoneValue { margin-right: 6px; font-weight: 500; color: var(--volt-ink); }
+.record__phoneBtn { height: 28px; padding: 0 8px; gap: 4px; font-size: 13px; }
+.record__phoneHint { font-size: 12px; line-height: 16px; }
+.record__phoneError { flex-basis: 100%; font-size: 12px; line-height: 16px; color: var(--volt-red-text); }
+
+/* ---- body ---- */
+.case__body { display: flex; flex-direction: column; gap: 14px; padding: 14px 20px 20px; }
+.case__body > * { flex: none; }
+.case__stack { display: flex; flex-direction: column; gap: 10px; }
+.case__text { margin: 0; font-size: 13px; line-height: 18px; }
+.case__empty { margin: 0; font-size: 13px; line-height: 18px; color: var(--volt-ink-2); }
+.case__pad { padding: 14px 16px; }
+.case__muted { color: var(--volt-ink-2); font-weight: 400; }
+.case__line { display: flex; align-items: flex-start; gap: 6px; margin: 0; font-size: 13px; line-height: 18px; }
+.case__line > .st { margin-top: 1px; }
+
+/* ① สิ่งที่ต้องทำ: the ground follows the head icon's family. */
+.case__todo {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-hover);
+}
+.case__todo--do { background: var(--volt-yellow-tint); border-color: var(--volt-yellow-100); }
+.case__todo--problem { background: var(--volt-red-tint); border-color: var(--volt-red-100); }
+.case__todo--done { background: var(--volt-green-tint); border-color: var(--volt-green); }
+.case__todoTitle { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; line-height: 20px; font-weight: 600; }
+.case__todoIcon { display: inline-flex; flex: none; }
+.case__todoWhy { margin: 0; padding-left: 24px; font-size: 13px; line-height: 18px; color: var(--volt-ink-2); }
+.case__todoLine {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0;
+  padding-left: 24px;
+  font-size: 13px;
+  line-height: 18px;
+}
+/* A pill on a tinted callout needs its own white ground (design). */
+.case__todo .pill { background: var(--volt-white); }
+.case__todo > .problem { margin-left: 24px; }
+
+/* ② ข้อมูลหลัก: 2 rows × 5, hairlines between the cells. */
+.case__facts {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 1px;
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-line);
+  overflow: hidden;
+}
+.case__fact { min-width: 0; display: flex; flex-direction: column; padding: 10px 12px; background: var(--volt-white); }
+.case__factLabel { font-size: 12px; line-height: 16px; font-weight: 500; color: var(--volt-ink-2); }
+/* Money never clips: the figure eases down with the case's width (18 at the design's
+   796, 14 at its narrowest 5-up) and wraps rather than hides a digit past that. */
+.case__factValue {
+  margin-top: 2px;
+  font-size: clamp(14px, 2.3cqi, 18px);
+  line-height: 24px;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+.case__fact--key .case__factValue { font-size: clamp(20px, 3.05cqi, 24px); line-height: 30px; }
+.case__factSub { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+
+/* ③ บันไดการติดตาม: one column per rung, joined by a line (passed segments ink-2). */
+.case__rungs { display: flex; margin: 0; padding: 12px 8px 14px; list-style: none; }
+.case__rung {
+  position: relative;
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  text-align: center;
+}
+.case__rung::before,
+.case__rung::after { content: ''; position: absolute; top: 8px; height: 2px; background: var(--volt-line); }
+.case__rung::before { left: 0; right: 50%; }
+.case__rung::after { left: 50%; right: 0; }
+.case__rung--passed::before,
+.case__rung--passed::after,
+.case__rung--current::before { background: var(--volt-ink-2); }
+.case__rung:first-child::before,
+.case__rung:last-child::after { display: none; }
+.case__rungMark {
+  position: relative;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--volt-line-btn);
+  background: var(--volt-white);
+}
+.case__rung--passed .case__rungMark { border-color: var(--volt-ink-2); background: var(--volt-ink-2); color: var(--volt-white); }
+.case__rung--current .case__rungMark { border-color: var(--volt-ink); }
+.case__rung--current .case__rungMark::after { content: ''; width: 8px; height: 8px; border-radius: 50%; background: var(--volt-ink); }
+.case__rungLabel { padding: 0 8px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.case__rung--current .case__rungLabel { color: var(--volt-ink); font-weight: 600; }
+
+/* ④ tabs run edge to edge. */
+.case__tabs { flex: none; gap: 2px; margin: 0; padding: 0 20px; background: var(--volt-white); border-bottom: 1px solid var(--volt-line); overflow-x: auto; }
+.case__tabpanel { display: flex; flex-direction: column; gap: 14px; }
+
+/* ⑤ ภาพรวมเคส: main | side 268. */
+.case__overview { display: flex; gap: 14px; align-items: flex-start; }
+.case__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 14px; }
+.case__side { flex: none; width: 268px; display: flex; flex-direction: column; gap: 14px; }
+
+/* Lines inside cards: contacts, events, tickets. */
+.case__rows { padding: 6px 16px; }
+.case__row { display: flex; align-items: flex-start; gap: 8px; padding: 8px 0; border-top: 1px solid var(--volt-line); }
+.case__row:first-child { border-top: 0; }
+.case__when { flex: none; width: 84px; font-size: 13px; line-height: 20px; color: var(--volt-ink-2); }
+.case__rowIcon { margin-top: 2px; color: var(--volt-ink-2); }
+.case__rowMain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
+.case__rowTitle { font-weight: 500; }
+.case__rowNote { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.case__row--event { align-items: baseline; gap: 10px; }
+.case__row--event .case__rowTitle { flex: none; }
+.case__row--event .case__rowNote { flex: 1 1 auto; min-width: 0; font-size: 13px; line-height: 18px; }
+
+.case__ptp { display: flex; flex-direction: column; gap: 2px; }
+.case__ptpTop { display: flex; align-items: center; gap: 8px; }
+.case__amount { font-weight: 600; }
+.case__early {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--volt-green-tint);
+}
+.case__rule { margin: 0; height: 1px; border: 0; background: var(--volt-line); }
+.case__more { margin-left: -8px; gap: 4px; }
+.case__issue { display: flex; align-items: flex-start; gap: 12px; padding: 10px 0; border-top: 1px solid var(--volt-line); }
+.case__issue:first-child { border-top: 0; }
+.case__issuePill { flex: none; width: 104px; }
+.case__issue--stacked { flex-direction: column; gap: 2px; padding: 0; border-top: 0; }
+.case__issue--stacked .case__issuePill { width: auto; }
+.case__issue--stacked .case__rowTitle { font-weight: 400; font-size: 13px; line-height: 18px; }
+.case__review { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; font-size: 13px; line-height: 18px; }
+
+/* The officer scoreboard's key/value rows, values right. */
+.case__kv { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px 12px; }
+.case__kv dt { font-size: 13px; line-height: 20px; color: var(--volt-ink-2); }
+.case__kv dd { margin: 0; text-align: right; font-weight: 500; }
+.case__scoreNote { margin: 10px 0 0; }
+
+/* ตารางงวด: the cycle grid (CycleGrid.jsx) on the overview. */
+.cyclegrid { display: flex; flex-direction: column; gap: 10px; }
+.cyclegrid__counts { margin: 0; font-size: 13px; line-height: 18px; }
+.cyclegrid__caption { margin: 0 0 4px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.cyclegrid__deposits { display: flex; gap: 4px; margin-bottom: 4px; }
+.case .legend { margin-top: 0; gap: 4px 14px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+
+/* แนบใบแจ้งหนี้ · ปรับสถานะการชำระ (ManualInvoiceMatch.jsx). */
+.mim__head { flex-wrap: wrap; }
+.mim__body { display: flex; flex-direction: column; gap: 14px; }
+.mim__section { display: flex; flex-direction: column; gap: 8px; }
+.mim__section--rule { padding-top: 14px; border-top: 1px solid var(--volt-line); }
+.mim__sectionHead { display: flex; align-items: center; gap: 8px; }
+.mim__sectionHead .eyebrow { flex: 1 1 auto; }
+.mim__upload:focus-within { outline: 2px solid var(--volt-ink); outline-offset: 2px; }
+.mim__upload--busy { opacity: .45; cursor: not-allowed; }
+.mim__list { display: flex; flex-direction: column; }
+.mim__file { display: flex; align-items: center; gap: 8px; min-height: 32px; font-size: 13px; }
+.mim__grow { flex: 1 1 auto; min-width: 0; }
+.mim__code { display: flex; align-items: center; gap: 10px; min-height: 36px; }
+.mim__list--results .mim__code { border-bottom: 1px solid var(--volt-line); }
+.mim__codeId { flex: none; min-width: 52px; font-weight: 600; }
+.mim__pick { display: flex; align-items: flex-end; flex-wrap: wrap; gap: 8px; padding: 10px 12px; border-radius: 8px; background: var(--volt-hover); }
+.mim__fold {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  height: 40px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--volt-ink);
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.mim__fold:not(:disabled):hover { background: var(--volt-hover); }
+.mim__fold:disabled { opacity: .45; cursor: not-allowed; }
+.mim__indent { margin: 0; padding-left: 30px; }
+.mim__foldBody { display: flex; flex-direction: column; gap: 12px; padding-top: 6px; }
+.mim__status { max-width: 300px; }
+.mim__actions { display: flex; justify-content: flex-end; }
+
+/* The contact drawer (ContactDrawer.jsx). */
+.contact__strip {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-hover);
+}
+.contact__strip > div { display: flex; flex-direction: column; padding: 8px 12px; min-width: 0; }
+.contact__strip > div + div { border-left: 1px solid var(--volt-line); }
+.contact__stripValue { font-size: 18px; line-height: 24px; font-weight: 600; }
+.contact__grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 12px; }
+.contact__grid--channel { grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr); }
+.contact__grid--next { grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); }
+.contact__grid > label { min-width: 0; }
+.contact__ptp {
+  min-width: 0;
+  margin: 0;
+  padding: 8px 12px 12px;
+  border: 1px dashed var(--volt-line-btn);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.contact__ptp legend { padding: 0 4px; font-size: 13px; line-height: 18px; font-weight: 600; }
+.contact__hint { margin: 0; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.contact__alt { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+
+/* The terminate drawer's blocking contracts; the contract drawer's order rows. */
+.terminate__blocking { display: flex; flex-direction: column; gap: 4px; font-size: 13px; line-height: 18px; }
+.terminate__blocking li { display: flex; gap: 12px; }
+.contract__order { padding-top: 12px; border-top: 1px solid var(--volt-line); }
+
+/* The pre-install card (PreInstallCard.jsx — the case and Pipeline). */
+.preinstall .card__head { flex-wrap: wrap; }
+.preinstall__body { display: flex; flex-direction: column; gap: 8px; }
+.cond { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--volt-line); border-radius: 8px; }
+.cond > .pill,
+.cond > .btn { flex: none; }
+.cond__mark { margin-top: 2px; }
+.cond__main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cond__label { font-weight: 600; }
+.cond__note { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.cond__evidence { display: flex; flex-direction: column; gap: 6px; margin-top: 6px; }
+.cond__item { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border-radius: 8px; background: var(--volt-hover); }
+.cond__itemMain { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; font-size: 13px; line-height: 18px; }
+.preinstall__actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding-top: 4px; }
+.preinstall__spacer { flex: 1 1 auto; }
+.preinstall__amount { font-weight: 600; }
+.preinstall__cond { margin: 0; padding: 8px 12px; border-radius: 8px; background: var(--volt-hover); font-weight: 600; }
+.preinstall__file { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; }
+.preinstall__picked { display: flex; align-items: center; gap: 8px; width: 100%; font-size: 13px; }
+.preinstall__grow { flex: 1 1 auto; min-width: 0; }
+/* A file picker is a label styled as a button: in a drawer it keeps the button's row. */
+.drawer .preinstall__pick { flex-direction: row; gap: 6px; }
+.preinstall__pick:focus-within { outline: 2px solid var(--volt-ink); outline-offset: 2px; }
+.preinstall__pick--busy { opacity: .45; cursor: not-allowed; }
+
+/* The pop-up before its case arrives: the close first, then "loading" or the refusal. */
+.case__bare { display: flex; flex-direction: column; }
+.case__bare > .case__close { align-self: flex-end; }
+
+@container (max-width: 700px) {
+  .case__fact { padding: 10px 8px; }
+}
+/* A narrow case (a small pane or the sheet on a small window): one column of cards,
+   and below 5-up's floor the facts go 2-up. */
+@container (max-width: 640px) {
+  .case__head { grid-template-columns: minmax(0, 1fr); }
+  .case__top { grid-column: auto; }
+  .case__actions { justify-content: flex-start; }
+  .case__overview { flex-direction: column; align-items: stretch; }
+  .case__side { width: auto; }
+}
+@container (max-width: 600px) {
+  .case__facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

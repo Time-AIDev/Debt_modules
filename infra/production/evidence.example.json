@@ -1,0 +1,18 @@
+{
+  "project": "volt-debt-prd",
+  "images": {"api": "REPLACE_WITH_DIGEST", "web": "REPLACE_WITH_DIGEST", "scanner": "REPLACE_WITH_DIGEST"},
+  "incident_owner": "",
+  "data_approver": "",
+  "staging_writes_and_schedules_stopped": false,
+  "backend": {"passed": false, "artifact": "backend-tests.xml", "sha256": ""},
+  "frontend": {"passed": false, "artifact": "frontend-tests.txt", "sha256": ""},
+  "role_e2e": {"passed": false, "artifact": "role-e2e.json", "sha256": ""},
+  "session": {"passed": false, "artifact": "session-e2e.json", "sha256": ""},
+  "concurrency": {"passed": false, "artifact": "concurrency.json", "sha256": ""},
+  "load": {"passed": false, "artifact": "load.json", "sha256": "", "users": 10, "duration_seconds": 0,
+           "workbook_p95_seconds": null, "unexpected_5xx_rate": null, "lost_writes": null, "duplicate_writes": null, "oom": null},
+  "restore": {"passed": false, "artifact": "restore.json", "sha256": "", "rpo_seconds": null, "rto_seconds": null},
+  "rollback": {"passed": false, "artifact": "rollback.json", "sha256": ""},
+  "reconciliation": {"passed": false, "artifact": "reconciliation.json", "sha256": "", "unexplained_differences": null},
+  "alerts": {"passed": false, "artifact": "alert-delivery.json", "sha256": ""}
+}

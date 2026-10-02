@@ -1,0 +1,75 @@
+/* The Kanban board (Board.jsx; spec-main §4): served columns as warm lanes, each
+   headed by its status icon — one view of the queue (Today) and of recovery. */
+
+.board {
+  display: flex;
+  gap: 16px;
+  align-items: stretch;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  min-width: 0;
+}
+.board__col {
+  flex: 1 1 0;
+  min-width: 240px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--volt-line);
+  border-radius: 10px;
+  background: var(--volt-warm);
+  max-height: calc(100vh - 210px);
+  scroll-snap-align: start;
+}
+.board__head { flex: none; display: flex; align-items: center; gap: 8px; height: 40px; padding: 0 12px; border-bottom: 1px solid var(--volt-line); }
+.board__name { flex: 1; min-width: 0; font-size: 13px; line-height: 18px; font-weight: 600; color: var(--volt-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.board__count { font-size: 12px; line-height: 16px; font-weight: 400; color: var(--volt-ink-2); }
+.board__body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 8px; display: flex; flex-direction: column; gap: 8px; }
+.board__body:focus-visible { outline: 2px solid var(--volt-ink); outline-offset: -2px; }
+.board__empty { margin: 6px 4px; font-size: 13px; line-height: 18px; color: var(--volt-ink-2); }
+
+.board__card { flex: none; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--volt-line); border-radius: 8px; background: var(--volt-white); }
+.board__card--on { background: var(--volt-warm); box-shadow: inset 3px 0 0 0 var(--volt-ink); }
+.board__top { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.board__nameLink {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--volt-ink);
+  font: inherit;
+  font-size: 14px;
+  line-height: 20px;
+  font-weight: 600;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+.board__nameLink:hover { text-decoration: underline; }
+.board__sub { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; }
+.board__sub:empty { display: none; }
+.board__mark { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.board__money { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.board__arrears { font-size: 15px; line-height: 22px; font-weight: 600; color: var(--volt-ink); }
+.board__balance { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.board__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+.board__dpd { font-weight: 500; color: var(--volt-ink); }
+.board__dpd--none { color: var(--volt-ink-2); }
+.board__risk { flex: none; margin-left: auto; font-size: 11px; line-height: 16px; color: var(--volt-ink-2); }
+.board__act { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding-top: 2px; }
+.board__act .btn--quiet { height: 28px; padding: 0 8px; }
+
+/* The move drawer's destinations: one full-width button per column, icon + label. */
+.board__dest { display: flex; flex-direction: column; gap: 6px; }
+.board__dest .btn { justify-content: flex-start; }
+
+.board__move {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

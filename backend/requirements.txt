@@ -1,0 +1,17 @@
+# Pinned: 0.137 stopped listing include_router() routes in app.routes, so main.py's
+# _route_template found no path and staging (0.141.1) wrote no audit rows at all.
+# 0.136.3 is the last that lists them; Starlette 1.3.1+ carries the 2026 security fixes.
+fastapi==0.136.3 ; python_version >= "3.10"
+starlette==1.7.0 ; python_version >= "3.10"
+fastapi==0.128.8 ; python_version < "3.10"    # the 3.9 dev venv: 0.129 dropped 3.9
+starlette==0.49.3 ; python_version < "3.10"   # newest for 3.9; dev only, never deployed
+uvicorn[standard]>=0.30
+sqlalchemy>=2.0
+pydantic>=2.7
+python-dateutil>=2.9
+pytest>=8.0
+httpx>=0.27
+psycopg[binary]>=3.2
+google-auth>=2.30            # Cloud SQL IAM database auth: mints the token used as the password
+requests>=2.32               # google.auth.transport.requests needs it
+pgserver>=0.1.4 ; sys_platform != "linux"   # test-only: a rootless PostgreSQL 16

@@ -1,0 +1,62 @@
+import json
+import pytest
+from fastapi.testclient import TestClient
+from app import auth, db, main, migrate, tab_sessions
+
+
+@pytest.fixture
+def production(monkeypatch, pg_url, pg_conn, tmp_path):
+    migrate.apply(pg_conn)
+    pg_conn.commit()
+    db.reset()
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setenv("ENV", "prd")
+    monkeypatch.setenv("PROD_GO_LIVE_ENABLED", "false")
+    auth.set_config(auth.load_config({"AUTH_MODE": "on", "AUTH_SESSION_SECRET": "s" * 40,
+                                     "AUTH_SESSION_POLICY": "tab", "GOOGLE_CLIENT_ID": "client",
+                                     "AUTH_ALLOWLIST": json.dumps({
+                                         "owner@volt.co.th": {"role": "OWNER", "officer": "owner"},
+                                         "thip@volt.co.th": {"role": "OFFICER", "officer": "thip"}})}, env_file=tmp_path / "none"))
+    def headers(email, role, officer):
+        session = auth.new_session(email, "GOOGLE", role, officer, False)
+        return {"Authorization": "Bearer " + tab_sessions.issue(dict(session, session_policy="tab"))}
+    yield TestClient(main.app, raise_server_exceptions=False), headers
+    auth.reset()
+    db.reset()
+
+
+def test_production_empty_database_never_seeds_demo_customers(production):
+    api, headers = production
+    response = api.get("/api/v1/workbook", headers=headers("owner@volt.co.th", "OWNER", "owner"))
+    assert response.status_code == 200, response.text
+    assert response.json()["rows"] == []
+
+
+def test_candidate_does_not_allow_officers_into_business_routes(production):
+    api, headers = production
+    assert api.get("/api/v1/workbook", headers=headers("thip@volt.co.th", "OFFICER", "thip")).status_code == 503
+
+
+def test_production_openapi_requires_ops_or_owner(production):
+    api, headers = production
+    response = api.get("/api/openapi.json", headers=headers("owner@volt.co.th", "OWNER", "owner"))
+    assert response.status_code == 200
+    assert "/v1/workbook" in response.json()["paths"]
+    assert api.get("/api/openapi.json").status_code == 401
+
+
+def test_production_assignment_cannot_be_bypassed_by_headers_or_body(production, monkeypatch):
+    from types import SimpleNamespace
+    from app import cases, production_runtime
+    api, headers = production
+    monkeypatch.setenv("PROD_GO_LIVE_ENABLED", "true")
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda: None)
+    monkeypatch.setattr(cases, "for_current", lambda: SimpleNamespace(cases={
+        "other-case": {"uid": "case-other", "customer_uid": "other-case", "officer_uid": "nantapol"},
+        "own-case": {"uid": "case-own", "customer_uid": "own-case", "officer_uid": "thip"}}))
+    actor = headers("thip@volt.co.th", "OFFICER", "thip")
+    actor.update({"X-Volt-Role": "OWNER", "X-Volt-Officer": "nantapol"})
+    response = api.post("/api/v1/cases/by-customer/other-case/notes", headers=actor,
+                        json={"customer_uid": "own-case", "by": "nantapol", "role": "OWNER", "text": "unsafe"})
+    assert response.status_code == 403, response.text
+    assert response.json()["code"] == "assignment_required"

@@ -1,0 +1,17 @@
+.git
+**/.env
+**/.env.*
+**/.venv*
+**/__pycache__
+**/node_modules
+**/.terraform
+**/*.tfstate*
+**/terraform.tfvars*
+data
+output
+build
+backend/var
+backend/static
+docs/assets
+.chart-data-*
+.codex-*

@@ -1,0 +1,77 @@
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+# A worktree links these to the main checkout's copies; a trailing-slash rule
+# matches directories only, so the symlinks need their own lines.
+backend/.venv
+frontend/node_modules
+# Subagent-driven-development ledgers and briefs (per plan, scratch).
+.superpowers/
+*.sqlite3
+.env
+.pytest_cache/
+
+# Odoo sync snapshot cache — runtime data, never committed.
+backend/var/
+
+# Built interface, copied in by scripts/deploy_gcp.sh. Generated, never edited.
+backend/static/
+# Importer staged in by scripts/deploy_gcp.sh so the image can see it. Generated.
+backend/scripts/
+# The crm.lead rules file, staged in by scripts/deploy_gcp.sh for the same reason.
+# Generated from docs/odoo-comparison/odoo_compare.md, never edited here.
+backend/docs/
+*.log
+scratch_api.log
+
+# Chrome for Testing + puppeteer-core, installed only for the blind UAT rounds. Delete freely.
+.uat-browser/
+
+# Raw Odoo pull (scripts/pull_odoo_csv.py) — runtime data with real names and addresses.
+data/odoo/
+
+# Local Netlify folder
+.netlify
+
+# The generated UAT guidebook page (scripts/build_staging_guide.py) — it carries the
+# tester passwords, so the artefact stays out of git and the vault stays the source.
+build/
+
+# Agent working notes (superpowers:sdd) — local process history, never committed.
+# The published specs/plans live in docs/archive/superpowers/.
+.superpowers/
+
+# PEAK sample exports carry an unmasked 13-digit citizen ID + address (PDPA).
+# Evidence notes live in docs/archive/superpowers/plans/2026-09-11-peak-upload-payment-position.md §0.
+# Keep the exports local; never commit them — the xlsx carry the same 13-digit id.
+docs/assets/PEAK export/*.pdf
+docs/assets/PEAK export/*.xlsx
+
+# macOS
+.DS_Store
+
+# Terraform state, saved plans and local production settings.
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+*.tfvars
+*.tfvars.json
+!*.example.tfvars
+!*.example.tfvars.json
+
+# Login tester guide (design 2026-09-13): the copy WITH passwords lives in the vault only.
+docs/guides/*with-passwords*
+scripts/guides/.venv/
+
+# Review/UAT captures and feedback packages can contain customer details, reviewer
+# comments, or credentials. Keep them local even when a particular capture looks safe.
+build_package/
+docs/design/handoff-v2/screenshots/
+docs/design/rebuild-2026-09/evidence/
+docs/planning/feedback-r2/captures-r3/
+docs/planning/feedback-r2/captures-r4/
+docs/assets/dashboard-input/
+docs/guides/*.docx

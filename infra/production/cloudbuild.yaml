@@ -1,0 +1,62 @@
+# Build once, test against PostgreSQL 16, and promote the resulting digests.
+# This pipeline does not migrate, deploy or change user traffic.
+serviceAccount: projects/${PROJECT_ID}/serviceAccounts/debt-build@${PROJECT_ID}.iam.gserviceaccount.com
+timeout: 1800s
+steps:
+  - id: postgres
+    name: gcr.io/cloud-builders/docker
+    args: ['run', '-d', '--network=cloudbuild', '--name=volt-test-db', '-e', 'POSTGRES_PASSWORD=ci-test-only', '-e', 'POSTGRES_DB=volt_test', 'postgres:16']
+  - id: backend-tests
+    name: python:3.12-slim
+    entrypoint: bash
+    env: ['VOLT_TEST_PG_URL=postgresql+psycopg://postgres:ci-test-only@volt-test-db:5432/volt_test', 'PYTHONPATH=/workspace/backend']
+    args:
+      - -ceu
+      - |
+        pip install --no-cache-dir --require-hashes -r infra/production/requirements.lock
+        python -c "import os,time,sqlalchemy; e=sqlalchemy.create_engine(os.environ['VOLT_TEST_PG_URL']); time.sleep(5); e.connect().close()"
+        python -m pytest backend/tests --junitxml=/workspace/backend-tests.xml
+    waitFor: ['postgres']
+  - id: frontend-tests
+    name: node:22-alpine
+    entrypoint: sh
+    args: ['-ceu', 'cd frontend; npm ci --no-audit --no-fund; npm test; npm run build']
+    waitFor: ['-']
+  - id: api-image
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'infra/production/Dockerfile.api', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/api:${_RELEASE}', '.']
+    waitFor: ['backend-tests', 'frontend-tests']
+  - id: web-image
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/web:${_RELEASE}', 'frontend']
+    waitFor: ['backend-tests', 'frontend-tests']
+  - id: scanner-image
+    name: gcr.io/cloud-builders/docker
+    args: ['build', '-f', 'infra/production/Dockerfile.scanner', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/scanner:${_RELEASE}', '.']
+    waitFor: ['backend-tests', 'frontend-tests']
+  - id: push-api
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/api:${_RELEASE}']
+    waitFor: ['api-image']
+  - id: push-web
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/web:${_RELEASE}']
+    waitFor: ['web-image']
+  - id: push-scanner
+    name: gcr.io/cloud-builders/docker
+    args: ['push', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/scanner:${_RELEASE}']
+    waitFor: ['scanner-image']
+  - id: release-manifest
+    name: gcr.io/google.com/cloudsdktool/cloud-sdk:stable
+    entrypoint: python3
+    args: ['infra/production/release.py', 'manifest', '--project', '${PROJECT_ID}', '--region', '${_REGION}', '--revision', '${_RELEASE}', '--output', '/workspace/release.json']
+    waitFor: ['push-api', 'push-web', 'push-scanner']
+substitutions:
+  _REGION: asia-southeast1
+  _RELEASE: unset
+options:
+  logging: CLOUD_LOGGING_ONLY
+artifacts:
+  objects:
+    location: gs://${PROJECT_ID}-exports/releases/${_RELEASE}/
+    paths: ['release.json', 'backend-tests.xml']
