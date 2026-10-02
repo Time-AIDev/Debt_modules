@@ -27,6 +27,10 @@ def enqueue_request(request, uid, raw):
 
 
 def relay():
+    if env("TASK_QUEUE_BACKEND", "gcp") == "postgres":
+        import asyncio
+        from .local_worker import run_once
+        return asyncio.run(run_once())
     required = [env(k) for k in ("GCP_PROJECT", "GCP_REGION", "TASK_QUEUE", "WORKER_AUDIENCE", "TASK_CALLER_EMAIL")]
     if not all(required): raise RuntimeError("task delivery configuration is incomplete")
     project, region, queue, worker, caller = required

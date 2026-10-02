@@ -1,0 +1,84 @@
+name: volt-debt
+services:
+  db:
+    image: ${POSTGRES_IMAGE:-postgres:16}
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: debt
+      POSTGRES_USER: debt_migrate
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Missing database password}
+    volumes:
+      - postgres:/var/lib/postgresql/data
+      - /etc/volt-debt/init-runtime.sql:/docker-entrypoint-initdb.d/10-runtime.sql:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U debt_migrate -d debt"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    mem_limit: 512m
+    logging: &logging
+      driver: json-file
+      options: {max-size: 10m, max-file: "3"}
+  migrate:
+    profiles: [setup]
+    image: ${API_IMAGE:?Missing API image}
+    command: [python, -m, app.migrate]
+    environment:
+      DATABASE_URL: ${MIGRATION_DATABASE_URL:?Missing migration URL}
+      DB_RUNTIME_ROLE: debt_api
+    depends_on:
+      db: {condition: service_healthy}
+    logging: *logging
+  api:
+    profiles: [candidate]
+    image: ${API_IMAGE:?Missing API image}
+    restart: unless-stopped
+    env_file: [/etc/volt-debt/api.env]
+    volumes: ["/srv/volt-debt-data/objects:/private-objects"]
+    ports: ["127.0.0.1:8081:8080"]
+    depends_on:
+      db: {condition: service_healthy}
+    mem_limit: 1g
+    logging: *logging
+  worker:
+    profiles: [candidate]
+    image: ${API_IMAGE:?Missing API image}
+    command: [python, -m, app.local_worker]
+    restart: unless-stopped
+    env_file: [/etc/volt-debt/api.env]
+    volumes: ["/srv/volt-debt-data/objects:/private-objects"]
+    depends_on:
+      db: {condition: service_healthy}
+    mem_limit: 1800m
+    logging: *logging
+  scanner:
+    image: ${SCANNER_IMAGE:?Missing scanner image}
+    restart: unless-stopped
+    volumes: ["clamav:/var/lib/clamav"]
+    mem_limit: 3g
+    logging: *logging
+  web:
+    profiles: [candidate]
+    image: ${WEB_IMAGE:?Missing web image}
+    restart: unless-stopped
+    environment: {ENV: prd, API_BASE_URL: /api}
+    ports: ["127.0.0.1:8080:8080"]
+    mem_limit: 128m
+    logging: *logging
+  edge:
+    profiles: [public]
+    image: ${EDGE_IMAGE:?Missing HTTPS edge image}
+    restart: unless-stopped
+    ports: ["80:80", "443:443"]
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on: [api, web]
+    mem_limit: 128m
+    logging: *logging
+volumes:
+  postgres:
+  clamav:
+  caddy_data:
+  caddy_config:

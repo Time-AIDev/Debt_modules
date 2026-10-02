@@ -809,6 +809,8 @@ CREATE TABLE IF NOT EXISTS app.task_outbox (
     uid text PRIMARY KEY REFERENCES app.operation_run(uid), payload jsonb NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), dispatched_at timestamptz, finished_at timestamptz
 );
+ALTER TABLE app.task_outbox ADD COLUMN IF NOT EXISTS attempt_count integer NOT NULL DEFAULT 0;
+ALTER TABLE app.task_outbox ADD COLUMN IF NOT EXISTS next_attempt_at timestamptz;
 CREATE TABLE IF NOT EXISTS app.upload_session (
     upload_id text PRIMARY KEY, owner text NOT NULL, parts integer NOT NULL,
     created_at timestamptz NOT NULL DEFAULT now(), consumed_at timestamptz

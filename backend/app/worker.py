@@ -45,7 +45,11 @@ async def relay(authorization: str = Header(default=None)):
 @app.post("/internal/tasks/execute")
 async def execute(body: dict = Body(...), authorization: str = Header(default=None)):
     await run_in_threadpool(verify_caller, authorization, "tasks")
-    uid = str(body.get("uid") or "")
+    return await execute_job(str(body.get("uid") or ""))
+
+
+async def execute_job(uid):
+    """Execute a durable intent; called by authenticated HTTP or the private daemon."""
     with db.connect() as conn:
         row = conn.execute(text("select payload, finished_at from app.task_outbox where uid=:u"), {"u": uid}).first()
     if not row: raise errors.not_found("job")
