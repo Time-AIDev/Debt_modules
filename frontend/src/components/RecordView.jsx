@@ -1,3 +1,4 @@
+import { causeLabel } from '../screens/Terminated.jsx'
 import { Fragment, useEffect, useState } from 'react'
 import { api } from '../lib/api.js'
 import { money, int, date as fmtDate, when, monthLabel } from '../lib/format.js'
@@ -458,6 +459,11 @@ export function RecordView({
   const eventDetail = (e) => [
     e.condition ? conditionLabel(e.condition) : null,
     e.invoice_uid,
+    e.contract_uid,
+    e.cause ? causeLabel(e.cause) : null,
+    e.instrument,
+    e.origin,
+    e.reason || e.reason_th || e.note,
     e.due_date ? fmtDate(e.due_date) : null,
     e.by ? (e.by === 'SYSTEM' ? t('record.bySystem') : officerName(e.by)) : null,
   ].filter(Boolean).join(' · ')
@@ -883,7 +889,7 @@ export function RecordView({
                     <li key={`${e.kind}-${e.on || ''}-${i}`} className="case__row case__row--event">
                       <span className="case__when num">{fmtDate(String(e.on || '').slice(0, 10))}</span>
                       <span className="case__rowTitle">{t(eventKey(e.kind))}</span>
-                      <span className="case__rowNote">{eventDetail(e)}</span>
+                      <span className="case__rowNote" style={{ whiteSpace: 'pre-wrap' }}>{eventDetail(e)}</span>
                     </li>
                   ))}
                 </ul>

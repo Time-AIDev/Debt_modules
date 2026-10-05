@@ -142,6 +142,16 @@ def read(filters, limit, before_seq):
     if filters.get("since"):
         where.append("at >= :since")
         params["since"] = filters["since"]
+    if filters.get("until"):
+        where.append("at < :until")
+        params["until"] = filters["until"]
+    if filters.get("outcome"):
+        where.append("outcome = :outcome")
+        params["outcome"] = filters["outcome"]
+    if filters.get("q"):
+        where.append("(strpos(lower(coalesce(subject_uid, '')), lower(:q)) > 0 OR strpos(lower(coalesce(request_id, '')), lower(:q)) > 0 OR subject_uid = ANY(CAST(:subjects AS text[])) OR detail->'contract_terminated'->>'contract_uid' = ANY(CAST(:subjects AS text[])))")
+        params["q"] = filters["q"]
+        params["subjects"] = filters.get("matching_subjects") or []
     if before_seq:
         where.append("seq < :before_seq")
         params["before_seq"] = before_seq
@@ -261,6 +271,18 @@ def _matches(row, filters):
     # down a parsed, timezone-aware datetime (see routers/audit.py's
     # `_parse_since`); `at` is stored as an ISO string, so it is parsed back for
     # the comparison.
+    if filters.get("outcome") and row.get("outcome") != filters["outcome"]:
+        return False
+    if filters.get("q"):
+        q = filters["q"].casefold()
+        if not (q in str(row.get("subject_uid") or "").casefold() or q in str(row.get("request_id") or "").casefold() or row.get("subject_uid") in (filters.get("matching_subjects") or []) or ((row.get("detail") or {}).get("contract_terminated") or {}).get("contract_uid") in (filters.get("matching_subjects") or [])):
+            return False
+    until = filters.get("until")
+    if until is not None:
+        at = row.get("at")
+        row_at = datetime.fromisoformat(at) if isinstance(at, str) else at
+        if row_at is None or row_at >= until:
+            return False
     since = filters.get("since")
     if since is not None:
         at = row.get("at")

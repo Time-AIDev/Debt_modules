@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Volt Debt services every five minutes
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=5min
+AccuracySec=15s
+Unit=volt-debt-health.service
+
+[Install]
+WantedBy=timers.target

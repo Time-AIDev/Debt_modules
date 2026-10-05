@@ -130,7 +130,8 @@ CURRENT = ContextVar("audit_entry", default=None)
 # complaint asks about; list and report views are navigation and are not logged.
 # A tuple, and the coverage test in Task 7 asserts nothing else GET is recorded, so
 # this cannot widen by accident.
-LOGGED_READS = ("/v1/cases/by-customer/{customer_uid}",)
+LOGGED_READS = ("/v1/cases/by-customer/{customer_uid}",
+                "/v1/terminated-customers/{archive_uid}")
 
 
 def is_logged(method, route_template):

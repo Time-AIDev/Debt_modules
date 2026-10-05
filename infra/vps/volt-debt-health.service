@@ -1,0 +1,13 @@
+[Unit]
+Description=Volt Debt local production health checks
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/volt-debt-health
+User=root
+TimeoutStartSec=60
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

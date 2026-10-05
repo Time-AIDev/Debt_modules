@@ -23,6 +23,7 @@ import { Reports } from './screens/Reports.jsx'
 import { Settings } from './screens/Settings.jsx'
 import { Calendar } from './screens/Calendar.jsx'
 import { DataSources } from './screens/DataSources.jsx'
+import { Terminated, ArchivedCase } from './screens/Terminated.jsx'
 import { Audit } from './screens/Audit.jsx'
 
 function Shell() {
@@ -125,6 +126,8 @@ function Shell() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/calendar" element={<Calendar />} />
             <Route path="/data-sources" element={<DataSources />} />
+            <Route path="/terminated" element={<Terminated />} />
+            <Route path="/terminated/:uid" element={<ArchivedCase />} />
             <Route path="/audit" element={<Audit />} />
             <Route path="/workbook" element={<Navigate to="/book" replace />} />
             <Route path="/customers" element={<Navigate to="/book" replace />} />

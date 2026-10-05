@@ -1,0 +1,22 @@
+[Unit]
+Description=Volt Debt root-only database and private object backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=QUIESCE_WRITERS=1
+ExecStart=/usr/local/sbin/volt-debt-backup
+TimeoutStartSec=45min
+TimeoutStopSec=180s
+# Terminate foreground archive/dump clients too, so Bash can promptly run its trap.
+KillMode=control-group
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true

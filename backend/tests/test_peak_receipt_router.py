@@ -390,7 +390,13 @@ def test_receipt_rows_normalise_legacy_string_candidates(db_env):
     ]
 
 
-def test_applying_through_the_door_serves_and_a_second_apply_is_a_409(db_env):
+def test_applying_through_the_door_serves_and_a_second_apply_is_a_409(db_env, pg_url, monkeypatch):
+    # Applying now captures read-only termination snapshots too. Exercise the
+    # production connection lifecycle, rather than sharing one connection across
+    # unrelated snapshot readers, session persistence and audit transactions.
+    from sqlalchemy import create_engine
+    engine = create_engine(pg_url, future=True)
+    monkeypatch.setattr(db, "connect", engine.connect)
     conn = db_env
     no = _book_customer_no()
     written = peak_writer.write_receipts(conn, _parsed_receipts(_rec("RE-20260900079", code=no)),
@@ -411,6 +417,7 @@ def test_applying_through_the_door_serves_and_a_second_apply_is_a_409(db_env):
     again = client.post("/v1/pipelines/peak-receipt/landing-runs/%d:apply" % written["run_id"],
                         json={}, headers=OFFICER)
     assert again.status_code == 409 and again.json()["code"] == "already_applied"
+    engine.dispose()
 
 
 def test_the_overview_carries_the_receipt_last_run(db_env):

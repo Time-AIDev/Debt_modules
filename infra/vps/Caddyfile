@@ -1,4 +1,4 @@
-debt.volt.co.th {
+debtcollection.volt.co.th, debt.143-198-207-143.sslip.io {
     handle /api/* {
         reverse_proxy api:8080
     }

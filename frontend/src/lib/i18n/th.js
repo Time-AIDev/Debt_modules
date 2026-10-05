@@ -27,6 +27,7 @@ export default {
   'nav.reports': 'รายงาน',
   'nav.settings': 'ตั้งค่า',
   'nav.data': 'แหล่งข้อมูล',
+  'nav.terminated': 'สัญญาที่ยุติ',
   'nav.audit': 'บันทึกการใช้งาน',
   'group.mine': 'งานของฉัน',
   'group.review': 'งานที่ต้องตรวจ',

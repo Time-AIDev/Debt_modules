@@ -21,7 +21,8 @@ from app import main  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def fresh_app_state():
+def fresh_app_state(tmp_path):
+    os.environ["TERMINATION_ARCHIVE_PATH"] = str(tmp_path / "archive.sqlite3")
     from app.fixtures import seed
 
     from app import customer_search, journey

@@ -98,6 +98,8 @@ def heal_session():
         cases._open_pipeline_cases(cases.for_current())
         summary = cases.follow_import_for_all()
         docs = peak_documents.reconcile(peak_documents.for_current(), jstate)
+        from . import termination_archive
+        termination_archive.backfill_current(capture_kind="IMPORT")
         # D05 / TASK-221, fix-all F2: money in before an open promise's date, for EVERY
         # session's own promises — it ran for the acting session only (refresh.py). The
         # notice uid is derived from owner, customer and receipt, so the many sessions

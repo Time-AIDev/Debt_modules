@@ -137,6 +137,21 @@ describe('Today', () => {
     expect(screen.getAllByText(/ขั้น 30 วัน/).length).toBeGreaterThan(0)
   })
 
+  it('hides the previous case while the selected customer detail is loading', async () => {
+    let finishDetail
+    api.caseDetail.mockImplementation((uid) => uid === 'c-2'
+      ? new Promise((resolve) => { finishDetail = resolve })
+      : Promise.resolve(CASE))
+    const user = userEvent.setup()
+    renderScreen(<Today />)
+    await screen.findByRole('heading', { name: 'ปัทมวรรณ สุขเจริญ' })
+    await user.click(screen.getByRole('button', { name: /สมศรี/ }))
+    expect(screen.getByRole('button', { name: /สมศรี/ })).toHaveAttribute('aria-current', 'true')
+    expect(screen.queryByRole('heading', { name: 'ปัทมวรรณ สุขเจริญ' })).not.toBeInTheDocument()
+    await act(async () => { finishDetail({ ...CASE, customer: { ...CASE.customer, uid: 'c-2', display_name: 'สมศรี พงษ์ไพบูลย์' } }) })
+    expect(screen.getByRole('heading', { name: 'สมศรี พงษ์ไพบูลย์' })).toBeInTheDocument()
+  })
+
   it('renders the selected case in the page flow', async () => {
     renderScreen(<Today />)
     await screen.findByRole('heading', { name: 'ปัทมวรรณ สุขเจริญ' })

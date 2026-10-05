@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { screen, within, waitFor } from '@testing-library/react'
+import { act, screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderScreen } from '../test-utils.jsx'
 import { setRole } from '../lib/identity.jsx'
@@ -75,6 +75,36 @@ describe('Today bulk assignment (F10)', () => {
     expect(within(filter).getByText('ยังไม่มอบหมาย · 4')).toBeInTheDocument()
     await user.selectOptions(filter, '__unassigned__')
     await waitFor(() => expect(api.today.mock.calls.some(([p]) => p?.unassigned === 1)).toBe(true))
+  })
+
+  it('keeps the latest officer desk when an earlier filter response arrives last', async () => {
+    let finishEarlier
+    api.today.mockImplementation((params) => {
+      if (params?.officer === 'rungnapa') return new Promise((resolve) => { finishEarlier = resolve })
+      if (params?.officer === 'somchai') return Promise.resolve({ ...TODAY, items: [TODAY.items[1]] })
+      return Promise.resolve(TODAY)
+    })
+    const user = userEvent.setup()
+    renderScreen(<Today />)
+    await screen.findByRole('button', { name: /ปัทมวรรณ/ })
+    const filter = screen.getByLabelText('เจ้าหน้าที่')
+    await user.selectOptions(filter, 'rungnapa')
+    await user.selectOptions(filter, 'somchai')
+    await waitFor(() => expect(screen.queryByRole('button', { name: /ปัทมวรรณ/ })).not.toBeInTheDocument())
+    await act(async () => { finishEarlier({ ...TODAY, items: [TODAY.items[0]] }) })
+    expect(screen.getByRole('button', { name: /สมศรี/ })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /ปัทมวรรณ/ })).not.toBeInTheDocument()
+  })
+
+  it('clears the previous desk and assignment selection while another officer loads', async () => {
+    api.today.mockImplementation((params) => params?.officer ? new Promise(() => {}) : Promise.resolve(TODAY))
+    const user = userEvent.setup()
+    renderScreen(<Today />)
+    await user.click(await screen.findByRole('checkbox', { name: 'เลือก ปัทมวรรณ สุขเจริญ' }))
+    await user.selectOptions(screen.getByLabelText('เจ้าหน้าที่'), 'somchai')
+    expect(screen.queryByRole('button', { name: /ปัทมวรรณ/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('heading', { name: 'ปัทมวรรณ สุขเจริญ' })).not.toBeInTheDocument()
+    expect(screen.queryByText('เลือกแล้ว 1 รายการ')).not.toBeInTheDocument()
   })
 
   it('offers the random deal to a supervisor disabled, with its reason', async () => {

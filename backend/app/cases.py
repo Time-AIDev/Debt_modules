@@ -18,6 +18,7 @@ import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
+from . import termination_archive
 from . import clock
 from . import dictionaries
 from . import errors
@@ -158,6 +159,7 @@ def for_current() -> CaseState:
                 service_deferrals.sync_followup(state, case, customer)
         _apply_shared_overrides(state)
         _apply_payment_claims(state)
+        termination_archive.project(state)
     if reads is not None:
         reads[key] = state
     return state
@@ -330,6 +332,11 @@ def contract_field_of(contract, field="fee_state"):
     (fee_state and its five siblings, plus `status`). Falls back to the fixture's
     seeded value on the object itself -- that attribute is never written by a
     request any more, so it stays the seed for the life of the process."""
+    if field in ("status", "termination"):
+        pending = termination_archive._PENDING.get() or {}
+        fact = pending.get(contract.uid) or termination_archive.facts().get(contract.uid)
+        if fact:
+            return fact[field]
     slot = _fee_overlay().get(contract.uid)
     value = slot[field] if slot and field in slot else getattr(contract, field, None)
     if field == "instalments":
@@ -864,6 +871,7 @@ def validate_termination_inputs(cause, reason):
     return str(reason).strip()
 
 
+@termination_archive.operation
 def record_termination(contract, cause, by, reason, instrument, status="TERMINATED", on=None):
     """The ONE writer of an ended contract (2026-09-20).
 
@@ -881,6 +889,7 @@ def record_termination(contract, cause, by, reason, instrument, status="TERMINAT
     reason = validate_termination_inputs(cause, reason)
     record = {"cause": cause, "on": str(on or settings.business_date), "by": by,
               "instrument": instrument, "origin": "PERSON", "reason": reason}
+    termination_archive.observe(contract, record, status)
     _set_contract_fields(contract, status=status, termination=record)
     state = for_current()
     case = None
@@ -891,7 +900,8 @@ def record_termination(contract, cause, by, reason, instrument, status="TERMINAT
     if case is not None:
         case["termination"] = record
         add_event(state, case, "CONTRACT_TERMINATED", cause=cause, instrument=instrument,
-                  contract_uid=contract.uid, by=by, on=record["on"])
+                  contract_uid=contract.uid, by=by, on=record["on"],
+                  reason=reason, origin=record["origin"])
     # The act name belongs to whichever route is running: the terminate route names
     # CONTRACT_TERMINATED itself before calling, and a write-off inside recovery:resolve
     # is part of RECOVERY_RESOLVED — renaming the act mid-request would reset the outer

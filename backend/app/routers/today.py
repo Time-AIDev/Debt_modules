@@ -1,3 +1,4 @@
+from .. import termination_archive
 """Today, the work book and the case — API Surface v2.3 §1–§4."""
 import csv
 import io
@@ -1358,6 +1359,26 @@ def _resolve_amended_due(row):
                 amended_due_note_en="Asked to move the due date to %s — no effect until AR approves it" % requested)
 
 
+
+def _case_events(state, case, customer):
+    terms = {k.uid: cases_domain.contract_field_of(k, "termination") for k in customer.contracts
+             if cases_domain.contract_field_of(k, "termination")}
+    result = []
+    for event in state.events:
+        if event.get("case_uid") != case["uid"]:
+            continue
+        row = dict(event)
+        if row.get("kind") == "CONTRACT_TERMINATED":
+            uid = row.get("contract_uid")
+            if not uid and len(terms) == 1:
+                uid = next(iter(terms))
+            term = terms.get(uid)
+            if term:
+                row.update({k: term.get(k) for k in ("on", "by", "cause", "instrument", "origin")})
+                row.update(contract_uid=uid, reason=term.get("reason") or term.get("reason_th") or term.get("reason_en"))
+        result.append(row)
+    return result
+
 @router.get("/v1/cases/by-customer/{customer_uid}")
 def case_detail(customer_uid: str):
     from .. import service_deferrals
@@ -1524,7 +1545,7 @@ def case_detail(customer_uid: str):
         # Accounting, and the amendment draft raised on the pipeline was nowhere on it.
         # Every PEAK document this customer has, annotated, on the same load.
         "peak_documents": _case_peak_documents(customer_uid, contract_uids, jstate),
-        "events": [e for e in cs.events if e.get("case_uid") == case["uid"]],
+        "events": _case_events(cs, case, customer),
         # Round-3, ruling 8 (Arina, 2026-09-04): this key is an English developer note
         # only — no client is contracted to branch on it (errors.py:1-13's "code is the
         # only field clients branch on" applies here by the same logic). It used to
@@ -1767,6 +1788,7 @@ def set_payment_status(customer_uid: str, body: dict = Body(...), x_volt_role: s
 
 
 @router.post("/v1/cases/by-customer/{customer_uid}:terminate")
+@termination_archive.operation
 def terminate_contract(customer_uid: str, body: dict = Body(default=None),
                        x_volt_role: str = Header(default="OFFICER"),
                        x_volt_officer: str = Header(default=None)):

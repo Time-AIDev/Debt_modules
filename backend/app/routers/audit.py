@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Query
 
-from .. import audit_store, errors
+from .. import audit_store, errors, audit_display
 
 router = APIRouter()
 
@@ -69,11 +69,16 @@ def _signing_source(counts):
 @router.get("/v1/audit")
 def read_audit(actor: str = Query(default=None), act: str = Query(default=None),
                subject_uid: str = Query(default=None), since: str = Query(default=None),
-               limit: int = Query(default=50), before_seq: int = Query(default=None)):
+               limit: int = Query(default=50), before_seq: int = Query(default=None),
+               q: str = Query(default=None), until: str = Query(default=None),
+               outcome: str = Query(default=None)):
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     filters = {"actor": actor, "act": act, "subject_uid": subject_uid,
                "since": _parse_since(since)}
-    entries = audit_store.read(filters, limit=limit, before_seq=before_seq)
+    ctx = audit_display.context()
+    filters.update(q=q, until=_parse_since(until), outcome=outcome,
+                   matching_subjects=audit_display.matching_subjects(q, ctx) if q else [])
+    entries = [audit_display.enrich(e, ctx) for e in audit_store.read(filters, limit=limit, before_seq=before_seq)]
     # The filter options come from the WHOLE log, not from the page just read: a
     # name that fell off the first page must still be a choosable filter, or the
     # one screen built for finding a particular person's actions among thousands
@@ -89,6 +94,7 @@ def read_audit(actor: str = Query(default=None), act: str = Query(default=None),
             "persisted": audit_store.persisted(),
             "actors": distinct["actors"],
             "acts": distinct["acts"],
+            "act_labels": audit_display.ACT_LABELS,
             # Delta-100 AL2: the strip's own statistic, over the whole log.
             "signing_source": _signing_source(audit_store.actor_source_counts()),
         },

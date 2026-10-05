@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { usePrefs } from '../lib/prefs.jsx'
@@ -74,18 +74,28 @@ export function Today() {
   const board = todayView === 'board' && !preInstall
   const itemUid = useCallback((item) => (preInstall ? item?.customer_uid : item?.customer?.uid), [preInstall])
 
+  const loadVersion = useRef(0)
   const load = useCallback(() => {
+    const version = ++loadVersion.current
     setProblem(null)
+    setPayload(null)
+    setRecord(null)
+    setSelected(new Set())
     // feedback-r2 TASK-015: the "ยังไม่มอบหมาย" option filters through the server's
     // own unassigned desk, never by dropping rows on the client.
     const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : undefined
     const request = preInstall ? api.pipeline() : api.today(query)
     request
-      .then((d) => { setPayload(d); setSelected(new Set()) })
-      .catch((e) => setProblem(e?.problem || { code: 'request_failed' }))
+      .then((d) => { if (version === loadVersion.current) setPayload(d) })
+      .catch((e) => {
+        if (version === loadVersion.current) setProblem(e?.problem || { code: 'request_failed' })
+      })
   }, [officer, preInstall])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => {
+    load()
+    return () => { loadVersion.current += 1 }
+  }, [load])
   useReloadOnEpoch(load)
   useEffect(() => {
     api.boardColumns().then((d) => setColumns(d?.columns || [])).catch(() => setColumns([]))
@@ -137,6 +147,7 @@ export function Today() {
   useEffect(() => {
     if (!sel) { setRecord(null); return undefined }
     let alive = true
+    setRecord(null)
     setRecordProblem(null)
     api.caseDetail(itemUid(sel))
       .then((d) => { if (alive) setRecord(d) })
@@ -198,7 +209,6 @@ export function Today() {
 
   function afterWrite() {
     load()
-    if (sel) api.caseDetail(itemUid(sel)).then(setRecord).catch(() => {})
   }
 
   async function exportSelected() {

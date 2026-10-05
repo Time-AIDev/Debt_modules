@@ -133,7 +133,7 @@ describe('the status language on the undesigned screens', () => {
     renderScreen(<Audit />)
     expect((await screen.findByText('ถูกปฏิเสธ')).closest('.pill')).toHaveClass('pill--problem')
     expect(screen.getByText('contact_locked')).toBeInTheDocument()
-    expect(screen.getByText('สำเร็จ').closest('.pill')).toHaveClass('pill--done')
+    expect(screen.getAllByText('สำเร็จ').find((element) => element.closest('.pill')).closest('.pill')).toHaveClass('pill--done')
   })
 
   it('settings: lock and band pills, the invite reason, and login-off as a quiet line', async () => {

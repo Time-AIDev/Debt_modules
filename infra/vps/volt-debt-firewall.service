@@ -1,0 +1,13 @@
+[Unit]
+Description=Volt Debt Docker inbound firewall
+Requires=docker.service
+After=docker.service ufw.service
+PartOf=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/volt-debt-docker-firewall
+RemainAfterExit=yes
+
+[Install]
+WantedBy=multi-user.target docker.service

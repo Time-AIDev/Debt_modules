@@ -67,7 +67,7 @@ def after_landing(kind, run_id=None, changed=True):
         # row still follows (review, 2026-09-25).
         from . import monthly_history
         monthly_history.safe_snapshot(kind)
-        return {"served": True, "epoch": data_epoch.current(), "problem": None, "changed": False}
+        return {"served": True, "epoch": data_epoch.current(), "problem": _archive_import(), "changed": False}
     from . import main
     result = {"served": False, "epoch": data_epoch.current(), "problem": None, "changed": True}
     landed = _landing_has_a_run()
@@ -115,6 +115,9 @@ def after_landing(kind, run_id=None, changed=True):
         import_sync.note_book_epoch(result["epoch"])
         # The current month's history row follows every landing (2026-09-25).
         monthly_history.safe_snapshot(kind)
+        archive_problem = _archive_import()
+        if archive_problem:
+            result["problem"] = archive_problem
     _LAST.update(kind=kind, run_id=run_id, served=result["served"], problem=result["problem"])
     return result
 
@@ -127,3 +130,15 @@ def last():
 def reset():
     """Test seam."""
     _LAST.update(kind=None, run_id=None, served=False, problem=None)
+
+
+def _archive_import():
+    # The landing is already committed. Report an archive failure explicitly;
+    # the next import heal retries the idempotent capture.
+    from . import termination_archive
+    try:
+        termination_archive.backfill_current(capture_kind="IMPORT")
+    except Exception as exc:
+        return {"code": "termination_archive_unavailable", "detail": exc.__class__.__name__,
+                "message_th": "นำเข้าข้อมูลแล้ว แต่ทะเบียนการยุติยังไม่พร้อม กรุณารีเฟรชข้อมูลอีกครั้ง"}
+    return None

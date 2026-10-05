@@ -54,7 +54,9 @@ def test_every_non_get_route_matches_is_logged_by_construction():
 
 def test_only_the_declared_read_is_logged():
     # D3's scope cannot widen by accident. Verify both the tuple value AND behavior.
-    assert audit.LOGGED_READS == ("/v1/cases/by-customer/{customer_uid}",)
+    assert audit.LOGGED_READS == ("/v1/cases/by-customer/{customer_uid}", "/v1/terminated-customers/{archive_uid}")
+    assert audit.is_logged("GET", "/v1/terminated-customers/{archive_uid}") is True
+    assert audit.is_logged("GET", "/v1/terminated-customers") is False
     # Undeclared GETs are NOT logged.
     assert audit.is_logged("GET", "/v1/workbook") is False, "undeclared GETs must not be logged"
     # The declared GET IS logged.

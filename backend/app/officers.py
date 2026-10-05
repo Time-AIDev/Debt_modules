@@ -24,41 +24,50 @@ FIXED = (
 DISPLAY_TH = {"thip": "ทิพย์อักษร"}
 
 
-# The scan is over the whole served book, and the shell, Today and Reports each ask
-# for it on one load. Cached against the book the scan read: the same CUSTOMERS and
-# IDENTITIES list objects at the same length. A reload rebinds the lists
-# (main.reload_book), so the next call rescans; the held references also keep those
-# list objects alive, so a freed-and-reallocated id can never be mistaken for the
-# book the cache was built from.
-_REGISTRY_CACHE = {"customers": None, "identities": None, "lengths": None, "rows": None}
+# Fingerprints catch in-place changes without caching account emails.
+_REGISTRY_CACHE = {"key": None, "rows": None}
+
+
+def _copy_rows(rows):
+    return [{**row, "roles": list(row["roles"])} for row in rows]
+
+
+def _build_registry(customer_uids, allowlist_entries):
+    from .auth import AuthConfigError
+    rows = {row["uid"]: {**row, "roles": list(row["roles"])} for row in FIXED}
+    for uid in customer_uids:
+        if uid and uid not in rows:
+            rows[uid] = {"uid": uid, "display_name_th": DISPLAY_TH.get(uid, uid),
+                         "display_name_en": uid, "role": "OFFICER", "roles": ["OFFICER"]}
+    configured = {}
+    for position, (uid, role) in enumerate(allowlist_entries, 1):
+        if uid in configured and configured[uid] != role:
+            raise AuthConfigError("AUTH_ALLOWLIST entry %d has conflicting officer roles" % position)
+        configured[uid] = role
+        if uid in rows:
+            if role not in rows[uid]["roles"]:
+                raise AuthConfigError("AUTH_ALLOWLIST entry %d conflicts with the officer registry role" % position)
+        else:
+            rows[uid] = {"uid": uid, "display_name_th": DISPLAY_TH.get(uid, uid),
+                         "display_name_en": uid, "role": role, "roles": [role]}
+    fixed_uids = {row["uid"] for row in FIXED}
+    return ([rows[uid] for uid in sorted(rows) if uid not in fixed_uids]
+            + [rows[row["uid"]] for row in FIXED])
 
 
 def registry():
-    """[{uid, display_name_th, role, roles}] — every officer the seed assigns work to,
-    as OFFICER, plus the fixed Manager and Owner identities."""
-    from . import main
-    customers, identities = main.CUSTOMERS, main.IDENTITIES
-    lengths = (len(customers), len(identities))
-    cached = _REGISTRY_CACHE
-    if (cached["rows"] is not None and cached["customers"] is customers
-            and cached["identities"] is identities and cached["lengths"] == lengths):
-        # Fresh dicts, as before the cache: callers own what they are handed.
-        return [dict(row) for row in cached["rows"]]
-    seen, rows = set(), []
-    # Every served customer, identities included: a crm.lead identity is assigned to
-    # the same two desk officers as any other row, and auth.check_officers refuses to
-    # start when an allow-listed officer is missing from this registry.
-    for customer in list(customers) + list(identities):
-        uid = getattr(customer, "officer", None)
-        if uid and uid not in seen:
-            seen.add(uid)
-            rows.append({"uid": uid, "display_name_th": DISPLAY_TH.get(uid, uid), "display_name_en": uid, "role": "OFFICER", "roles": ["OFFICER"]})
-    rows.sort(key=lambda r: r["uid"])
-    for fixed in FIXED:
-        if fixed["uid"] not in seen:
-            rows.append(dict(fixed))
-    cached.update(customers=customers, identities=identities, lengths=lengths, rows=rows)
-    return [dict(row) for row in rows]
+    """Customer, fixed and validated allowlist identities, deduplicated by UID."""
+    from . import main, auth
+    customer_uids = tuple(getattr(customer, "officer", None)
+                          for customer in list(main.CUSTOMERS) + list(main.IDENTITIES))
+    config = auth.current_config()
+    allowlist_entries = tuple((entry["officer"], entry["role"])
+                              for entry in config.allowlist.values()) if config.on else ()
+    key = (customer_uids, allowlist_entries)
+    if _REGISTRY_CACHE["key"] != key or _REGISTRY_CACHE["rows"] is None:
+        rows = _build_registry(customer_uids, allowlist_entries)
+        _REGISTRY_CACHE.update(key=key, rows=rows)
+    return _copy_rows(_REGISTRY_CACHE["rows"])
 
 
 def role_of_officer(uid):

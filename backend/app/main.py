@@ -1986,6 +1986,8 @@ app.include_router(pipelines_router)
 app.include_router(peak_pipeline_router)
 app.include_router(attachments_router)
 app.include_router(audit_router)
+from .routers.terminated import router as terminated_router
+app.include_router(terminated_router)
 app.include_router(login_router)
 app.include_router(calendar_router)
 app.include_router(shell_router)
@@ -2029,3 +2031,15 @@ if _STATIC.is_dir():
         if full_path and candidate.is_file() and str(candidate).startswith(str(_STATIC)):
             return FileResponse(candidate)
         return FileResponse(_STATIC / "index.html")
+
+
+@app.middleware("http")
+async def termination_request_cache(request: Request, call_next):
+    # Mutable ContextVar contents follow the request into sync workers. Every
+    # request refreshes the shared facts, including POSTs and import healing.
+    from . import termination_archive
+    token = termination_archive._CACHE.set({})
+    try:
+        return await call_next(request)
+    finally:
+        termination_archive._CACHE.reset(token)

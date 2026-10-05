@@ -668,6 +668,8 @@ export const api = {
   collectionIndicator: (params) => get('/v1/reports/collection', params),
   putCollectionTargets: (month, payload) => put(`/v1/reports/collection/${month}/targets`, payload),
   // The action audit log (design 2026-09-11): a hash-chained, append-only record.
+  terminated: (params) => get('/v1/terminated-customers', params),
+  terminatedCase: (uid) => get(`/v1/terminated-customers/${encodeURIComponent(uid)}`),
   audit: (params) => get('/v1/audit', params),
   auditVerify: () => get('/v1/audit/verify'),
 

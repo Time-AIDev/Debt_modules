@@ -26,6 +26,7 @@ export default {
   'nav.reports': 'Reports',
   'nav.settings': 'Settings',
   'nav.data': 'Data sources',
+  'nav.terminated': 'Terminated contracts',
   'nav.audit': 'Action log',
   'group.mine': 'My work',
   'group.review': 'To review',

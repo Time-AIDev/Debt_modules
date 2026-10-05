@@ -1,3 +1,4 @@
+from .. import termination_archive
 """The journey endpoints — everything the rebuilt screens call that the pre-rebuild
 API did not serve. All additive under /v1; every refusal is an errors.py factory.
 
@@ -1667,6 +1668,7 @@ def record_recovery(uid: str, body: dict = Body(...)):
 
 
 @router.post("/v1/recovery-cases/{uid}:resolve")
+@termination_archive.operation
 def resolve_recovery(uid: str, body: dict = Body(...)):
     audit.describe(act="RECOVERY_RESOLVED", subject=("recovery_case", uid))
     state = journey.for_current()

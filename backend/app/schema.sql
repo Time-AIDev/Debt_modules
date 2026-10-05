@@ -831,3 +831,31 @@ CREATE TABLE IF NOT EXISTS app.schedule_config (
     interval_minutes integer NOT NULL DEFAULT 120 CHECK(interval_minutes BETWEEN 15 AND 1440),
     actor jsonb NOT NULL, last_run_at timestamptz, last_run_uid text
 );
+
+-- Shared termination facts and API-shaped immutable snapshots (JSON, no pickle).
+CREATE TABLE IF NOT EXISTS app.termination_fact (
+    uid text PRIMARY KEY,
+    payload jsonb NOT NULL
+);
+CREATE TABLE IF NOT EXISTS app.termination_archive (
+    uid text PRIMARY KEY,
+    customer_uid text NOT NULL,
+    payload jsonb NOT NULL,
+    dedupe_key text UNIQUE
+);
+ALTER TABLE app.termination_archive ADD COLUMN IF NOT EXISTS dedupe_key text;
+ALTER TABLE app.termination_archive DROP CONSTRAINT IF EXISTS termination_archive_customer_uid_key;
+CREATE UNIQUE INDEX IF NOT EXISTS termination_archive_dedupe_idx ON app.termination_archive(dedupe_key);
+CREATE INDEX IF NOT EXISTS termination_archive_date_idx
+    ON app.termination_archive ((payload->>'terminated_on') DESC);
+CREATE OR REPLACE FUNCTION app.termination_no_change() RETURNS trigger AS $guard$
+BEGIN
+    RAISE EXCEPTION 'termination history is append-only';
+END;
+$guard$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS termination_archive_no_change ON app.termination_archive;
+CREATE TRIGGER termination_archive_no_change BEFORE UPDATE OR DELETE ON app.termination_archive
+    FOR EACH ROW EXECUTE FUNCTION app.termination_no_change();
+DROP TRIGGER IF EXISTS termination_fact_no_change ON app.termination_fact;
+CREATE TRIGGER termination_fact_no_change BEFORE UPDATE OR DELETE ON app.termination_fact
+    FOR EACH ROW EXECUTE FUNCTION app.termination_no_change();

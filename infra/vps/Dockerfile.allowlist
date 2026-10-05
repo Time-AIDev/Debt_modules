@@ -1,0 +1,2 @@
+FROM sha256:f52b6f4630102f277357eb4bece06e80fd2d807a03dcd7b1c659c3a8c1bb222f
+COPY backend/app/officers.py /app/app/officers.py
