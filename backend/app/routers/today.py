@@ -995,7 +995,7 @@ def _write_rows(writer, rows):
                          (r.get("ladder") or {}).get("stage"), (r.get("ladder") or {}).get("indicative")]))
 
 
-def _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position=None):
+def _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position=None, entity=None):
     """Feedback Round 1 / Task 14 fix (I1): `position` prints the same way every
     other filter here does. This note feeds BOTH the governed export's own
     "# ตัวกรอง: …" banner and the durable workbook_exports.record() audit entry
@@ -1004,7 +1004,7 @@ def _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_i
     parts = []
     for key, value in (("product", product), ("payment_status", payment_status), ("dc_status", dc_status),
                        ("officer", officer), ("tier", tier), ("q", q), ("ladder_indicative", ladder_indicative),
-                       ("position", position)):
+                       ("position", position), ("entity", entity)):
         if value:
             parts.append("%s=%s" % (key, value))
     return ", ".join(parts) if parts else "ทั้งหมด"
@@ -1026,7 +1026,7 @@ def workbook_export(product: str = Query(default=None), payment_status: str = Qu
                     tier: str = Query(default=None), q: str = Query(default=None),
                     sort: str = Query(default="aggregate_overdue"), dir: str = Query(default="desc"),
                     ladder_indicative: str = Query(default=None), position: str = Query(default=None),
-                    identities: str = Query(default=None)):
+                    identities: str = Query(default=None), entity: str = Query(default=None)):
     """Ruling 74 was SPECIFIED to close this verb here — a mandatory reason, a role
     capture and a record, the same shape as the governed `POST` below — and is
     ESCALATED INSTEAD, not built. Leg F's own blast-radius table (F-api.md section
@@ -1047,7 +1047,7 @@ def workbook_export(product: str = Query(default=None), payment_status: str = Qu
     from fastapi.responses import PlainTextResponse
     # _workbook validates and filters \u2014 the export shares it, so the CSV honours the
     # ladder filter by construction (WorkBook.jsx's whole reason for server-side filters).
-    data = _workbook(product, payment_status, dc_status, officer, tier, q, sort, dir, ladder_indicative, position)
+    data = _workbook(product, payment_status, dc_status, officer, tier, q, sort, dir, ladder_indicative, position, entity=entity)
     filename = "volt-debt-workbook-%s.csv" % settings.business_date
     return PlainTextResponse("\ufeff" + _csv_body(data), media_type="text/csv",
                              headers={"Content-Disposition": 'attachment; filename="%s"' % filename})
@@ -1060,6 +1060,7 @@ def workbook_export_governed(body: dict = Body(default={}), product: str = Query
                              q: str = Query(default=None), sort: str = Query(default="aggregate_overdue"),
                              dir: str = Query(default="desc"), ladder_indicative: str = Query(default=None),
                              position: str = Query(default=None), identities: str = Query(default=None),
+                             entity: str = Query(default=None),
                              x_volt_role: str = Header(default="OFFICER"), x_volt_officer: str = Header(default=None)):
     """Ruling 72 — the governed export. Same resource, second verb (para 5.3 of
     docs/design/round-5/data-flow/F-api.md): one column list, one writer
@@ -1085,19 +1086,19 @@ def workbook_export_governed(body: dict = Body(default={}), product: str = Query
     on the file's own face below, not silently dropped."""
     audit.describe(act="WORKBOOK_EXPORTED")
     reason = (body or {}).get("reason")
-    if not reason or len(str(reason).strip()) < 8:
+    if not isinstance(reason, str) or len(reason.strip()) < 8:
         raise errors.validation_failed([{
             "pointer": "/reason", "code": "required",
             "message": "A workbook export requires a logged reason of at least 8 characters (SOP paragraph 5).",
             "message_th": "การส่งออกข้อมูลลูกค้าต้องระบุเหตุผล (SOP §5)"}])
     reason = str(reason).strip()[:500]
-    data = _workbook(product, payment_status, dc_status, officer, tier, q, sort, dir, ladder_indicative, position)
+    data = _workbook(product, payment_status, dc_status, officer, tier, q, sort, dir, ladder_indicative, position, entity=entity)
     by, by_role = signer(body, x_volt_officer, x_volt_role, fallback="officer")
     unfiltered_total = _workbook()["meta"]["total"]
     import hashlib
     columns_hash = hashlib.sha1(",".join(data["meta"]["columns"]).encode()).hexdigest()[:12]
     taken_at = clock.stamp()
-    filters_note = _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position)
+    filters_note = _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position, entity)
     from .. import workbook_exports
     entry = workbook_exports.record(
         verb="POST", by=by, by_role=by_role, reason=reason, on=str(settings.business_date),

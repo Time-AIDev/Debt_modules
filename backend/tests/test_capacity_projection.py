@@ -405,3 +405,31 @@ def test_scoped_case_preserves_related_contract_payment_status(capacity, monkeyp
     with unit(capacity, "a"):
         related = _related_cases(first, current)
     assert len(related) == 1 and related[0]["payment_status"] == "CLOSED"
+
+
+@pytest.mark.parametrize("entity", ["EPC", "SPV"])
+def test_workbook_entity_filter_is_preserved_by_both_csv_exports(entity):
+    import csv
+    import io
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        client.cookies.set("volt_session", "shared")
+        expected = client.get("/v1/workbook", params={"entity": entity}).json()
+        wanted = {row["customer"]["customer_no"] for row in expected["rows"]}
+        responses = [client.get("/v1/workbook:export", params={"entity": entity}),
+                     client.post("/v1/workbook:export", params={"entity": entity},
+                                 json={"reason": "Synthetic entity-filter validation"})]
+        for response in responses:
+            assert response.status_code == 200
+            body = "\n".join(line for line in response.text.lstrip("\ufeff").splitlines() if not line.startswith("#"))
+            rows = list(csv.DictReader(io.StringIO(body)))
+            assert {row["customer_no"] for row in rows} == wanted
+            assert all(row["entity"] == entity for row in rows)
+        assert "entity=" + entity in responses[1].text
+
+
+def test_governed_export_rejects_nested_object_as_reason():
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        response = client.post("/v1/workbook:export", json={"reason": {"reason": "Synthetic audit reason"}})
+    assert response.status_code == 422
