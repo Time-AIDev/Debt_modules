@@ -78,6 +78,5 @@ docs/guides/*.docx
 
 # Local durable prototype storage and private load-test credentials
 .runtime/
-backend/requirements.lock
 
 .test-artifacts/
