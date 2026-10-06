@@ -109,7 +109,8 @@ export function InvoicePaymentEvidence({ invoice, receipts = [] }) {
       <small className="case__rowNote">{english ? 'Invoice report evidence; these observations are not additional allocations.' : 'หลักฐานจากรายงานใบแจ้งหนี้ เป็นข้อมูลประกอบยอดเดิม ไม่ใช่การตัดชำระเพิ่ม'}</small>
       <ul className="case__stack">{sourceComponents.map((part, index) => <li key={part.uid || index}>
         <strong>{part.receipt_doc_no || '—'}</strong>
-        <div className="num">{fmtDate(part.paid_on)} · {english ? 'Reported received' : 'ต้นทางระบุรับ'} {money(part.amount)}</div>
+        <div className="num">{fmtDate(part.paid_on)} · {part.is_adjustment ? english ? 'Source adjustment' : 'รายการปรับยอดต้นทาง'
+          : english ? 'Reported received' : 'ต้นทางระบุรับ'} {money(part.amount)}</div>
         <div>{english ? 'Channel' : 'ช่องทาง'}: {part.channel || (english ? 'Not recorded' : 'ไม่ระบุ')}</div>
         <small className="case__rowNote">{part.included_in_snapshot
           ? english ? 'Included in the dated invoice snapshot.' : 'รวมอยู่ในยอดตามวันที่รายงานใบแจ้งหนี้'

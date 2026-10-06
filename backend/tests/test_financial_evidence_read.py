@@ -36,10 +36,12 @@ def test_invoice_only_historical_components_remain_visible_without_allocating_ca
     invoices = [{'doc_no': 'IV-OLD', 'customer_uid': 'C1', 'customer_no': 'C1', 'amount': '80',
                  'outstanding': '0', 'snapshot_as_of': '2026-09-14', 'source_payments': [
                      {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '40.00', 'channel': 'Bank A'},
-                     {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '40.00', 'channel': 'Bank A'}]}]
+                     {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '40.00', 'channel': 'Bank A'},
+                     {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '-1.00', 'channel': 'Adjustment'}]}]
     evidence = financial_evidence.build(invoices, [], [], {'snapshot_as_of': '2026-09-14'}, [])
     parts = evidence['source_invoice_components']['IV-OLD']
-    assert len(parts) == 2 and parts[0]['uid'] != parts[1]['uid']
+    assert len(parts) == 3 and parts[0]['uid'] != parts[1]['uid']
+    assert parts[-1]['is_adjustment'] and not parts[0]['is_adjustment']
     assert all(part['included_in_snapshot'] and part['allocated_amount'] is None for part in parts)
     assert evidence['invoice_components'] == {} and evidence['receipts'] == []
 

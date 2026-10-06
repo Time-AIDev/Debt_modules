@@ -69,6 +69,7 @@ def build(invoices, receipts, sources, reconciliation, component_allocations=Non
             'uid': 'invoice-source:%s:%d' % (doc, index), 'receipt_doc_no': part.get('receipt_no'),
             'paid_on': part.get('on'), 'amount': str(part['amount']) if part.get('amount') is not None else None,
             'channel': part.get('channel'), 'source_system': 'PEAK', 'allocated_amount': None,
+            'is_adjustment': bool(part.get('amount') is not None and Decimal(str(part['amount'])) < 0),
             'included_in_snapshot': bool(part.get('on') and invoice.get('snapshot_as_of') and
                 str(part['on'])[:10] <= str(invoice['snapshot_as_of'])[:10]),
         } for index, part in enumerate(invoice.get('source_payments') or [])]
