@@ -1692,6 +1692,7 @@ export default {
   "supplement.qualityNote": "An amount alone or a formula without a cached result does not establish payment. Sheet status evidence remains separate from confirmed cash.",
   "supplement.tabsNote": "Done - Collection: SPV · Done - Cash: EPC · Repossessed 1: repossession evidence. Review unresolved entries before applying.",
   "supplement.selected": "{n} of {total} entries reviewed",
+  'supplement.reviewPage': 'Select reviewed page',
   "supplement.reviewRow": "Reviewed entry {name}",
   "supplement.reviewApply": "Review and apply selected entries",
   "supplement.applied": "Reviewed evidence applied",

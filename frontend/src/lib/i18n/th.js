@@ -1693,6 +1693,7 @@ export default {
   "supplement.qualityNote": "ตัวเลขอย่างเดียวหรือสูตรที่ไม่มีค่าที่บันทึกไว้ไม่ถือเป็นการรับชำระ สถานะจากชีตแสดงแยกจากเงินรับที่ยืนยันแล้ว",
   "supplement.tabsNote": "Done - Collection: SPV · Done - Cash: EPC · Repossessed 1: หลักฐานการเรียกคืน ระบบแสดงรายการที่ต้องตรวจเพิ่มเติมก่อนนำไปใช้",
   "supplement.selected": "ตรวจแล้ว {n} จาก {total} รายการ",
+  'supplement.reviewPage': 'เลือกหน้าที่ตรวจแล้ว',
   "supplement.reviewRow": "ตรวจรายการ {name} แล้ว",
   "supplement.reviewApply": "ตรวจสรุปและบันทึกรายการที่เลือก",
   "supplement.applied": "บันทึกข้อมูลที่ตรวจแล้ว",

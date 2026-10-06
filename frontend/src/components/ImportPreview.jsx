@@ -20,8 +20,11 @@ export function ImportPreview({ preview, canApply, onApplied }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const [applied, setApplied] = useState(false)
+  const [page, setPage] = useState(1)
   const [idempotencyKey] = useState(() => crypto.randomUUID())
   const entries = preview.entries || []
+  const pageSize = 50
+  const visible = entries.slice((page - 1) * pageSize, page * pageSize)
   const chosen = entries.filter((r) => selected.has(r.key))
   const terminating = chosen.filter((r) => r.termination_candidate?.completed_evidence && termination[r.key]?.requested)
   const complete = terminating.every((r) => termination[r.key]?.cause
@@ -70,13 +73,16 @@ export function ImportPreview({ preview, canApply, onApplied }) {
       <p>{t('supplement.overlayNote')}</p>
       <p className="scr-meta">{t('supplement.qualityNote')}</p>
       <div className="history-pagination"><span>{t('supplement.selected', { n: chosen.length, total: entries.length })}</span>
+        <button type="button" className="btn btn--sm" disabled={busy || applied || !canApply}
+          onClick={() => setSelected((current) => new Set([...current, ...visible.filter((r) => r.eligible).map((r) => r.key)]))}>
+          {t('supplement.reviewPage')}</button>
         <button type="button" className="btn btn--primary" disabled={busy || applied || !canApply || !chosen.length || !complete}
           onClick={() => setConfirmOpen(true)}>{applied ? t('supplement.applied') : t('supplement.reviewApply')}</button>
       </div>
       {!canApply ? <p>{t('data.managerOnly')}</p> : null}
       {chosen.length && !complete ? <p role="note">{t('supplement.terminationRequired')}</p> : null}
       <Problem problem={problem} />
-      <ul className="case__rows supplement__rows">{entries.map((row) => {
+      <ul className="case__rows supplement__rows">{visible.map((row) => {
         const candidate = row.termination_candidate
         const selectable = row.eligible
         const quality = row.quality || {}
@@ -124,11 +130,17 @@ export function ImportPreview({ preview, canApply, onApplied }) {
           </fieldset> : null}
         </li>
       })}</ul>
+      <div className="history-pagination">
+        <button className="btn btn--sm" disabled={page <= 1 || busy} onClick={() => setPage((n) => n - 1)}>{t('history.previous')}</button>
+        <span>{t('history.page', { page, total: Math.max(1, Math.ceil(entries.length / pageSize)) })}</span>
+        <button className="btn btn--sm" disabled={page * pageSize >= entries.length || busy} onClick={() => setPage((n) => n + 1)}>{t('history.next')}</button>
+      </div>
     </div>
     <ConfirmDialog open={confirmOpen} title={t('supplement.reviewApply')}
       onClose={() => { if (!busy) setConfirmOpen(false) }} onConfirm={apply}
       confirmLabel={t('supplement.confirm')} busy={busy} danger={terminating.length > 0}>
       <p>{t('supplement.confirmCount', { n: chosen.length })}</p>
+      <ul>{chosen.map((row) => <li key={row.key}>{row.customer_no || row.customer_uid || row.key} · {row.contract_uid || '—'}</li>)}</ul>
       {terminating.length ? <p>{t('supplement.confirmTerminate', { n: terminating.length })}</p> : null}
       <p>{t('supplement.overlayNote')}</p><Problem problem={problem} />
     </ConfirmDialog>

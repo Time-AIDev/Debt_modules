@@ -76,3 +76,17 @@ it('does not offer apply or editable selections to an unauthorized role', () => 
   expect(screen.getByRole('checkbox', { name: 'ตรวจรายการ C1 แล้ว' })).toBeDisabled()
   expect(screen.getByRole('button', { name: 'ตรวจสรุปและบันทึกรายการที่เลือก' })).toBeDisabled()
 })
+
+it('limits a preview page to 50 rows and preserves reviewed selections across pages', async () => {
+  const user = userEvent.setup()
+  const entries = Array.from({ length: 51 }, (_, i) => ({ ...entry, key: `r${i}`, customer_no: `C${i}` }))
+  renderScreen(<ImportPreview preview={{ ...preview, entries }} canApply />)
+  expect(screen.getAllByRole('checkbox')).toHaveLength(50)
+  await user.click(screen.getByRole('checkbox', { name: 'ตรวจรายการ C0 แล้ว' }))
+  await user.click(screen.getByRole('button', { name: 'ถัดไป' }))
+  expect(screen.getAllByRole('checkbox')).toHaveLength(1)
+  await user.click(screen.getByRole('checkbox', { name: 'ตรวจรายการ C50 แล้ว' }))
+  await user.click(screen.getByRole('button', { name: 'ตรวจสรุปและบันทึกรายการที่เลือก' }))
+  await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'ยืนยันบันทึกรายการที่ตรวจแล้ว' }))
+  await waitFor(() => expect(api.applyImportPreview.mock.calls[0][1].selected_keys).toEqual(['r0', 'r50']))
+})
