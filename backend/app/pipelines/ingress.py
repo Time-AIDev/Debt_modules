@@ -58,10 +58,16 @@ def from_odoo(rules, execute=None, on_progress=None, on_exclusions=None):
     while True:
         page = execute(config, uid, "crm.lead", "search_read", [domain + [("id", ">", last_id)]],
                        {"fields": fields, "limit": PAGE, "order": "id"})
+        if not isinstance(page, list) or any(not isinstance(row, dict) for row in page):
+            raise odoo.OdooError("Odoo returned an invalid lead page")
         if not page:
             break
+        ids = [row.get("id") for row in page]
+        if (any(type(value) is not int for value in ids) or
+                any(value <= previous for previous, value in zip([last_id] + ids, ids))):
+            raise odoo.OdooError("Odoo returned a non-advancing lead page")
         rows.extend(page)
-        last_id = page[-1]["id"]
+        last_id = ids[-1]
         if on_progress:
             on_progress(read=len(rows), total=total)
     counted = min(total, execute(config, uid, "crm.lead", "search_count", [domain]))

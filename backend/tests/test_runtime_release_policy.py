@@ -12,6 +12,11 @@ def test_release_environments_share_limits_and_durable_paths():
     with pytest.raises(ValueError):runtime_policy.environment_defaults('production','fixtures')
 
 
+def test_every_shared_profile_imports_won_leads_without_requiring_install_dates():
+    for name in ('dev', 'staging', 'production'):
+        assert runtime_policy.environment_defaults(name)['CRM_WON_ONLY'] == 'true'
+
+
 def test_approval_path_persists_and_can_be_read():
     token=session.CURRENT.set('approval-policy-test')
     try:

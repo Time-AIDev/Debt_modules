@@ -1,0 +1,359 @@
+{
+  "scope": "Unit, in-memory API contracts and optional isolated PostgreSQL integration tests; no production load/browser login coverage",
+  "counts_note": "A test may serve multiple flows; flow counts must not be summed as unique tests. Full suite also runs tests outside this index.",
+  "flows": [
+    {
+      "id": "intake-odoo",
+      "name": "Odoo authentication, keyset pull, rules, identity and landing",
+      "backend": [
+        "backend/tests/test_pipeline_ingress.py",
+        "backend/tests/test_pipeline_normalise.py",
+        "backend/tests/test_pipeline_rules.py",
+        "backend/tests/test_pipeline_service.py",
+        "backend/tests/test_pipeline_router.py",
+        "backend/tests/test_crm_won_only.py",
+        "backend/tests/test_odoo_links.py",
+        "backend/tests/test_crm_lead_job.py",
+        "backend/tests/dataflow/test_boundary_contracts.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/DataSources.test.jsx"
+      ],
+      "backend_cases": {
+        "backend/tests/dataflow/test_boundary_contracts.py": [
+          "test_odoo_rpc_keeps_valid_empty_results",
+          "test_odoo_http_refusals_cannot_become_empty_success",
+          "test_odoo_application_error_is_not_data",
+          "test_invalid_odoo_page_cannot_hang_or_retire_existing_data",
+          "test_repeated_odoo_page_is_refused_before_an_infinite_refetch",
+          "test_malformed_empty_page_is_not_a_valid_zero_record_pull"
+        ]
+      }
+    },
+    {
+      "id": "intake-sheet",
+      "name": "Master/manual file parsing, review, install and source priority",
+      "backend": [
+        "backend/tests/test_round5_data_flow.py",
+        "backend/tests/test_sheet_install.py",
+        "backend/tests/test_sheet_to_postgres.py",
+        "backend/tests/test_sheet_phone.py",
+        "backend/tests/test_import_new_only.py",
+        "backend/tests/test_upload_scale.py",
+        "backend/tests/test_import_reseed.py",
+        "backend/tests/test_landing_writes.py",
+        "backend/tests/test_book_source.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/DataSources.test.jsx"
+      ]
+    },
+    {
+      "id": "intake-invoices",
+      "name": "PEAK invoice report, matching, staging, conflicts and apply",
+      "backend": [
+        "backend/tests/test_peak_report.py",
+        "backend/tests/test_peak_match.py",
+        "backend/tests/test_peak_writer.py",
+        "backend/tests/test_peak_service.py",
+        "backend/tests/test_peak_conflicts.py",
+        "backend/tests/test_peak_report_range.py",
+        "backend/tests/test_field_decisions.py",
+        "backend/tests/test_peak_api_door.py",
+        "backend/tests/test_peak_router.py"
+      ],
+      "frontend": [
+        "frontend/src/components/PeakIntake.test.jsx",
+        "frontend/src/components/ConflictList.test.jsx"
+      ]
+    },
+    {
+      "id": "intake-receipts",
+      "name": "Receipts, cash, cancellations and reconciliation",
+      "backend": [
+        "backend/tests/test_peak_receipt.py",
+        "backend/tests/test_peak_receipt_router.py",
+        "backend/tests/test_payment_integrity.py",
+        "backend/tests/test_payment_claims.py",
+        "backend/tests/test_status_follows_receipts.py",
+        "backend/tests/test_done_cash_status.py",
+        "backend/tests/test_cash_display_instalments.py"
+      ],
+      "frontend": [
+        "frontend/src/components/ReceiptIntake.test.jsx"
+      ]
+    },
+    {
+      "id": "money",
+      "name": "Schedules, DPD, allocations, arrears, fees, balances and deferrals",
+      "backend": [
+        "backend/tests/test_schedule.py",
+        "backend/tests/test_allocation.py",
+        "backend/tests/test_dpd.py",
+        "backend/tests/test_arrears.py",
+        "backend/tests/test_fee_states.py",
+        "backend/tests/test_penalty.py",
+        "backend/tests/test_payment_summary.py",
+        "backend/tests/test_payment_summary_remaining.py",
+        "backend/tests/test_service_deferrals.py",
+        "backend/tests/test_contract_accrual.py",
+        "backend/tests/test_verified_instalments.py"
+      ],
+      "frontend": [
+        "frontend/src/components/PaymentPosition.test.jsx",
+        "frontend/src/components/ServiceDeferrals.test.jsx",
+        "frontend/src/components/CycleGrid.test.jsx"
+      ]
+    },
+    {
+      "id": "orders",
+      "name": "Orders, pre-installation, evidence and approval/release gates",
+      "backend": [
+        "backend/tests/test_orders.py",
+        "backend/tests/test_pre_install_case.py",
+        "backend/tests/test_release_gates.py",
+        "backend/tests/test_pipeline_receipt.py",
+        "backend/tests/test_pipeline_runs.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Pipeline.test.jsx",
+        "frontend/src/screens/Record.preinstall.test.jsx"
+      ]
+    },
+    {
+      "id": "assignment",
+      "name": "Assignments, roles, locks and scoped customer access",
+      "backend": [
+        "backend/tests/test_production_permissions.py",
+        "backend/tests/test_production_http.py",
+        "backend/tests/test_runtime_roles.py",
+        "backend/tests/test_assign_bulk.py",
+        "backend/tests/test_assign_split.py",
+        "backend/tests/test_assign_template.py",
+        "backend/tests/test_contact_lock.py",
+        "backend/tests/test_customer_phone.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Today.assign.test.jsx",
+        "frontend/src/components/AssignSplitDrawer.test.jsx"
+      ]
+    },
+    {
+      "id": "collection",
+      "name": "Contact/disposition, promises, Today, reviews and worked status",
+      "backend": [
+        "backend/tests/test_cases.py",
+        "backend/tests/test_contact_notes.py",
+        "backend/tests/test_contact_ptp_body.py",
+        "backend/tests/test_ptp_early_payment.py",
+        "backend/tests/test_today_worked.py",
+        "backend/tests/test_today_and_pipeline.py",
+        "backend/tests/test_payment_review_summary.py",
+        "backend/tests/test_done_tabs_win.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Today.test.jsx",
+        "frontend/src/screens/Today.worked.test.jsx",
+        "frontend/src/components/ContactDrawer.ptp.test.jsx"
+      ]
+    },
+    {
+      "id": "recovery",
+      "name": "NPL, recovery, termination and immutable archive",
+      "backend": [
+        "backend/tests/test_npl_assessment_v26.py",
+        "backend/tests/test_npl_recovery_payment_status_rows.py",
+        "backend/tests/test_recovery_strategy_change.py",
+        "backend/tests/test_termination.py",
+        "backend/tests/test_termination_archive.py",
+        "backend/tests/test_risk.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Recovery.test.jsx",
+        "frontend/src/screens/Terminated.test.jsx",
+        "frontend/src/components/TerminateDrawer.test.jsx"
+      ]
+    },
+    {
+      "id": "calendar-notices",
+      "name": "Appointments, reschedules, messages and notices",
+      "backend": [
+        "backend/tests/test_calendar.py",
+        "backend/tests/test_calendar_move.py",
+        "backend/tests/test_calendar_priority.py",
+        "backend/tests/test_calendar_notices.py",
+        "backend/tests/test_message_templates.py",
+        "backend/tests/test_notice_audit_coverage.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Calendar.test.jsx",
+        "frontend/src/components/SocialComposer.test.jsx"
+      ]
+    },
+    {
+      "id": "files",
+      "name": "Chunk assembly, ownership, scanner, integrity, quotas and retention",
+      "backend": [
+        "backend/tests/test_durable_uploads.py",
+        "backend/tests/test_attachments_guard.py",
+        "backend/tests/test_attachments_store.py",
+        "backend/tests/test_attachments_router.py",
+        "backend/tests/test_production_attachment.py",
+        "backend/tests/test_file_worker_hardening.py",
+        "backend/tests/test_vps_storage.py"
+      ],
+      "frontend": [
+        "frontend/src/lib/api.upload.test.js"
+      ]
+    },
+    {
+      "id": "queue-worker",
+      "name": "Outbox, delivery, retry, acknowledgement and dead letter",
+      "backend": [
+        "backend/tests/test_task_outbox.py",
+        "backend/tests/test_vps_queue.py",
+        "backend/tests/test_file_worker_hardening.py",
+        "backend/tests/test_durable_runs.py",
+        "backend/tests/test_operation_runs.py",
+        "backend/tests/test_production_unit.py",
+        "backend/tests/dataflow/test_boundary_contracts.py"
+      ],
+      "frontend": [
+        "frontend/src/components/PeakIntake.test.jsx"
+      ],
+      "backend_cases": {
+        "backend/tests/dataflow/test_boundary_contracts.py": [
+          "test_redelivery_of_terminal_job_does_not_execute_business_twice",
+          "test_second_worker_does_not_execute_a_leased_job",
+          "test_delivery_failure_routes_to_retry_or_dead_letter_and_releases_lock"
+        ]
+      }
+    },
+    {
+      "id": "scheduler",
+      "name": "Durable/legacy scheduling, cancellation and background job payload",
+      "backend": [
+        "backend/tests/test_production_schedule.py",
+        "backend/tests/test_pipeline_schedule.py",
+        "backend/tests/test_crm_lead_job.py",
+        "backend/tests/test_pipeline_runs.py",
+        "backend/tests/test_operation_runs.py"
+      ],
+      "frontend": []
+    },
+    {
+      "id": "persistence",
+      "name": "Typed records, transaction rollback, idempotency and concurrent snapshots",
+      "backend": [
+        "backend/tests/test_production_unit.py",
+        "backend/tests/test_shared_read_concurrency.py",
+        "backend/tests/test_runtime_grants.py",
+        "backend/tests/test_audit_runtime_role.py",
+        "backend/tests/test_session_persistence.py",
+        "backend/tests/dataflow/test_boundary_contracts.py"
+      ],
+      "frontend": [],
+      "backend_cases": {
+        "backend/tests/dataflow/test_boundary_contracts.py": [
+          "test_persisted_records_round_trip_types_without_cross_request_aliases",
+          "test_unknown_serialized_type_cannot_load_code",
+          "test_unsupported_record_schema_is_refused_before_decode"
+        ]
+      }
+    },
+    {
+      "id": "publication",
+      "name": "Import epoch, book refresh, session healing and client dataflow",
+      "backend": [
+        "backend/tests/test_import_sync.py",
+        "backend/tests/test_book_source.py",
+        "backend/tests/test_journey_rebuild.py",
+        "backend/tests/test_customer_rollup.py",
+        "backend/tests/test_parsing_and_business_date.py",
+        "backend/tests/dataflow/test_boundary_contracts.py"
+      ],
+      "frontend": [
+        "frontend/src/lib/dataEpoch.test.jsx",
+        "frontend/src/lib/dataEpoch.flow.test.jsx",
+        "frontend/src/components/DataFreshness.test.jsx",
+        "frontend/src/screens/Book.test.jsx"
+      ],
+      "backend_cases": {
+        "backend/tests/dataflow/test_boundary_contracts.py": [
+          "test_epoch_write_failure_cannot_publish_or_mark_stale_data_current"
+        ]
+      }
+    },
+    {
+      "id": "report-export",
+      "name": "Reports, monthly snapshots, totals, filters and CSV/export safety",
+      "backend": [
+        "backend/tests/test_reports_ptps.py",
+        "backend/tests/test_weekly_editions.py",
+        "backend/tests/test_weekly_figures.py",
+        "backend/tests/test_monthly_history.py",
+        "backend/tests/test_today_selected_export.py",
+        "backend/tests/test_round5_kpi.py",
+        "backend/tests/test_collection_kpi_overlap.py",
+        "backend/tests/test_overview.py",
+        "backend/tests/test_sheet_dq_2026_09_26.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Reports.ptp.test.jsx",
+        "frontend/src/screens/monthly.history.test.jsx",
+        "frontend/src/lib/download.test.js"
+      ]
+    },
+    {
+      "id": "audit",
+      "name": "Audit provenance, actor identity, hash chain and refusal coverage",
+      "backend": [
+        "backend/tests/test_audit_chain.py",
+        "backend/tests/test_audit_actor_role.py",
+        "backend/tests/test_audit_coverage.py",
+        "backend/tests/test_audit_store.py",
+        "backend/tests/test_audit_middleware.py",
+        "backend/tests/test_audit_enrichment.py",
+        "backend/tests/test_user_audit_coverage.py"
+      ],
+      "frontend": [
+        "frontend/src/screens/Audit.history.test.jsx"
+      ]
+    },
+    {
+      "id": "auth-transport",
+      "name": "Authentication, revocation, per-tab state, version conflicts and uncertain retries",
+      "backend": [
+        "backend/tests/test_auth_core.py",
+        "backend/tests/test_auth_http.py",
+        "backend/tests/test_auth_users.py",
+        "backend/tests/test_user_accounts.py",
+        "backend/tests/test_tab_sessions.py",
+        "backend/tests/test_auth_schema.py",
+        "backend/tests/test_security_release_regressions.py"
+      ],
+      "frontend": [
+        "frontend/src/lib/api.test.js",
+        "frontend/src/lib/api.security.test.js",
+        "frontend/src/lib/tabSession.test.js",
+        "frontend/src/components/AuthGate.test.jsx",
+        "frontend/src/screens/Login.test.jsx"
+      ]
+    },
+    {
+      "id": "operations",
+      "name": "Runtime parity, migrations, readiness, storage and release safeguards",
+      "backend": [
+        "backend/tests/test_runtime_release_policy.py",
+        "backend/tests/test_release_runtime_safety.py",
+        "backend/tests/test_production_runtime.py",
+        "backend/tests/test_production_scanner.py",
+        "backend/tests/test_migrate_splitter.py",
+        "backend/tests/test_release_image_labels.py",
+        "backend/tests/test_release_browser_gate.py",
+        "backend/tests/test_schema_fresh.py"
+      ],
+      "frontend": []
+    }
+  ]
+}

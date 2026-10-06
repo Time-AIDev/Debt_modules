@@ -106,6 +106,8 @@ def test_backup_export_refuses_local_storage_as_offsite(monkeypatch, destination
 def test_backup_export_refuses_same_server_sftp(monkeypatch, host):
     monkeypatch.setattr(exporter.subprocess, 'run', lambda *args, **kwargs:
                         SimpleNamespace(stdout='[offsite]\ntype=sftp\nhost=%s\n' % host))
+    monkeypatch.setattr(exporter.socket, 'getaddrinfo', lambda *args, **kwargs:
+                        [(exporter.socket.AF_INET, exporter.socket.SOCK_STREAM, 6, '', ('143.198.207.143', 0))])
     with pytest.raises(ValueError):
         exporter.remote_backend('offsite:backups')
 

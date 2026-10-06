@@ -16,6 +16,9 @@ os.environ["DATABASE_URL"] = ""
 os.environ["ENV"] = "dev"
 os.environ["VOLT_SHARED_STATE_ENABLED"] = "false"
 os.environ["AUTH_MODE"] = "off"
+os.environ["AUTH_SESSION_SECRET"] = "unit-only-signing-key-not-a-real-credential-123456"
+os.environ["GOOGLE_CLIENT_ID"] = "unit-only-client"
+os.environ["AUTH_ALLOWLIST"] = "{}"
 
 # The business date follows today in Bangkok when a database is configured
 # (config.resolve_business_date). The suite runs on the demo date whatever the
@@ -27,9 +30,48 @@ os.environ.setdefault("VOLT_BUSINESS_DATE", "2026-10-23")
 for _credential in ("ODOO_URL", "ODOO_DB", "ODOO_LOGIN", "ODOO_API_KEY"):
     os.environ[_credential] = ""
 
+# Unit tests never load a developer's connector secrets from backend/.env.
+from app import integrations as _integrations
+_integrations._loaded = True
+for _credential in ("PEAK_UAT_CONNECT_ID", "PEAK_UAT_PASSWORD", "PEAK_UAT_USER_TOKEN",
+                    "PEAK_UAT_CONNECT_ID_SPV", "PEAK_UAT_PASSWORD_SPV", "PEAK_UAT_USER_TOKEN_SPV",
+                    "PEAK_REPORT_API_BASE_URL", "PEAK_REPORT_API_TOKEN", "PEAK_WEBHOOK_KEY"):
+    os.environ[_credential] = ""
+
 import pytest  # noqa: E402
 
 from app import main  # noqa: E402
+
+
+def pytest_addoption(parser):
+    parser.addoption("--dataflow-unit-only", action="store_true",
+                     help="Deselect tests requiring PostgreSQL fixtures")
+
+
+def pytest_collection_modifyitems(config, items):
+    if not config.getoption("--dataflow-unit-only"):
+        return
+    selected, deselected = [], []
+    for item in items:
+        (deselected if {"pg_conn", "pg_url"} & set(item.fixturenames) else selected).append(item)
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
+@pytest.fixture(autouse=True)
+def no_external_test_network():
+    import socket
+    original = socket.getaddrinfo
+    def local_only(host, *args, **kwargs):
+        if host not in (None, "localhost", "127.0.0.1", "::1", b"localhost", b"127.0.0.1", b"::1"):
+            raise AssertionError("Tests must mock external integrations; outbound DNS is blocked")
+        return original(host, *args, **kwargs)
+    # Own the network patch separately: using the test's monkeypatch fixture here
+    # would reorder teardown and leave fault-injected SQL methods installed while
+    # pg_conn tries to clean up the disposable database.
+    with pytest.MonkeyPatch.context() as network_patch:
+        network_patch.setattr(socket, "getaddrinfo", local_only)
+        yield
 
 
 @pytest.fixture(autouse=True)

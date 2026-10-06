@@ -11,6 +11,7 @@ import { DATA_EPOCH_EVENT, IMPORT_REFRESHED_EVENT } from './events.js'
 
 let cached = null
 let inflight = null
+let generation = 0
 const subscribers = new Set()
 
 function publish(value) {
@@ -23,16 +24,26 @@ export function loadDataState({ force = false, background = false } = {}) {
     if (inflight) return inflight
     if (cached) return Promise.resolve(cached)
   }
-  inflight = api.dataState({ background })
-    .then((value) => { cached = value || null; publish(cached); return cached })
+  const requestGeneration = ++generation
+  const request = api.dataState({ background })
+    .then((value) => {
+      if (requestGeneration === generation) {
+        cached = value || null
+        publish(cached)
+      }
+      return cached
+    })
     .catch(() => cached)
-    .finally(() => { inflight = null })
-  return inflight
+    .finally(() => { if (inflight === request) inflight = null })
+  inflight = request
+  return request
 }
 
 export function forgetDataState() {
+  generation += 1
   cached = null
   inflight = null
+  publish(null)
 }
 
 if (typeof window !== 'undefined') {
