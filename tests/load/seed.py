@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT / 'scripts'))
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--customers', type=int, default=500)
+    parser.add_argument('--role-profile', choices=('owner', 'mixed'), default='owner')
     parser.add_argument('--private-dir', type=Path, required=True)
     args = parser.parse_args()
     # Never accept the live database or credentials. The orchestration creates it.
@@ -66,9 +67,20 @@ def main():
     (args.private_dir / 'dataset.json').write_text(json.dumps(dataset))
     from app import auth, tab_sessions
     auth.set_config(auth.load_config())
-    users = [{'subject': 'vu%d@load.example.test' % i,
-              'token': tab_sessions.issue(auth.new_session('vu%d@load.example.test' % i, 'GOOGLE', 'OWNER', 'owner', False))}
-             for i in range(25)]
+    roles = ('OWNER', 'MANAGER', 'SUPERVISOR', 'OFFICER', 'OPS')
+    officers = {'OWNER': 'owner', 'MANAGER': 'settasak', 'SUPERVISOR': 'settasak', 'OFFICER': 'ploy', 'OPS': 'ops'}
+    users = []
+    for i in range(25):
+        subject = 'vu%d@load.example.test' % i
+        role = roles[i % len(roles)] if args.role_profile == 'mixed' else 'OWNER'
+        officer = officers[role]
+        allowed = auth.current_config().allowlist.get(subject)
+        if not allowed or allowed['role'] != role or allowed['officer'] != officer:
+            raise SystemExit('Synthetic role fixture must match the explicitly configured allowlist')
+        users.append({'subject': subject, 'role': role, 'officer': officer,
+                      'token': tab_sessions.issue(auth.new_session(subject, 'GOOGLE', role, officer, False))})
+    dataset['role_profile'] = args.role_profile
+    (args.private_dir / 'dataset.json').write_text(json.dumps(dataset))
     path = args.private_dir / 'tokens.json'
     path.write_text(json.dumps(users)); path.chmod(0o600)
     print(json.dumps({k:v for k,v in dataset.items() if k != 'customer_uids'}))

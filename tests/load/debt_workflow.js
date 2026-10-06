@@ -13,13 +13,15 @@ const failures = new Rate('business_errors');
 const replays = new Rate('idempotency_replay_errors');
 const conflicts = new Counter('expected_state_conflicts');
 const committed = new Counter('debt_mutations_committed');
+const denied = new Rate('role_denial_errors');
 export const options = {
   scenarios: { debt_workflow: { executor: 'constant-vus', vus: Number(__ENV.VUS || 10),
     duration: __ENV.DURATION || '120s', gracefulStop: '30s' } },
   summaryTrendStats: ['avg', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
   thresholds: { business_read_ms: ['p(95)<2000'], business_write_ms: ['p(95)<2000'],
     complete_action_ms: ['p(95)<2000'], business_errors: ['rate<0.01'],
-    checks: ['rate>0.99'], idempotency_replay_errors: ['rate==0'], debt_mutations_committed: ['count>0'] },
+    checks: ['rate>0.99'], idempotency_replay_errors: ['rate==0'], debt_mutations_committed: ['count>0'],
+    role_denial_errors: ['rate==0'] },
 };
 
 function headers(actor) { return { Authorization: `Bearer ${actor.token}` }; }
@@ -78,6 +80,16 @@ export default function (calendar) {
   const uid = dataset.customer_uids[index];
   const initial = readCase(actor, uid);
   if (!initial) return;
+  if (actor.role === 'OPS') {
+    // OPS retains normal reads but cannot confirm financial claims. Verify the
+    // refusal separately, never count a forbidden operation as committed work.
+    const r = http.post(`${base}/api/v1/cases/by-customer/${uid}/payment-claims`, JSON.stringify({ amount: '100.00' }),
+      { headers: { ...headers(actor), 'Content-Type': 'application/json' }, timeout: '20s', tags: { name: 'ops_financial_denied' } });
+    const refused = check(r, { 'OPS financial action is denied': response => response.status === 403 });
+    denied.add(!refused);
+    sleep(Number(__ENV.THINK_SECONDS || 1));
+    return;
+  }
   act(actor, uid, 'next-action', { next_action: 'CALLBACK', next_action_on: calendar.nextDate }, 'next_action', 200);
   act(actor, uid, 'dc-status', { code: initial.body.case.dc_status === 'CONTACT_BACK' ? 'NO_ACTION' : 'CONTACT_BACK',
     reason: 'Synthetic real Debt follow-up' }, 'dc_status', 200);

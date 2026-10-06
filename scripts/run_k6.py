@@ -188,6 +188,8 @@ def arguments(argv=None):
     parser.add_argument("--duration", default="120s")
     parser.add_argument("--profile", choices=("historical", "paged", "debt-workflow"), default="historical",
                         help="Historical workload, paged Today supplement, or real Debt mutations")
+    parser.add_argument("--concurrent-preview-file", type=Path, help="Private XLSX staged once during load, never applied")
+    parser.add_argument("--preview-profile", choices=("debt_status", "contract_supplement"), default="debt_status")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-container")
@@ -211,6 +213,13 @@ def main(argv=None):
     os.umask(0o077)
     try:
         dataset, users, dataset_path, tokens_path = validate_fixtures(args.dataset_file, args.tokens_file)
+        preview_path = outside_git(args.concurrent_preview_file) if args.concurrent_preview_file else None
+        if preview_path:
+            info = preview_path.stat()
+            protected = any(parent.stat().st_uid == os.geteuid() and not parent.stat().st_mode & 0o077 for parent in preview_path.parents)
+            if (not protected or not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid() or info.st_mode & 0o022
+                    or preview_path.suffix.lower() != ".xlsx" or not 0 < info.st_size <= 100 * 1024 * 1024):
+                raise ValueError("Preview XLSX must be private, regular, owned and below100MiB")
         output = outside_git(args.output_dir)
         output.mkdir(mode=0o700, parents=True, exist_ok=True)
         if output.stat().st_uid != os.geteuid() or output.stat().st_mode & 0o022:
@@ -246,6 +255,10 @@ def main(argv=None):
                 "writes": ["next_action", "dc_status", "uncounted_contact", "ptp_create", "ptp_close"],
                 "complete_action_includes": ["case_read", "mutation", "conflict_refresh_retry", "idempotent_replay"],
                 "customer_partitions": "distinct per actor", "cash_conservation": True}
+        if preview_path:
+            meta["concurrent_preview"] = {"profile": args.preview_profile, "source_bytes": preview_path.stat().st_size,
+                "source_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(), "never_applied": True,
+                "isolated_staging_only": True, "contains_user_supplied_data": True, "started": False}
         atomic_json(paths["meta"], meta)
         samples, stop = [], threading.Event()
         names = list(dict.fromkeys(name for name in (args.api_container, args.db_container) if name))
@@ -260,6 +273,34 @@ def main(argv=None):
 
         sampler = threading.Thread(target=sample_loop, daemon=True)
         sampler.start()
+        preview_thread = None
+        if preview_path:
+            def preview_once():
+                if stop.wait(5):
+                    return
+                observed = meta["concurrent_preview"]
+                observed.update(started=True, started_at_utc=now())
+                began = time.monotonic()
+                owner = next((actor for actor in users if actor.get("role", "OWNER") in ("OWNER", "MANAGER")), users[0])
+                try:
+                    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
+                    request = urllib.request.Request(args.base_url + "/api/v1/imports?profile=" + args.preview_profile,
+                        data=preview_path.read_bytes(), headers={"Authorization": "Bearer " + owner["token"],
+                        "Content-Type": "application/octet-stream", "X-Volt-Filename": preview_path.name,
+                        "Idempotency-Key": args.run_id + "-owned-preview"}, method="POST")
+                    with opener.open(request, timeout=180) as response:
+                        observed["status"] = response.status
+                        body = response.read(100 * 1024 * 1024 + 1)
+                        if len(body) <= 100 * 1024 * 1024:
+                            parsed = json.loads(body)
+                            observed["counts"] = parsed.get("counts") or (parsed.get("preview") or {}).get("counts")
+                        observed["passed"] = 200 <= response.status < 300
+                except Exception as exc:
+                    observed.update(passed=False, cause=type(exc).__name__, status=getattr(exc, "code", None))
+                finally:
+                    observed.update(elapsed_ms=round((time.monotonic() - began) * 1000, 3), completed_at_utc=now())
+            preview_thread = threading.Thread(target=preview_once, daemon=True)
+            preview_thread.start()
         # Avoid inherited HTTP debug/output flags that could reveal bearer headers
         # or silently change scenario behavior. No token values enter environment.
         environment = {key: os.environ[key] for key in ("PATH", "HOME", "LANG", "SSL_CERT_FILE", "SSL_CERT_DIR") if key in os.environ}
@@ -286,6 +327,11 @@ def main(argv=None):
         finally:
             stop.set()
             sampler.join(timeout=12)
+            if preview_thread:
+                preview_thread.join(timeout=190)
+                if not meta["concurrent_preview"].get("passed"):
+                    code = code or 1
+                    meta["notes"].append("Owned preview did not complete successfully; no apply was attempted")
             samples.append(resource_sample(names, started))
             atomic_json(paths["resources"], {"interval_seconds": 2, "samples": samples})
             meta.update(completed_at_utc=now(), elapsed_seconds=round(time.monotonic() - started, 3),
