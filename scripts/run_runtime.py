@@ -27,6 +27,9 @@ PINNED = re.compile(r"(?:sha256:[a-f0-9]{64}|[^\s]+@sha256:[a-f0-9]{64})\Z")
 LOCKED = {"ENV", "DEPLOYMENT_ENV", "VOLT_SHARED_STATE_ENABLED", "AUTH_MODE", "DATABASE_URL",
           "AUTH_SESSION_POLICY", "OBJECT_STORAGE_BACKEND", "OBJECT_STORAGE_ROOT", "TASK_QUEUE_BACKEND",
           "CLAMAV_HOST", "CLAMAV_PORT", "REQUIRE_DEPENDENCY_READINESS", "PEAK_OUTBOUND_ENABLED"}
+BUILD_SOURCE_PATHS = ("backend/app", "frontend", "infra/production/Dockerfile.api",
+                      "infra/production/requirements.lock", "scripts/import_master_sheet.py",
+                      "docs/odoo-comparison/odoo_compare.md", ".dockerignore")
 
 
 def run(command, capture=False):
@@ -156,6 +159,7 @@ def source_fingerprint():
                ROOT / "infra/production/requirements.lock", ROOT / "scripts/import_master_sheet.py",
                ROOT / "infra/vps/Dockerfile.db.no_xml", ROOT / "infra/vps/Dockerfile.scanner",
                ROOT / "scripts/check_elf_dependencies.py",
+               ROOT / ".dockerignore",
                ROOT / "docs/odoo-comparison/odoo_compare.md"]
     ignored = {"node_modules", "dist", "__pycache__", ".vite"}
     files = []
@@ -179,21 +183,34 @@ def images(args, build):
         if not PINNED.fullmatch(args.api_image) or not PINNED.fullmatch(args.web_image):
             raise ValueError("Release images must use an immutable sha256 digest")
         return args.api_image, args.web_image
+    revision = run(["git", "rev-parse", "HEAD"], capture=True).strip()
+    if not re.fullmatch(r"[a-f0-9]{40}(?:[a-f0-9]{24})?", revision):
+        raise ValueError("A committed Git revision is required for canonical runtime images")
     fingerprint = source_fingerprint()
+    dirty = bool(run(["git", "status", "--porcelain", "--untracked-files=normal", "--", *BUILD_SOURCE_PATHS], capture=True).strip())
+    # Local edits remain runnable, but cannot impersonate a committed artifact.
+    # Production requires an exact commit label and therefore refuses this suffix.
+    revision_label = revision + "-dirty-" + fingerprint if dirty else revision
     result = []
     for service, dockerfile, context in (("api", "infra/production/Dockerfile.api", "."),
                                         ("web", "frontend/Dockerfile", "frontend")):
-        tag = "volt-debt-%s:runtime-%s" % (service, fingerprint)
+        tag = "volt-debt-%s:runtime-%s-%s-%s" % (service, revision[:12], fingerprint, "dirty" if dirty else "clean")
         if not build:
             result.append(tag)
             continue
-        found = subprocess.run(["docker", "image", "inspect", tag, "--format", "{{.Id}}"],
+        format_value = '{{.Id}} {{index .Config.Labels "org.opencontainers.image.revision"}}'
+        found = subprocess.run(["docker", "image", "inspect", tag, "--format", format_value],
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
-        if found.returncode:
-            run(["docker", "build", "--file", dockerfile, "--tag", tag, context])
-            found = subprocess.run(["docker", "image", "inspect", tag, "--format", "{{.Id}}"],
+        fields = found.stdout.strip().split()
+        if found.returncode or len(fields) != 2 or fields[1] != revision_label:
+            run(["docker", "build", "--build-arg", "VOLT_GIT_REVISION=" + revision_label,
+                 "--file", dockerfile, "--tag", tag, context])
+            found = subprocess.run(["docker", "image", "inspect", tag, "--format", format_value],
                                    check=True, stdout=subprocess.PIPE, text=True)
-        result.append(found.stdout.strip())
+            fields = found.stdout.strip().split()
+        if len(fields) != 2 or fields[1] != revision_label or not re.fullmatch(r"sha256:[a-f0-9]{64}", fields[0]):
+            raise ValueError("Canonical runtime image lacks the requested revision label")
+        result.append(fields[0])
     return tuple(result)
 
 

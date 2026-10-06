@@ -16,14 +16,15 @@
 # PER-ROLE PASSWORDS (owner, 2026-09-21): one password per role, so only the officer
 # password goes to the officers and only the manager password to the managers. Give a
 # password with AUTH_TEST_PASSWORD_<ROLE> (OFFICER / SUPERVISOR / MANAGER / OWNER);
-# any role left unsaid gets a fresh generated password, printed once on --apply and
-# stored nowhere. AUTH_TEST_PASSWORD is still honoured as a fallback for all four
+# any role left unsaid gets a fresh generated password. --apply writes a private
+# handoff file, never passwords to stdout. AUTH_TEST_PASSWORD remains a fallback
 # (the previous single-password model).
 #
 # After pushing, the service needs a new revision to read the new version:
 #   gcloud run services update volt-debt-uat --region asia-southeast1 \
 #     --update-secrets AUTH_TEST_ACCOUNTS=AUTH_TEST_ACCOUNTS:latest
 set -euo pipefail
+umask 077
 
 PROJECT="${PROJECT:?set PROJECT to the GCP project id}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -110,17 +111,50 @@ if [ "$MODE" = "roster" ]; then
 fi
 
 if [ "$MODE" = "apply" ]; then
+  # Save recoverable handoff BEFORE publishing hashes. Only the file path is
+  # printed; supplied and generated passwords never enter terminal/CI logs.
+  HANDOFF_FILE="$(env AUTH_TEST_GENERATED_ROLES="$GENERATED" "$BACKEND_PYTHON" - <<'PY'
+import json, os, secrets
+from datetime import datetime, timezone
+from pathlib import Path
+
+directory = Path(os.environ.get("VOLT_TEST_HANDOFF_DIR", str(Path.home() / ".volt-test-account-handoff")))
+if not directory.is_absolute() or directory.is_symlink() or directory.resolve() != directory:
+    raise SystemExit("Handoff directory must be absolute and contain no symlinks")
+directory.mkdir(parents=True, mode=0o700, exist_ok=True)
+info = directory.stat()
+if info.st_uid != os.geteuid():
+    raise SystemExit("Handoff directory must belong to the invoking user")
+if info.st_mode & 0o077:
+    raise SystemExit("Existing handoff directory must already be private (mode 0700)")
+created = datetime.now(timezone.utc)
+generated = set(os.environ.get("AUTH_TEST_GENERATED_ROLES", "").split())
+accounts = [{"username": role.lower(), "role": role,
+             "password": os.environ["AUTH_TEST_PW_" + role], "generated": role in generated}
+            for role in ("OFFICER", "SUPERVISOR", "MANAGER", "OWNER")]
+name = "accounts-" + created.strftime("%Y%m%dT%H%M%SZ") + "-" + secrets.token_hex(8) + ".json"
+directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+try:
+    descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=directory_fd)
+    with os.fdopen(descriptor, "w") as output:
+        os.fchmod(output.fileno(), 0o600)
+        json.dump({"created_at_utc": created.isoformat(), "project": os.environ["PROJECT"],
+                   "accounts": accounts, "handoff_prepared": True}, output, indent=2)
+        output.write("\n")
+        output.flush()
+        os.fsync(output.fileno())
+    os.fsync(directory_fd)
+finally:
+    os.close(directory_fd)
+print(directory / name)
+PY
+)"
+  say "Private password handoff prepared: $HANDOFF_FILE"
   say "Pushing AUTH_TEST_ACCOUNTS:latest to $PROJECT"
   printf '%s' "$ACCOUNTS_JSON" | gcloud secrets versions add AUTH_TEST_ACCOUNTS \
     --project "$PROJECT" --data-file=- --quiet
   unset ACCOUNTS_JSON
-  say "Passwords — shown once, stored nowhere (record them in the vault note)"
-  for role in $ROLES; do
-    var="AUTH_TEST_PW_$role"
-    generated="kept from AUTH_TEST_PASSWORD_$role"
-    case " $GENERATED " in *" $role "*) generated="GENERATED — copy it before it scrolls" ;; esac
-    printf '  %-11s %s   (%s)\n' "$role" "${!var}" "$generated"
-  done
+  echo "  Secret version uploaded successfully; handoff remains mode 0600."
   say ""
   echo "  The service needs a NEW revision to read this version:"
   echo "    gcloud run services update volt-debt-uat --region asia-southeast1 \\"

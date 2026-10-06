@@ -457,8 +457,8 @@ class Release:
         self.evidence["candidate_images"] = {"api": self.inspect_image(self.args.api_image),
                                              "web": self.inspect_image(self.args.web_image)}
         for image in self.evidence["candidate_images"].values():
-            if image["revision_label"] and image["revision_label"] != self.args.revision:
-                raise ReleaseError("Candidate image revision label differs from requested Git revision")
+            if image["revision_label"] != self.args.revision:
+                raise ReleaseError("Candidate images require an exact requested Git revision label")
         infrastructure = {}
         for service in ("db", "scanner", "edge"):
             image = getattr(self.args, service + "_image", None)
