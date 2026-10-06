@@ -604,12 +604,27 @@ def remaining_npv(contract, as_of=None) -> Decimal:
     total = Decimal("0.00")
     # Ruling 49: session-scoped read, same reasoning as missed_count above.
     from . import cases as cases_domain
-    for line in cases_domain.contract_field_of(contract, "instalments"):
+    lines = cases_domain.contract_field_of(contract, "instalments")
+    verified = None
+    cycle_numbers = {}
+    if getattr(contract, "financial_evidence_only", False):
+        from . import confirmed_cash, payment_summary, service_deferrals
+        if not getattr(contract, "schedule_confirmation", None):
+            raise confirmed_cash.pending("The contractual schedule has not been independently confirmed")
+        # Use this read's exact line objects; a deferral projection returns fresh
+        # copies and a second accessor must not supply another object's IDs.
+        regular = service_deferrals.ordered_regular(lines)
+        cycles, unresolved, _as_of = payment_summary.peak_cycles_for(contract.uid, for_current())
+        verified = confirmed_cash.outstanding_by_cycle(regular, cycles, as_of=as_of,
+                    allocation_order=settings.allocation_component_order, unresolved=unresolved)
+        cycle_numbers = {id(line): n for n, line in enumerate(regular, 1)}
+    for line in lines:
         if not (line.is_active_regular and line.outstanding_amount > 0):
             continue
         months_out = max(0, (line.due_date.year - as_of.year) * 12
                          + (line.due_date.month - as_of.month))
-        total += line.outstanding_amount / ((Decimal(1) + monthly_rate) ** months_out)
+        outstanding = verified[cycle_numbers[id(line)]] if verified is not None else line.outstanding_amount
+        total += outstanding / ((Decimal(1) + monthly_rate) ** months_out)
     pct = settings.acquisition_pct_of_npv / Decimal("100")
     return (total * pct).quantize(Decimal("0.01"))
 

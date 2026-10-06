@@ -234,6 +234,7 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     # two grids, two PMTs and two notes (N2-03).
     fixture.requires_schedule_confirmation = True
     fixture.requires_installation_confirmation = True
+    fixture.financial_evidence_only = evidence_only
     if evidence_only:
         from . import debt_imports
         installation = debt_imports.installation_for(uid)
@@ -308,6 +309,7 @@ def _cash_contract(uid, customer_uid, row, invoices, as_of):
                                  balance_due, balance_paid=balance_paid, status=status,
                                  acceptance_date=signed)
     if (row or {}).get("financial_evidence_only"):
+        fixture.financial_evidence_only = True
         fixture.status = "ACTIVE"
         from . import debt_imports
         installation = debt_imports.installation_for(uid)
