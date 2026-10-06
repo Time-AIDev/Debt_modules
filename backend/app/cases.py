@@ -1184,8 +1184,37 @@ def sheet_status(customer):
         return None
     tracking = (getattr(customer, "sheet", None) or {}).get("tracking") or {}
     months = [m["month"] for m in tracking.get("months") or []]
-    return {"code": code, "word": word, "unknown": code is None,
-            "month": max(months, key=_month_key) if months else None}
+    reported = reported_payment_status(customer)
+    result = {"code": code, "word": word, "unknown": code is None,
+              "month": max(months, key=_month_key) if months else None}
+    if reported:
+        result.update(code=reported.get("code"), unknown=reported.get("code") is None,
+                      review_required=reported["review_required"],
+                      review_reason="SOURCE_STATUS_REQUIRES_CONFIRMATION" if reported["review_required"] else None,
+                      applied_code=code, source_ref=reported.get("source_ref"))
+    return result
+
+
+def reported_payment_status(customer):
+    """Imported source words stay visible beside the confirmed collection answer."""
+    sheet = getattr(customer, "sheet", None) or {}
+    rows = [row for row in sheet.get("debt_status_observations") or []
+            if (row.get("record") or {}).get("kind") in ("LEASING_BOOK", "CASH_TAB")]
+    if rows:
+        row = rows[-1]
+        code, word, ref = row.get("mapped_status"), row.get("source_status"), row.get("source_ref")
+    else:
+        row = next((sheet.get(key) for key in ("leasing", "cash")
+                    if (sheet.get(key) or {}).get("financial_evidence_only")), None)
+        if not row:
+            return None
+        word = row.get("payment_status") or row.get("status_word")
+        code = {"Current": "CURRENT", "Late": "LATE", "NPL": "NPL", "Closed": "CLOSED",
+                "Terminated": "TERMINATED", "Link sent": "LATE", "Not Due": "CURRENT",
+                "Not issued": "CURRENT"}.get(word)
+        ref = row.get("source_ref")
+    return {"code": code, "word": word, "source_ref": ref,
+            "review_required": code not in ("CURRENT", "LATE"), "source_as_of": None}
 
 
 def _payment_status(customer):
@@ -1251,6 +1280,12 @@ def status_disagreements(customer):
     peak, (sheet, _word) = _peak_says(customer), sheet_says(customer)
     if peak and sheet and peak != sheet:
         out.insert(0, {"month": None, "peak": peak, "sheet": sheet,
+                       "peak_off": not settings.peak_report_drives_status})
+    reported = reported_payment_status(customer)
+    if reported and reported["review_required"]:
+        out.insert(0, {"month": None, "peak": peak, "sheet": reported["code"] or reported["word"],
+                       "reported_status": reported["word"], "source_ref": reported["source_ref"],
+                       "review_required": True, "reason": "SOURCE_STATUS_REQUIRES_CONFIRMATION",
                        "peak_off": not settings.peak_report_drives_status})
     return out
 

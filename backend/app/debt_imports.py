@@ -12,6 +12,7 @@ import uuid
 from contextlib import contextmanager, nullcontext
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
 
 from sqlalchemy import text
 
@@ -62,7 +63,35 @@ def stem(value):
     return str(value or "").strip().split("_", 1)[0].upper()
 
 
-def current_customers():
+def current_customers(conn=None):
+    if db.configured():
+        if conn is None:
+            with transaction() as active:
+                return current_customers(active)
+        from . import landing
+        from .pipelines import field_decisions
+        rows = landing.resolved_customers(conn, shaped_only=True)
+        decisions = field_decisions.load(conn, [str(row.get("customer_no") or "") for row in rows])
+        source_blocks = {row["volt_id"] for row in conn.execute(text(
+            "select distinct volt_id from landing.customer_block where retired_at is null "
+            "and data_source='SHEET' and block in ('leasing','cash')")).mappings()}
+        enriched = {value["customer_uid"]: value for value in supplements(conn).values()}
+        customers = []
+        for row in rows:
+            no = str(row.get("customer_no") or stem(row["volt_id"]))
+            uid = "sheet-" + no
+            chosen = decisions.get(no) or {}
+            product_choice = chosen.get("product") or {}
+            vid_choice = chosen.get("volt_id") or {}
+            product = product_choice.get("peak_value") if product_choice.get("chosen_source") == "PEAK" else row["product"]
+            volt_id = vid_choice.get("peak_value") if vid_choice.get("chosen_source") == "PEAK" else row["volt_id"]
+            supplement = enriched.get(uid)
+            existing = supplement is not None or row["volt_id"] in source_blocks
+            contract_uid = supplement["contract_uid"] if supplement else "K-%s-%s" % (
+                no, "L" if product == "LEASE" else "C")
+            customers.append(SimpleNamespace(uid=uid, customer_no=no, volt_id=volt_id,
+                product=product, contracts=[SimpleNamespace(uid=contract_uid, product=product)] if existing else []))
+        return customers
     from . import journey
     return list(journey.book_customers()) + list(journey.identity_customers())
 
@@ -233,7 +262,9 @@ def build_entries(records, customers):
     return result
 
 
-def _epoch():
+def _epoch(conn=None):
+    if conn is not None:
+        return conn.execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar()
     from . import data_epoch
     return data_epoch.current() if db.configured() else 0
 
@@ -299,34 +330,38 @@ def public_preview(payload):
 def stage(raw, filename, profile, actor, customers=None):
     if profile not in PROFILES:
         raise problem("profile", "ไม่รู้จักรูปแบบนำเข้า")
+    # XLSX inflation/parsing precedes every source-read/publication transaction.
     records = _profile_rows(raw)
-    customers = list(customers if customers is not None else current_customers())
-    entries = build_entries(records, customers)
-    if profile == "contract_supplement":
-        human_npl = _manual_npl_holds()
-        entries = [entry for entry in entries if entry["product"]]
-        for entry in entries:
-            if entry["customer_uid"] in human_npl:
-                entry["eligible"] = False
-                entry["review_reasons"].append("MANUAL_NPL_REVIEW")
-            if entry["quality"]["unknown_money_fields"]:
-                entry["eligible"] = False
-                entry["review_reasons"].append("CONTRACT_FIELDS_UNCONFIRMED")
-            # Existing contracts require review, not replacement of person-owned work.
-            customer = next((c for c in customers or () if c.uid == entry["customer_uid"]), None)
-            if customer and getattr(customer, "contracts", ()):
-                entry["eligible"] = False
-                entry["review_reasons"].append("EXISTING_CONTRACT_REVIEW")
-    payload = {"uid": "dimp-" + uuid.uuid4().hex, "actor": actor, "profile": profile,
-               "fingerprint": hashlib.sha256(raw).hexdigest(), "filename": filename,
-               "state": "STAGED", "created_at": clock.stamp(), "epoch": _epoch(), "entries": entries,
-               "counts": {"rows": len(records), "entries": len(entries),
-                   "matched": sum(bool(entry["customer_uid"]) for entry in entries),
-                   "eligible": sum(entry["eligible"] for entry in entries),
-                   "review": sum(not entry["eligible"] for entry in entries)},
-               "source_as_of": None}
-    payload["version"] = digest(payload)
     with transaction() as conn:
+        epoch = _epoch(conn)
+        customers = list(customers if customers is not None else current_customers(conn))
+        entries = build_entries(records, customers)
+        if profile == "contract_supplement":
+            human_npl = _manual_npl_holds()
+            entries = [entry for entry in entries if entry["product"]]
+            by_uid = {customer.uid: customer for customer in customers}
+            for entry in entries:
+                if entry["customer_uid"] in human_npl:
+                    entry["eligible"] = False
+                    entry["review_reasons"].append("MANUAL_NPL_REVIEW")
+                if entry["quality"]["unknown_money_fields"]:
+                    entry["eligible"] = False
+                    entry["review_reasons"].append("CONTRACT_FIELDS_UNCONFIRMED")
+                customer = by_uid.get(entry["customer_uid"])
+                if customer and getattr(customer, "contracts", ()):
+                    entry["eligible"] = False
+                    entry["review_reasons"].append("EXISTING_CONTRACT_REVIEW")
+        if epoch != _epoch(conn):
+            raise problem("source_changed", "ข้อมูลต้นทางเปลี่ยนระหว่างตรวจ กรุณาตรวจตัวอย่างใหม่", 409)
+        payload = {"uid": "dimp-" + uuid.uuid4().hex, "actor": actor, "profile": profile,
+                   "fingerprint": hashlib.sha256(raw).hexdigest(), "filename": filename,
+                   "state": "STAGED", "created_at": clock.stamp(), "epoch": epoch, "entries": entries,
+                   "counts": {"rows": len(records), "entries": len(entries),
+                       "matched": sum(bool(entry["customer_uid"]) for entry in entries),
+                       "eligible": sum(entry["eligible"] for entry in entries),
+                       "review": sum(not entry["eligible"] for entry in entries)},
+                   "source_as_of": None}
+        payload["version"] = digest(payload)
         _save_preview(conn, payload)
     return public_preview(payload)
 
@@ -395,7 +430,7 @@ def apply(uid, body, actor, role):
             if payload.get("command_signature") != signature:
                 raise problem("idempotency_conflict", "ตัวอย่างนี้ถูกยืนยันด้วยคำสั่งอื่นแล้ว", 409)
             return payload["result"]
-        if payload["version"] != body.get("preview_version") or payload["epoch"] != _epoch():
+        if payload["version"] != body.get("preview_version") or payload["epoch"] != _epoch(conn):
             raise problem("preview_stale", "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจตัวอย่างใหม่", 409)
         selected = body.get("selected_keys")
         if (not isinstance(selected, list) or not selected or any(not isinstance(value, str) for value in selected)

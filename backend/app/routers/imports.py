@@ -234,15 +234,16 @@ def _process_import(raw, filename, officer, role, install, confirm_retire, run_u
         raise
 
 
-async def _run_background(uid, context, work):
+async def _run_background(uid, context, work, preview_only=False):
     def inside():
         result = work()
         # The request already returned, so tester_session's normal end-of-request
         # flush happened before this background mutation. Persist under the copied
         # authenticated principal before the run reports done.
-        from .. import import_sync, session
-        with import_sync.session_lock():
-            session.flush_current()
+        if not preview_only:
+            from .. import import_sync, session
+            with import_sync.session_lock():
+                session.flush_current()
         return result
 
     def target():
@@ -325,7 +326,8 @@ async def start_import(request: Request, install: bool = False, confirm_retire: 
         await run_in_threadpool(enqueue_request, request, uid, raw)
         return JSONResponse(status_code=202, content=runs.get(uid))
     await _run_background(uid, contextvars.copy_context(), lambda: _process_import(
-        raw, filename, x_volt_officer, x_volt_role, install, confirm_retire, uid, profile))
+        raw, filename, x_volt_officer, x_volt_role, install, confirm_retire, uid, profile),
+        preview_only=profile in ("debt_status", "contract_supplement") and not install)
     return JSONResponse(status_code=202, content=runs.get(uid))
 
 

@@ -177,3 +177,40 @@ def test_human_npl_added_after_preview_is_rechecked_before_any_supplement_write(
         apply(preview)
     assert failure.value.code == "debt_import_manual_npl_review"
     assert debt_imports.supplements() == {}
+
+
+@pytest.mark.parametrize("peak,expected", [([], "CURRENT"), ([{"status": "OVERDUE", "amount_awaiting": "1000",
+    "due_on": "2026-01-01"}], "LATE")])
+def test_reported_closed_never_closes_positive_or_unconfirmed_debt(peak, expected):
+    from app import cases
+    contract = SimpleNamespace(uid="K-test", status="ACTIVE", instalments=[])
+    person = customer(product="CASH", contracts=[contract])
+    person.sheet = {"peak": {"invoices": peak}, "debt_status_observations": [{
+        "record": {"kind": "CASH_TAB"}, "source_status": "Closed", "mapped_status": "CLOSED",
+        "source_ref": {"sheet": "Done - Cash", "row": 5}}]}
+    assert cases.payment_status_with_source(person)[0] == expected
+    reported = cases.sheet_status(person)
+    assert reported["code"] == "CLOSED" and reported["review_required"]
+    assert reported["applied_code"] is None
+    assert cases.status_disagreements(person)[0]["reason"] == "SOURCE_STATUS_REQUIRES_CONFIRMATION"
+
+
+def test_expensive_profile_parse_precedes_any_publication_transaction(monkeypatch):
+    from contextlib import contextmanager
+    active = []
+    original = debt_imports.transaction
+    @contextmanager
+    def guarded():
+        with original() as conn:
+            active.append(True)
+            try:
+                yield conn
+            finally:
+                active.pop()
+    parse = debt_imports._profile_rows
+    def outside_transaction(raw):
+        assert not active
+        return parse(raw)
+    monkeypatch.setattr(debt_imports, "transaction", guarded)
+    monkeypatch.setattr(debt_imports, "_profile_rows", outside_transaction)
+    assert staged(lease=[lease()])["state"] == "STAGED"
