@@ -81,6 +81,44 @@ def financial(source):
             "scope": "Parser/component validation only; totals do not establish collected cash or every case mapping"}
 
 
+def staged_financial(source, revision, *, expected_api_image=None):
+    """Publish aggregate staged observations without copying customer-level proof."""
+    source = source or {}
+    observed_revision = identifier(source.get("revision"), REVISION)
+    runtime = source.get("runtime_kind") if source.get("runtime_kind") in ("ASGI", "HTTP_IMAGE") else None
+    api_image = identifier(source.get("api_image"), IMAGE)
+    hashes = {kind: identifier((source.get("source_sha256") or {}).get(kind), SHA)
+              for kind in ("master", "invoice", "receipt")}
+    check_names = ("source_rows_accounted", "net_cash_conserved", "snapshot_cash_not_double_counted",
+                   "duplicate_import_once", "operator_work_preserved", "all_mapped_cases_readable",
+                   "cancellation_evidence_verified", "manual_npl_retained", "installation_unknown_held")
+    checks = {name: (source.get("checks") or {}).get(name) if isinstance(
+        (source.get("checks") or {}).get(name), bool) else None for name in check_names}
+    count_names = ("customer_count", "contracts_applied", "status_observations_applied", "terminations_applied",
+                   "installation_confirmations_applied", "baseline_person_entries", "retained_person_entries",
+                   "unworked_pipeline_seeds_pruned", "lost_operator_entries", "served_financial_cases",
+                   "served_case_errors", "accepted_invoice_rows", "accepted_receipt_rows", "quarantined_receipt_rows",
+                   "quarantined_receipt_documents", "eligible_paid_receipts_conserved", "paid_receipts_held_for_review",
+                   "cancellation_documents_reversed")
+    counts = {name: number((source.get("counts") or {}).get(name), integer=True) for name in count_names}
+    totals = {name: amount((source.get("totals") or {}).get(name)) for name in (
+        "allocated", "customer_credit", "eligible_receipt_net", "review_receipt_net", "cancel_reversed_net")}
+    timings = {name: number((source.get("timings_ms") or {}).get(name)) for name in (
+        "odoo_pull", "supplement_preview", "supplement_apply", "status_preview", "status_apply",
+        "invoice_enqueue", "invoice_apply", "receipt_enqueue", "receipt_apply", "duplicate_replay")}
+    completed = (source.get("format") == "volt-staging-financial-execution-v1"
+                 and source.get("execution_status") == "completed")
+    verified = (completed and observed_revision == revision and runtime == "HTTP_IMAGE" and api_image is not None
+                and api_image == identifier(expected_api_image, IMAGE)
+                and all(hashes.values()) and all(value is True for value in checks.values())
+                and source.get("production_mutated") is False)
+    return {"observed_revision": observed_revision, "matching_report_revision": observed_revision == revision,
+            "execution_completed": completed, "runtime_kind": runtime, "api_image": api_image,
+            "source_sha256": hashes, "checks": checks, "counts": counts, "totals": totals, "timings_ms": timings,
+            "staged_workflow_verified_for_report_revision": bool(verified), "production_application_certified": False,
+            "scope": "Aggregate staged observations; source-only or older runtime is not final-image acceptance"}
+
+
 def qa_aggregate(matrix, scenarios, execution, revision):
     flows = (matrix or {}).get("flows") or []
     valid_flows = [flow for flow in flows if isinstance(flow, dict)]
@@ -98,8 +136,10 @@ def qa_aggregate(matrix, scenarios, execution, revision):
         if candidate is not None and candidate <= 10 and number(execution.get("unexecuted"), integer=True) == 0:
             score = candidate
             if candidate == 10 and not (
-                execution.get("failed") == 0 and execution.get("skipped") == 0
-                and execution.get("open_defects") == 0
+                number(execution.get("failed"), integer=True) == 0
+                and number(execution.get("skipped"), integer=True) == 0
+                and number(execution.get("open_defects"), integer=True) == 0
+                and (number(execution.get("passed"), integer=True) or 0) > 0
                 and number(execution.get("checkpoints_total"), integer=True) is not None
                 and execution["checkpoints_total"] >= 19
                 and execution.get("checkpoints_passed") == execution["checkpoints_total"]
@@ -213,7 +253,9 @@ def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test
         "pending_external_inputs": pending,
         "original_k6_thresholds": THRESHOLDS,
         "k6": k6_runs(evidence / "diagnostic/results", runtime, revision),
-        "financial": financial(read_json(evidence / "component-real-file-validation.json")),
+        "financial": {**financial(read_json(evidence / "component-real-file-validation.json")),
+                      "staging_execution": staged_financial(read_json(evidence / "financial-execution.json"), revision,
+                          expected_api_image=progress.get("candidate_api_image") if progress.get("candidate_revision") == revision else None)},
         "ux": qa_aggregate(read_json(evidence / "qa/feature-matrix.json"),
                            read_json(evidence / "qa/scenarios.template.json"), qa_execution, revision),
         "tests": [test_aggregate(path) for path in test_summaries]}
@@ -279,6 +321,14 @@ def render_docx(data, output):
             row["quarantined_documents"], row["parsed_component_total"], row["freshness"])
            for kind, row in data["financial"]["source_validation"].items()])
     doc.add_paragraph("หลักฐานตรวจไฟล์ไม่รับรองว่าได้ apply ข้อมูลบน production; เคสขัดแย้งต้องผ่านการ review ตาม workflow เดิม")
+    stage = data["financial"]["staging_execution"]
+    doc.add_paragraph("Staging workflow: revision %s · runtime %s · final-image proof %s" %
+                      (stage["observed_revision"], stage["runtime_kind"],
+                       "PASS" if stage["staged_workflow_verified_for_report_revision"] else "incomplete / provisional"))
+    table(doc, ("Staged financial check", "Observed result"), list(stage["checks"].items()))
+    table(doc, ("Aggregate count", "Observed"), [(name, value) for name, value in stage["counts"].items() if value is not None])
+    table(doc, ("Staged amount", "Observed net"), [(name, value) for name, value in stage["totals"].items() if value is not None])
+    doc.add_paragraph("ยอด staging เป็นผลจำลองจากไฟล์จริงบนข้อมูลสำเนา ส่วนรายการที่ส่งตรวจยังไม่ใช้เป็นเงินรับชำระยืนยันบน production")
     doc.add_heading("Debt team UX และความครอบคลุม", 1)
     ux = data["ux"]
     doc.add_paragraph("Inventory: %s flows / %s routes / %s scenarios. Inventory และรายชื่อ tests แยกจากการรันทดสอบจริง" %

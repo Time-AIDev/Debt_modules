@@ -77,10 +77,35 @@ def test_full_score_requires_completed_checkpoints_and_no_open_defects(tmp_path)
              "passed": 91, "failed": 0, "skipped": 0, "unexecuted": 0,
              "open_defects": 0, "checkpoints_total": 33, "checkpoints_passed": 33}
     assert report.build_aggregate(evidence, REV, qa_execution=valid)["ux"]["usability_estimate_score"] == 10
-    for change in ({"failed": 1}, {"skipped": 1}, {"open_defects": 1},
+    for change in ({"failed": 1}, {"failed": False}, {"skipped": 1}, {"open_defects": 1}, {"passed": 0},
                    {"checkpoints_passed": 32}, {"checkpoints_total": 1}):
         actual = report.build_aggregate(evidence, REV, qa_execution={**valid, **change})
         assert actual["ux"]["usability_estimate_score"] is None
+
+
+def test_staged_financial_report_preserves_counts_without_leaking_rows_or_promoting_old_runtime(tmp_path):
+    evidence = fixture(tmp_path)
+    checks = {name: True for name in report.staged_financial({}, REV)["checks"]}
+    source = {"format": "volt-staging-financial-execution-v1", "execution_status": "completed",
+              "revision": OLD, "runtime_kind": "ASGI", "production_mutated": False,
+              "source_sha256": {kind: str(index) * 64 for index, kind in enumerate(("master", "invoice", "receipt"), 1)},
+              "checks": checks, "counts": {"contracts_applied": 972, "served_case_errors": 0,
+                  "customer_uid": "PRIVATE-CUSTOMER-UID"}, "totals": {"allocated": "100.10"},
+              "customer_names": ["PRIVATE-CUSTOMER-NAME"], "raw_rows": [{"token": "PRIVATE-TOKEN"}]}
+    write(evidence / "financial-execution.json", source)
+    data = report.build_aggregate(evidence, REV)
+    stage = data["financial"]["staging_execution"]
+    assert stage["counts"]["contracts_applied"] == 972
+    assert stage["totals"]["allocated"] == "100.10"
+    assert stage["matching_report_revision"] is False
+    assert stage["staged_workflow_verified_for_report_revision"] is False
+    assert "PRIVATE-" not in json.dumps(stage)
+    final = {**source, "revision": REV, "runtime_kind": "HTTP_IMAGE", "api_image": "sha256:" + "a" * 64}
+    assert report.staged_financial(final, REV)["staged_workflow_verified_for_report_revision"] is False
+    assert report.staged_financial(final, REV, expected_api_image=final["api_image"])["staged_workflow_verified_for_report_revision"] is True
+    assert report.staged_financial(final, REV, expected_api_image="sha256:" + "b" * 64)["staged_workflow_verified_for_report_revision"] is False
+    final["checks"]["operator_work_preserved"] = False
+    assert report.staged_financial(final, REV, expected_api_image=final["api_image"])["staged_workflow_verified_for_report_revision"] is False
 
 
 def test_wrong_revision_browser_does_not_promote_user_attestation(tmp_path):
