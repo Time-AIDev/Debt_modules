@@ -50,7 +50,7 @@ def test_production_assignment_cannot_be_bypassed_by_headers_or_body(production,
     from app import cases, production_runtime
     api, headers = production
     monkeypatch.setenv("PROD_GO_LIVE_ENABLED", "true")
-    monkeypatch.setattr(production_runtime, "prepare_book", lambda: None)
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **_kwargs: None)
     monkeypatch.setattr(cases, "for_current", lambda: SimpleNamespace(cases={
         "other-case": {"uid": "case-other", "customer_uid": "other-case", "officer_uid": "nantapol"},
         "own-case": {"uid": "case-own", "customer_uid": "own-case", "officer_uid": "thip"}}))

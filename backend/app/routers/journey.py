@@ -193,8 +193,8 @@ def money_position(customer, total=None):
     for contract in customer.contracts:
         if instalment_evidence.required(contract):
             peak_cycles, _, _ = payment_summary.peak_cycles_for(contract.uid, journey.for_current())
-            review_entries.append(payment_summary.for_contract(contract, settings.business_date, Decimal("0"),
-                                                               peak_cycles=peak_cycles))
+            review_entries.append(payment_summary.review_summary(contract, settings.business_date,
+                                                                 peak_cycles=peak_cycles))
     review_amount = sum((Decimal(entry["review_amount"]) for entry in review_entries), Decimal("0"))
     review_required = any(not entry["schedule_verified"] or entry["review_count"]
                           or entry["unplaced_peak_details"] for entry in review_entries)

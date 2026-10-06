@@ -48,7 +48,7 @@ def test_explicit_business_rollback_refuses_success(shared):
 def test_cached_response_rechecks_account_permission(shared, monkeypatch):
     from app import production_runtime, user_accounts
     allowed = [True]
-    monkeypatch.setattr(production_runtime, "prepare_book", lambda: None)
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **_kwargs: None)
     monkeypatch.setattr(user_accounts, "session_allowed", lambda *_a, **_kw: allowed[0])
     config = auth.AuthConfig(on=True, secret=b"s" * 40)
     auth.set_config(config)
@@ -140,11 +140,11 @@ def test_operation_control_bypasses_busy_domain_lock(monkeypatch):
         reached.append(True)
     monkeypatch.setattr(middleware, "_request", request)
     async def run():
-        await middleware.local_lock.acquire()
+        await middleware.gate.acquire("write")
         try:
             await asyncio.wait_for(middleware({"type": "http", "path": "/v1/operation-runs/uid", "headers": []}, None, None), 0.1)
         finally:
-            middleware.local_lock.release()
+            await middleware.gate.release("write")
     asyncio.run(run())
     assert reached == [True]
 
@@ -215,11 +215,11 @@ def test_missing_credentials_do_not_join_business_lock_or_open_database(monkeypa
     async def send(message):
         messages.append(message)
     async def run():
-        await middleware.local_lock.acquire()
+        await middleware.gate.acquire("write")
         try:
             await asyncio.wait_for(middleware({"type": "http", "method": "GET", "path": "/v1/workbook", "headers": []}, None, send), 0.1)
         finally:
-            middleware.local_lock.release()
+            await middleware.gate.release("write")
     try:
         asyncio.run(run())
         assert messages[0]["status"] == 401

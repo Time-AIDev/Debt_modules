@@ -430,12 +430,18 @@ class Release:
             raise ReleaseError("Recent browser OAuth-origin evidence is required before go-live")
         data = json.loads(path.read_text())
         if (data.get("target") != "https://"+DOMAIN or data.get("status") != 200 or
-            data.get("login_visible") is not True or data.get("google_origin_denied") is not False):
-            raise ReleaseError("Browser OAuth-origin check has not passed; maintenance remains enabled")
+            data.get("google_origin_denied") is not False or data.get("page_error_count") != 0 or
+            data.get("failed_requests") != [] or data.get("browser_login_performed") is not True or
+            data.get("authenticated_google_session") is not True or
+            data.get("authenticated_session_kind") != "GOOGLE" or
+            data.get("revision") != self.args.revision):
+            raise ReleaseError("Successful real Google browser authentication for this revision is required; maintenance remains enabled")
         age=(utc_now()-timestamp(data["timestamp"])).total_seconds()
         if not 0 <= age <= 3600:
             raise ReleaseError("Browser OAuth-origin evidence is stale")
-        self.evidence["checks"]["browser_origin"]={"passed":True,"human_login_performed":data.get("browser_login_performed") is True}
+        self.evidence["checks"]["browser_origin"]={"passed":True,"human_login_performed":True,
+                                                   "authenticated_google_session":True,
+                                                   "revision":self.args.revision}
 
     def preflight(self):
         ensure_directory(CONFIG, private=True)

@@ -1,8 +1,36 @@
 """Production startup and readiness fail closed, without printing configuration."""
 import os
+import time
 from sqlalchemy import text
 from . import db
 from .runtime_policy import SCHEMA_VERSION, shared_state_enabled
+
+_BOOK_INVALID = False
+
+
+class BookRefreshRequired(Exception):
+    """The request must release its reader lease and retry under an exclusive one."""
+
+
+def book_marker():
+    from . import book, import_sync, main
+    return (import_sync._book_epoch["value"], book._VERSION,
+            id(main.CUSTOMERS), id(main.BY_CUSTOMER), id(main.BY_CONTRACT))
+
+
+def invalidate_book():
+    """A rolled-back import may have rebound globals from uncommitted landing rows."""
+    global _BOOK_INVALID
+    _BOOK_INVALID = True
+
+
+def _snapshot_epoch():
+    from .production_unit import CURRENT
+    unit = CURRENT.get()
+    if unit is not None:
+        return int(unit["conn"].execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar_one())
+    with db.connect() as conn:
+        return int(conn.execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar_one())
 
 
 def validate_environment(environ=None):
@@ -58,13 +86,34 @@ def readiness():
         return False
 
 
-def prepare_book():
-    """Check PostgreSQL's import version before trusting a process read cache."""
+def prepare_book(exclusive=True):
+    """Book and request state use the same SQL snapshot; rebinds require exclusivity.
+
+    A worker may commit an import while older reader snapshots are still running.
+    Those readers finish against their old book. The first new-epoch reader
+    releases its lease and retries under the writer lease before rebuilding.
+    """
+    global _BOOK_INVALID
     from . import book, data_epoch, import_sync, main
-    epoch = data_epoch.current()
-    if not book.from_landing() or import_sync._book_epoch["value"] != epoch:
-        book.invalidate()
+    from . import errors
+    epoch = _snapshot_epoch()
+    cached_epoch = import_sync._book_epoch["value"]
+    cached = book._CACHE.get((None, book._VERSION))
+    from_landing = bool(cached and (cached[1].get("source") or {}).get("origin") == "LANDING")
+    if not _BOOK_INVALID and cached_epoch > epoch:
+        # Never replace a newer committed process book with an older SQL snapshot.
+        raise errors.Problem("production_snapshot_stale", 503, "Snapshot changed",
+                             "Retry against a fresh database snapshot.",
+                             "ข้อมูลเปลี่ยนระหว่างอ่าน กรุณาลองใหม่", "DEBT-PRD-503", retryable=True)
+    if _BOOK_INVALID or not from_landing or cached_epoch != epoch:
+        if not exclusive:
+            raise BookRefreshRequired()
+        book.invalidate(reads=True)
         # Force refresh also for an empty database (epoch zero).
         import_sync._book_epoch["value"] = -1
         main.reload_book()
+        _BOOK_INVALID = False
+    # Legacy staging helpers may use the short epoch cache. Seed it from THIS
+    # authoritative snapshot before session healing; production rechecks SQL.
+    data_epoch._cache.update(value=epoch, at=time.monotonic())
     import_sync.ensure_current()

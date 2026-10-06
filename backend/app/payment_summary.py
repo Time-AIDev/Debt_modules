@@ -275,6 +275,42 @@ def for_contract(contract, business_date, overdue_amount, month_cells=None, peak
     }
 
 
+def review_summary(contract, business_date, peak_cycles=None):
+    """The four review fields used on list rows, without materializing cycle DTOs.
+
+    Full case detail still uses ``for_contract``. Review money follows its exact
+    per-cycle quantization and evidence rules: unconfirmed past schedule amounts,
+    receipt-only liability shortfalls, future suppression and rejected documents.
+    No invoice/cycle is omitted from the case's full financial overview.
+    """
+    from . import instalment_evidence as evidence
+    strict = evidence.required(contract)
+    if not strict:
+        return {"review_amount": "0.00", "review_count": 0,
+                "schedule_verified": True, "unplaced_peak_details": []}
+    total, count = ZERO, 0
+    rejected = getattr(peak_cycles, "rejected", {})
+    bd = str(business_date)
+    for n, line in enumerate(_active_lines(contract), 1):
+        hit = (peak_cycles or {}).get(n)
+        liability_unverified = bool(hit and hit.get("liability_verified", True) is False)
+        due = hit["due_date"] if hit else str(line.due_date)
+        amount = ZERO
+        if line.due_date <= business_date:
+            if not hit:
+                amount = line.total_amount.quantize(CENT)
+            elif liability_unverified:
+                amount = max(ZERO, line.total_amount - Decimal(hit["paid"])).quantize(CENT)
+        if n in rejected:
+            amount = ZERO
+        total += amount
+        if amount > ZERO or (liability_unverified and due <= bd):
+            count += 1
+    return {"review_amount": _money(total), "review_count": count,
+            "schedule_verified": bool(getattr(contract, "schedule_confirmation", None)),
+            "unplaced_peak_details": getattr(peak_cycles, "unplaced_details", [])}
+
+
 def build(entries, business_date):
     """The case's overview from its per-contract entries, with the totals summed here."""
     totals = {

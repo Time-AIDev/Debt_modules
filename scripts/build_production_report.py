@@ -101,6 +101,58 @@ def status(value):
     return clean(value)
 
 
+def enabled_status(value):
+    """An intentionally closed maintenance gate is disabled, not a failed check."""
+    if value is True:
+        return "เปิด / enabled (true)"
+    if value is False:
+        return "ปิด / disabled (false)"
+    return status(value)
+
+
+def release_metadata(release):
+    """Read aggregate reports and native release CLI evidence without guessing.
+
+    Candidate image IDs are kept separate from observed running image IDs. The
+    CLI's remote_push_verified=False means it did not verify Git, not that a push
+    failed; only the aggregate Git evidence can establish that outcome.
+    """
+    deployment = get(release, "deployment", default=release)
+    deployment = deployment if isinstance(deployment, dict) else {}
+    git = get(release, "git", default={})
+    git = git if isinstance(git, dict) else {}
+    containers = get(deployment, "actual_containers", default=get(release, "actual_containers", default=[]))
+    candidates = get(deployment, "candidate_images", default=get(release, "candidate_images", default={}))
+
+    def image(service, *, candidate=False):
+        collection = candidates if candidate else containers
+        if isinstance(collection, dict):
+            item = collection.get(service)
+        elif isinstance(collection, list):
+            item = next((row for row in collection if isinstance(row, dict)
+                         and get(row, "name", "Name", "service") == service), None)
+        else:
+            item = None
+        fields = ("id", "image_id", "ImageID", "image_digest", "image", "Image") if candidate else ("image_id", "ImageID", "image_digest", "image", "Image")
+        return get(item, *fields) if isinstance(item, dict) else item
+
+    return {
+        "deployment": deployment, "git": git, "containers": containers,
+        "ip": get(release, "ip", "deployment.ip", "checks.candidate.dns.expected_address",
+                  "checks.preflight.dns.expected_address"),
+        "go_live": get(deployment, "go_live", "go_live_enabled",
+                       default=get(release, "go_live", "go_live_enabled")),
+        "commit": get(release, "source_commit", "deployment.source_commit", "source.commit",
+                      default=get(git, "commit", "sha")),
+        "started": get(release, "started_at_utc", "deployment.started_at_utc"),
+        "completed": get(release, "completed_at_utc", "deployment.completed_at_utc"),
+        "api_image": get(deployment, "api_image_digest", "api_digest", "images.api", default=image("api")),
+        "web_image": get(deployment, "web_image_digest", "web_digest", "images.web", default=image("web")),
+        "candidate_api_image": image("api", candidate=True),
+        "candidate_web_image": image("web", candidate=True),
+    }
+
+
 def load_json(path, issues):
     if not path.exists():
         issues.append(f"ไม่พบ {path.name}")
@@ -275,6 +327,7 @@ def security_section(doc, evidence_dir, issues):
              row["unfixed_high"], clean(dict(row["vendor_status"]))) for row in current
         ])
         paragraph(doc, "ตัวเลขเป็นรายการ package/CVE จาก artifact ที่บันทึก ไม่ใช่จำนวน CVE ที่ไม่ซ้ำ การมี fixable H/C เท่ากับศูนย์ไม่ได้หมายถึงไม่มีช่องโหว่; vendor-unfixed/affected/fix_deferred ยังคงเป็นความเสี่ยงและต้องติดตาม ไม่มีการสรุปว่า zero vulnerabilities")
+        paragraph(doc, "เมื่อมี full audit จะเลือกก่อน artifact ที่อาจกรอง severity หรือ ignore-unfixed ผลศูนย์ในรายงานที่กรองไว้ไม่ยืนยันว่าไม่มี vendor-unfixed หรือ severity อื่น หาก scan flags ไม่ได้บันทึก ขอบเขตคือข้อมูลในไฟล์หลักฐานเท่านั้น")
         table(doc, ["Historical report", "Critical / High", "Fixable H/C", "Saved scan date"], [
             (row["file"], f"{row['critical']} / {row['high']}", row["fixable_hc"], row["created"])
             for row in history if row not in current
@@ -584,11 +637,11 @@ def build(evidence_dir, output):
     doc.add_paragraph("รายงานการปรับปรุงและความพร้อมระบบ Collection", "Subtitle")
     paragraph(doc, f"Generated: {timestamp} • เป้าหมาย: collection.volt.co.th / 143.198.207.143")
     paragraph(doc, "รายงานนี้สรุปเฉพาะผลที่มีไฟล์หลักฐานในชุดตรวจ ผลที่ขาดหรือยังทำไม่ได้แสดงเป็น pending และสามารถสร้างเอกสารใหม่หลังงานเสร็จได้")
-    deployment = get(release, "deployment", default=release)
-    git = get(release, "git", default={})
+    release_data = release_metadata(release)
+    deployment, git = release_data["deployment"], release_data["git"]
     table(doc, ["Milestone", "Evidence status"], [
         ("Production deployment", status(get(deployment, "status", default=get(release, "deployment_status")))),
-        ("Go-live enabled", status(get(deployment, "go_live", "go_live_enabled", default=get(release, "go_live")))),
+        ("Go-live enabled", enabled_status(release_data["go_live"])),
         ("Git remote push", status(get(git, "pushed", "push_status", "status"))),
         ("k6 summaries present", str(len(runs)) if runs else PENDING),
         ("Remediation register", f"{len(plan)} findings" if plan else PENDING),
@@ -618,8 +671,8 @@ def build(evidence_dir, output):
         paragraph(doc, "ยังไม่มี remediation-plan.json จึงไม่ยืนยันว่าปิดข้อค้นพบใดแล้ว")
 
     doc.add_heading("2. ผลตรวจโค้ด / Automated validation", level=1)
-    table(doc, ["Evidence", "Status", "Passed", "Failed / errors", "Skipped", "Seconds"], [
-        (row["name"], status(row.get("status")), row.get("passed", PENDING),
+    table(doc, ["Evidence", "Status", "Total", "Passed", "Failed / errors", "Skipped", "Seconds"], [
+        (row["name"], status(row.get("status")), row.get("tests", PENDING), row.get("passed", PENDING),
          row.get("failures", 0) + row.get("errors", 0) if "tests" in row else PENDING,
          row.get("skipped", PENDING), display(row.get("duration_seconds"))) for row in test_results
     ])
@@ -690,14 +743,19 @@ def build(evidence_dir, output):
         defaults = load_json(defaults_file, issues)
         table(doc, ["Runtime policy", "Recorded value"], [(k, clean(v)) for k, v in defaults.items() if not SENSITIVE.search(k)])
     table(doc, ["Release field", "Recorded evidence"], [
-        ("Domain / IP", clean(get(release, "domain", "deployment.domain")) + " / " + clean(get(release, "ip", "deployment.ip"))),
-        ("Timestamp", clean(get(release, "timestamp", "deployment.timestamp"))),
-        ("Source commit / branch", clean(get(release, "source_commit", "deployment.source_commit", default=get(git, "commit", "sha"))) + " / " + clean(get(git, "branch"))),
+        ("Domain / IP", clean(get(release, "domain", "deployment.domain")) + " / " + clean(release_data["ip"])),
+        ("Timestamp", clean(get(release, "timestamp", "deployment.timestamp", default=release_data["completed"] or release_data["started"]))),
+        ("Started at UTC", clean(release_data["started"])),
+        ("Completed at UTC", clean(release_data["completed"])),
+        ("Source commit / branch", clean(release_data["commit"]) + " / " + clean(get(git, "branch"))),
         ("Remote", sanitized_remote(get(git, "remote", "remote_url"))),
         ("Push result", status(get(git, "pushed", "push_status", "status"))),
-        ("API digest", clean(get(deployment, "api_image_digest", "api_digest", "images.api"))),
-        ("Web digest", clean(get(deployment, "web_image_digest", "web_digest", "images.web"))),
-        ("Deployment / go-live", status(get(deployment, "status")) + " / " + status(get(deployment, "go_live", "go_live_enabled"))),
+        ("CLI independently verified remote push", status(get(release, "source.remote_push_verified"))),
+        ("API digest", clean(release_data["api_image"])),
+        ("Web digest", clean(release_data["web_image"])),
+        ("Candidate API digest", clean(release_data["candidate_api_image"])),
+        ("Candidate Web digest", clean(release_data["candidate_web_image"])),
+        ("Deployment / go-live", status(get(deployment, "status")) + " / " + enabled_status(release_data["go_live"])),
     ])
     checks = get(deployment, "checks", default=get(release, "checks", default=[]))
     if isinstance(checks, dict):
@@ -706,7 +764,7 @@ def build(evidence_dir, output):
         table(doc, ["Deployment check", "Status", "Evidence"], [
             (get(row, "name", "check"), status(get(row, "status", "passed")), get(row, "evidence", "notes", "detail")) for row in checks if isinstance(row, dict)
         ])
-    containers = get(deployment, "actual_containers", default=get(release, "actual_containers", default=[]))
+    containers = release_data["containers"]
     if isinstance(containers, dict):
         containers = [dict(value, name=key) if isinstance(value, dict) else {"name": key, "image": value} for key, value in containers.items()]
     if isinstance(containers, list) and containers:
@@ -726,7 +784,7 @@ def build(evidence_dir, output):
         "DOCX ผ่านการตรวจ ZIP/XML/table content; ยังไม่มี rendered-page inspection หากไม่มีโปรแกรม Word/LibreOffice ในเครื่องสร้างรายงาน",
     ]
     for source in (validation, release, deployment):
-        for key in ("limitations", "risks", "pending", "blocked"):
+        for key in ("limitations", "risks", "remaining_risks", "pending", "blocked"):
             extra = get(source, key, default=[])
             limitations.extend(extra if isinstance(extra, list) else [extra] if extra else [])
     for item in dict.fromkeys(clean(item) for item in limitations):

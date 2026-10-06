@@ -1,8 +1,9 @@
-"""Small-team production unit of work: durable shared state, commit before send.
+"""Durable units: private reader graphs, exclusive writes, commit before send.
 
-The advisory lock deliberately serializes domain adapters while they still mutate
-objects in place. It is cross-process; it must pass the 10-user load gate before
-release. It is not advertised as a solution for an unbounded workload.
+Bounded readers use their own repeatable snapshots and copied persisted state.
+Mutations and book publication are locally exclusive; the PostgreSQL advisory
+lock also serializes business mutations across worker/API processes. Capacity
+still requires the unchanged measured load gate.
 """
 import hashlib
 import uuid
@@ -10,6 +11,9 @@ import time
 import json
 import os
 import re
+import copy
+import threading
+from collections import OrderedDict
 from contextvars import ContextVar
 
 import anyio
@@ -20,6 +24,86 @@ from . import business_records, db, errors, session
 
 CURRENT = ContextVar("production_unit", default=None)
 LOCK_KEY = 0x564F4C54505244
+
+
+class _StoreTemplates:
+    """Bounded committed graphs, copied into each request; never response/auth data."""
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.entries = OrderedDict()
+        self.bytes = 0
+
+    def get(self, key):
+        with self.lock:
+            if key not in self.entries:
+                return None, False
+            graph, _size = self.entries[key]
+            self.entries.move_to_end(key)
+        return copy.deepcopy(graph), True
+
+    def put(self, key, graph, size):
+        max_bytes = int(os.environ.get("PROD_STORE_CACHE_BYTES", "8388608"))
+        max_entries = int(os.environ.get("PROD_STORE_CACHE_ENTRIES", "16"))
+        if not 0 < size <= max_bytes or max_entries < 1:
+            return
+        # The route receives the loader's graph. Cache a different graph so a
+        # subsequent in-place route edit cannot alter the committed template.
+        template = copy.deepcopy(graph)
+        with self.lock:
+            # Keep one version per physical store; each in-flight request already
+            # owns its copy and can finish against its older SQL snapshot safely.
+            for old_key in list(self.entries):
+                if old_key[:2] == key[:2] and old_key != key:
+                    self.bytes -= self.entries.pop(old_key)[1]
+            previous = self.entries.pop(key, None)
+            if previous:
+                self.bytes -= previous[1]
+            self.entries[key] = (template, size)
+            self.bytes += size
+            while len(self.entries) > max_entries or self.bytes > max_bytes:
+                _old, (_graph, old_size) = self.entries.popitem(last=False)
+                self.bytes -= old_size
+
+
+_STORE_TEMPLATES = _StoreTemplates()
+
+
+class _ReadWriteGate:
+    """Bounded readers; writers and book refreshes exclude every business reader."""
+    def __init__(self, readers=4):
+        self.condition = anyio.Condition()
+        self.limit = readers
+        self.readers = 0
+        self.writer = False
+        self.waiting_writers = 0
+
+    async def acquire(self, mode):
+        async with self.condition:
+            if mode == "read":
+                while self.writer or self.waiting_writers or self.readers >= self.limit:
+                    await self.condition.wait()
+                self.readers += 1
+            else:
+                self.waiting_writers += 1
+                try:
+                    while self.writer or self.readers:
+                        await self.condition.wait()
+                    self.writer = True
+                finally:
+                    self.waiting_writers -= 1
+                    self.condition.notify_all()
+
+    async def release(self, mode):
+        with anyio.CancelScope(shield=True):
+            async with self.condition:
+                if mode == "read":
+                    self.readers -= 1
+                else:
+                    self.writer = False
+                self.condition.notify_all()
+
+
+_REFRESH_EXCLUSIVE = object()
 
 
 def enabled():
@@ -65,7 +149,29 @@ def store_key(key):
 
 def restore(key, factory):
     unit = CURRENT.get()
-    value, found = business_records.load(unit["conn"], store_key(key))
+    conn, saved_key = unit["conn"], store_key(key)
+    cached_key = None
+    size = 0
+    if os.environ.get("PROD_STORE_CACHE_ENABLED", "true") == "true" and getattr(conn, "engine", None):
+        # The same repeatable-read snapshot supplies signature and payload. Row
+        # versions plus count cover updates, insertions and deletions; the engine
+        # identity prevents reuse across databases. Personal keys include subject.
+        signature = conn.execute(text(
+            "select count(*),coalesce(sum(version),0),max(updated_at),"
+            "coalesce(sum(octet_length(payload::text)),0) from app.business_record where store_key=:k"),
+            {"k": saved_key}).one()
+        if signature[0]:
+            cached_key = (conn.engine, saved_key, *signature[:3])
+            size = int(signature[3])
+            value, found = _STORE_TEMPLATES.get(cached_key)
+            if found:
+                unit["store_cache_hits"] = unit.get("store_cache_hits", 0) + 1
+                return value
+    value, found = business_records.load(conn, saved_key)
+    if found and cached_key:
+        _STORE_TEMPLATES.put(cached_key, value, size)
+        unit["store_cache_misses"] = unit.get("store_cache_misses", 0) + 1
+    # Factories depend on the current book/config/customer and are never cached.
     return value if found else factory()
 
 
@@ -87,7 +193,8 @@ class ProductionUnitMiddleware:
     def __init__(self, app, enabled=enabled):
         self.app = app
         self.enabled = enabled
-        self.local_lock = anyio.Lock()
+        readers = max(1, min(16, int(os.environ.get("PROD_READ_CONCURRENCY", "4"))))
+        self.gate = _ReadWriteGate(readers)
 
     async def __call__(self, scope, receive, send):
         if scope["type"] != "http" or not self.enabled() or not scope.get("path", "").startswith("/v1/"):
@@ -113,22 +220,33 @@ class ProductionUnitMiddleware:
         # Their independent request slot is cleaned without touching another slot.
         if scope.get("path", "").startswith("/v1/operation-runs/"):
             return await self._request(scope, receive, send, queued, 0)
-        try:
-            with anyio.fail_after(float(os.environ.get("PROD_LOCK_WAIT_SECONDS", "15"))):
-                await self.local_lock.acquire()
-        except TimeoutError:
-            print(json.dumps({"event": "production_lock_timeout", "wait_ms": round((time.monotonic() - queued) * 1000, 2)}), flush=True)
-            return await self.problem("production_busy", 503).response()(scope, receive, send)
-        try:
-            return await self._request(scope, receive, send, queued, time.monotonic() - queued)
-        finally:
-            self.local_lock.release()
+        mode = "read" if scope.get("method") in ("GET", "HEAD") else "write"
+        while True:
+            try:
+                with anyio.fail_after(float(os.environ.get("PROD_LOCK_WAIT_SECONDS", "15"))):
+                    await self.gate.acquire(mode)
+            except TimeoutError:
+                print(json.dumps({"event": "production_lock_timeout", "wait_ms": round((time.monotonic() - queued) * 1000, 2)}), flush=True)
+                return await self.problem("production_busy", 503).response()(scope, receive, send)
+            try:
+                result = await self._request(scope, receive, send, queued, time.monotonic() - queued,
+                                             book_exclusive=mode == "write")
+            finally:
+                await self.gate.release(mode)
+            if result is not _REFRESH_EXCLUSIVE:
+                return result
+            # A GET's first snapshot was discarded before touching domain state.
+            # Retry once under the exclusive lease with a fresh SQL snapshot;
+            # never upgrade while retaining a reader (which would deadlock).
+            mode = "write"
 
-    async def _request(self, scope, receive, send, started=None, lock_wait=0):
+    async def _request(self, scope, receive, send, started=None, lock_wait=0, book_exclusive=True):
         started = started if started is not None else time.monotonic()
         conn = transaction = None
         unit_token = session_token = touched_token = None
         read_token = memo_token = None
+        book_marker = None
+        refresh_retry = False
         slot = "prd-request:" + uuid.uuid4().hex
         messages = []
         async def capture(message): messages.append(message)
@@ -166,7 +284,9 @@ class ProductionUnitMiddleware:
                 raise self.problem("production_maintenance", 503)
             if auth_session and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
                 from .production_runtime import prepare_book
-                await run_in_threadpool(prepare_book)
+                await run_in_threadpool(prepare_book, exclusive=book_exclusive)
+                from .production_runtime import book_marker as marker
+                book_marker = marker()
             from .durable_runs import WORKER_RUN
             if WORKER_RUN.get():
                 from .pipelines import runs
@@ -285,6 +405,12 @@ class ProductionUnitMiddleware:
                             "b": b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")})
                 await run_in_threadpool(transaction.commit)
         except Exception as exc:
+            from .production_runtime import BookRefreshRequired
+            if isinstance(exc, BookRefreshRequired):
+                refresh_retry = True
+                if transaction and transaction.is_active:
+                    await run_in_threadpool(transaction.rollback)
+                return _REFRESH_EXCLUSIVE
             print(json.dumps({"event": "production_refused", "cause": type(exc).__name__,
                               "sqlstate": getattr(getattr(exc, "orig", None), "sqlstate", None)}), flush=True)
             if transaction and transaction.is_active:
@@ -294,6 +420,11 @@ class ProductionUnitMiddleware:
             messages = []
             await problem.response()(scope, receive, capture)
         finally:
+            if book_marker is not None and not refresh_retry:
+                from .production_runtime import book_marker as marker, invalidate_book
+                failed = next((m["status"] for m in messages if m["type"] == "http.response.start"), 503) >= 400
+                if failed and marker() != book_marker:
+                    invalidate_book()
             if read_token is not None:
                 from . import request_context
                 request_context.end_read(read_token)
@@ -313,10 +444,12 @@ class ProductionUnitMiddleware:
             try:
                 from . import auth
                 route = auth._route_template(scope)
-                print(json.dumps({"event": "production_request", "route": route or "unmatched",
+                print(json.dumps({"event": "production_book_refresh_retry" if refresh_retry else "production_request", "route": route or "unmatched",
                                   "method": scope.get("method"),
                                   "status": next((m["status"] for m in messages if m["type"] == "http.response.start"), 503),
                                   "lock_wait_ms": round(lock_wait * 1000, 2),
+                                  "store_cache_hits": unit.get("store_cache_hits", 0) if unit_token is not None else 0,
+                                  "store_cache_misses": unit.get("store_cache_misses", 0) if unit_token is not None else 0,
                                   "latency_ms": round((time.monotonic() - started) * 1000, 2)}), flush=True)
             except Exception:
                 # Observation must not change the result of an already committed act.
