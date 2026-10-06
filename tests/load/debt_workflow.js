@@ -83,7 +83,7 @@ export default function (calendar) {
   if (actor.role === 'OPS') {
     // OPS retains normal reads but cannot confirm financial claims. Verify the
     // refusal separately, never count a forbidden operation as committed work.
-    const r = http.post(`${base}/api/v1/cases/by-customer/${uid}/payment-claims`, JSON.stringify({ amount: '100.00' }),
+    const r = http.post(`${base}/api/v1/customers/${uid}/payment-claims`, JSON.stringify({ amount: '100.00' }),
       { headers: { ...headers(actor), 'Content-Type': 'application/json' }, timeout: '20s', tags: { name: 'ops_financial_denied' } });
     const refused = check(r, { 'OPS financial action is denied': response => response.status === 403 });
     denied.add(!refused);
