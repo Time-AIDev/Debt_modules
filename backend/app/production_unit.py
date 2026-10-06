@@ -69,6 +69,10 @@ def append_audit_tail(conn, unit, refusal=None, fresh=False):
 
 
 def independent_control(scope):
+    from . import operational_transactions
+    from .durable_runs import WORKER_RUN
+    if operational_transactions.is_peak_enqueue(scope, worker_run=bool(WORKER_RUN.get())):
+        return True
     if scope.get("path", "").startswith("/v1/operation-runs/"):
         return True
     if scope.get("path") not in ("/v1/imports", "/v1/imports:start") or scope.get("method") != "POST":
@@ -382,7 +386,7 @@ class ProductionUnitMiddleware:
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
             control_request = independent_control(scope)
-            if not mutation_request or control_request:
+            if not mutation_request:
                 await run_in_threadpool(conn.execute, text("set transaction isolation level repeatable read"))
             capacity = bool(await run_in_threadpool(lambda: conn.execute(text(
                 "select to_regclass('app.projection_current') is not null and "
@@ -473,6 +477,12 @@ class ProductionUnitMiddleware:
             if idem:
                 if not re.fullmatch(rb"[A-Za-z0-9_.:-]{1,200}", idem):
                     raise self.problem("invalid_idempotency_key", 422)
+                # Keys are shared by one authenticated subject across routes and
+                # customers. Read committed + this short transaction lock keeps
+                # simultaneous first submissions from both missing the replay.
+                await run_in_threadpool(conn.execute,
+                    text('select pg_advisory_xact_lock(hashtextextended(:stream,0))'),
+                    {'stream': 'volt-request-result:' + json.dumps([unit['subject'], idem.decode('ascii')], separators=(',', ':'))})
                 chunks = []
                 while True:
                     message = await receive()
@@ -514,6 +524,10 @@ class ProductionUnitMiddleware:
                                                                 auth._header(scope, b"x-volt-officer"), roster)
                         await run_in_threadpool(production_permissions.enforce, scope,
                                                 dict(auth_session, role=role, officer=officer), body)
+                        from . import operational_transactions
+                        if operational_transactions.is_peak_enqueue(scope, worker_run=bool(WORKER_RUN.get())):
+                            await run_in_threadpool(production_permissions.role_required,
+                                                    dict(auth_session, role=role, officer=officer), {'MANAGER', 'OWNER'})
                     if cached.fingerprint != fingerprint:
                         raise self.problem("idempotency_conflict", 409)
                     await run_in_threadpool(transaction.rollback)
