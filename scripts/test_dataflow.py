@@ -9,6 +9,7 @@ are mocked; production configuration and databases are never used.
 import argparse
 from datetime import datetime, timezone
 import json
+import hashlib
 import os
 from pathlib import Path
 import secrets
@@ -20,6 +21,35 @@ import uuid
 import xml.etree.ElementTree as ET
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def source_manifest(root=ROOT):
+    """Bind a run to committed source and detect edits made while tests execute."""
+    def git(*args):
+        return subprocess.run(['git', *args], cwd=root, capture_output=True, check=True, timeout=10).stdout
+    try:
+        revision = git('rev-parse', 'HEAD').decode('ascii').strip()
+        paths = sorted(git('ls-files', '-z').split(b'\0'))
+        digest, count = hashlib.sha256(), 0
+        for raw in paths:
+            if not raw:
+                continue
+            path = root / os.fsdecode(raw)
+            content = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes() if path.is_file() else b'MISSING'
+            digest.update(raw + b'\0' + hashlib.sha256(content).digest())
+            count += 1
+        code_roots = (b'backend/', b'frontend/', b'scripts/', b'tests/', b'infra/')
+        untracked = git('ls-files', '--others', '--exclude-standard', '-z').split(b'\0')
+        return {'revision': revision, 'tracked_sha256': digest.hexdigest(), 'tracked_files': count,
+                'tracked_clean': not git('status', '--porcelain', '--untracked-files=no').strip(),
+                'untracked_code_files': sum(bool(path) and path.startswith(code_roots) for path in untracked)}
+    except (OSError, subprocess.SubprocessError, UnicodeError):
+        return {'revision': None, 'tracked_sha256': None, 'tracked_clean': False, 'untracked_code_files': None}
+
+
+def source_unchanged(before, after):
+    return bool(before.get('revision') and before == after and before.get('tracked_clean') is True
+                and before.get('untracked_code_files') == 0)
 
 
 def run(cmd, *, cwd=ROOT, env=None, log=None):
@@ -69,7 +99,7 @@ def main():
                VOLT_SHARED_STATE_ENABLED='false', VOLT_TEST_PG_URL='')
     for key in list(env):
         if key.startswith(('ODOO_', 'PEAK_')): env[key] = ''
-    results = {'started_at_utc': datetime.now(timezone.utc).isoformat(),
+    results = {'started_at_utc': datetime.now(timezone.utc).isoformat(), 'source_before': source_manifest(),
                'scope': 'all' if args.all else 'unit-and-memory-api-contracts',
                'backend_selection': args.backend_tests,
                'components': [s for s in ('backend','frontend') if not (s == 'backend' and args.frontend_only or s == 'frontend' and args.backend_only)],
@@ -129,6 +159,8 @@ def main():
             subprocess.run(['docker','image','rm',web_image],capture_output=True)
         (output/'postgres.env').unlink(missing_ok=True)
         results['finished_at_utc'] = datetime.now(timezone.utc).isoformat()
+        results['source_after'] = source_manifest()
+        results['source_unchanged'] = source_unchanged(results['source_before'], results['source_after'])
         results['flows'] = []
         for flow in plan['flows']:
             selected = []
@@ -150,7 +182,7 @@ def main():
         (output/'summary.json').write_text(json.dumps(results,indent=2)+'\n')
     print(json.dumps({k:v for k,v in results.items() if k not in ('backend','frontend','flows')},indent=2))
     print('JUnit, logs, coverage and flow results: '+str(output))
-    return 1 if not results['commands'] or any(results['commands'].values()) else 0
+    return 1 if not results['commands'] or any(results['commands'].values()) or not results['source_unchanged'] else 0
 
 
 if __name__ == '__main__': raise SystemExit(main())
