@@ -10,6 +10,23 @@ sys.path.insert(0, str(ROOT / 'backend'))
 sys.path.insert(0, str(ROOT / 'scripts'))
 
 
+def actor_specifications(profile, customers):
+    roles = ('OWNER', 'MANAGER', 'SUPERVISOR', 'OFFICER', 'OPS')
+    officers = {'OWNER': 'owner', 'MANAGER': 'settasak', 'SUPERVISOR': 'load_supervisor',
+                'OFFICER': 'nantapol', 'OPS': 'ops'}
+    if profile == 'mixed':
+        assigned = {getattr(customer, 'officer', None) for customer in customers}
+        if len(assigned) != 1 or not next(iter(assigned), None):
+            raise ValueError('Mixed load actors require one explicit served officer assignment')
+        officers['OFFICER'] = next(iter(assigned))
+    elif profile != 'owner':
+        raise ValueError('Unknown synthetic role profile')
+    return [{'subject': 'vu%d@load.example.test' % i,
+             'role': roles[i % len(roles)] if profile == 'mixed' else 'OWNER',
+             'officer': officers[roles[i % len(roles)] if profile == 'mixed' else 'OWNER']}
+            for i in range(25)]
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--customers', type=int, default=500)
@@ -63,27 +80,32 @@ def main():
     dataset = {'synthetic': True, 'customers': len(built),
                'contracts': len(built), 'instalments_per_contract': 96, 'synthetic_won_proof': True,
                'customer_uids': [c.uid for c in built]}
-    if not dataset['customer_uids']: raise SystemExit('Synthetic data did not create a served book')
+    if not dataset['customer_uids']:
+        raise SystemExit('Synthetic data did not create a served book')
     (args.private_dir / 'dataset.json').write_text(json.dumps(dataset))
     from app import auth, tab_sessions
     auth.set_config(auth.load_config())
-    roles = ('OWNER', 'MANAGER', 'SUPERVISOR', 'OFFICER', 'OPS')
-    officers = {'OWNER': 'owner', 'MANAGER': 'settasak', 'SUPERVISOR': 'settasak', 'OFFICER': 'ploy', 'OPS': 'ops'}
+    specifications = actor_specifications(args.role_profile, built)
+    from app import officers
+    roster = officers._build_registry(tuple(customer.officer for customer in built),
+        tuple((entry['officer'], entry['role']) for entry in auth.current_config().allowlist.values()))
+    auth.check_officers(auth.current_config(), roster)
     users = []
-    for i in range(25):
-        subject = 'vu%d@load.example.test' % i
-        role = roles[i % len(roles)] if args.role_profile == 'mixed' else 'OWNER'
-        officer = officers[role]
+    for specification in specifications:
+        subject, role, officer = (specification[key] for key in ('subject', 'role', 'officer'))
         allowed = auth.current_config().allowlist.get(subject)
         if not allowed or allowed['role'] != role or allowed['officer'] != officer:
             raise SystemExit('Synthetic role fixture must match the explicitly configured allowlist')
         users.append({'subject': subject, 'role': role, 'officer': officer,
                       'token': tab_sessions.issue(auth.new_session(subject, 'GOOGLE', role, officer, False))})
     dataset['role_profile'] = args.role_profile
+    dataset['mixed_assignment_verified'] = args.role_profile == 'mixed'
     (args.private_dir / 'dataset.json').write_text(json.dumps(dataset))
     path = args.private_dir / 'tokens.json'
-    path.write_text(json.dumps(users)); path.chmod(0o600)
+    path.write_text(json.dumps(users))
+    path.chmod(0o600)
     print(json.dumps({k:v for k,v in dataset.items() if k != 'customer_uids'}))
 
 
-if __name__ == '__main__': main()
+if __name__ == '__main__':
+    main()
