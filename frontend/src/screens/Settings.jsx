@@ -19,6 +19,7 @@ import { useToast } from '../components/Toast.jsx'
 export function Settings() {
   const { t, lang } = usePrefs()
   const identity = useIdentity()
+  const canManage = atLeast('MANAGER')
   const toast = useToast()
   useCrumb('group.system', 'nav.settings')
 
@@ -37,16 +38,18 @@ export function Settings() {
 
   const load = useCallback(() => {
     setProblem(null)
+    setUsers(null)
+    setUsersProblem(null)
     Promise.all([api.config(), api.bandSets(), api.dictionaries()])
       .then(([c, b, d]) => { setConfig(c); setBandSets(b); setDictionaries(d) })
       .catch((e) => setProblem(e?.problem || { code: 'request_failed' }))
     api.authConfig().then((cfg) => {
       setAuthOff(cfg?.mode !== 'on')
-      if (cfg?.mode === 'on') {
+      if (cfg?.mode === 'on' && canManage) {
         api.authUsers().then(setUsers).catch((e) => setUsersProblem(e?.problem || { code: 'request_failed' }))
       }
     }).catch(() => setUsersProblem({ code: 'request_failed' }))
-  }, [])
+  }, [canManage])
   useEffect(() => { load() }, [load])
 
   async function save(key) {
@@ -113,7 +116,6 @@ export function Settings() {
 
   const rows = Object.entries(config.config || {})
   const grantable = users?.grantable_roles || []
-  const canManage = atLeast('MANAGER')
   const officerCol = canManage ? t('settings.colOfficerRead') : t('settings.colOfficerYou')
   const managerCol = canManage ? t('settings.colManagerYou') : t('settings.colManagerOther')
 
@@ -213,6 +215,7 @@ export function Settings() {
         </header>
         <div className="card__body">
           {authOff ? <p className="empty" style={{ padding: 0 }}>{t('settings.authOff')}</p> : null}
+          {!authOff && !canManage ? <p className="scr-meta">{t('settings.managerOnly')}</p> : null}
           {usersProblem ? <Problem problem={usersProblem} /> : null}
           {users ? (
             <ul className="rows">

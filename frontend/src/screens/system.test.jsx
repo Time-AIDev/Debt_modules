@@ -229,6 +229,18 @@ describe('system lenses render served shapes without crashing', () => {
     expect(api.answerReview).not.toHaveBeenCalled()
   })
 
+  it.each(['OFFICER', 'SUPERVISOR'])('shows Settings without requesting privileged users for %s', async (role) => {
+    setRole(role)
+    api.authConfig.mockResolvedValue({ mode: 'on' })
+    api.authUsers.mockRejectedValue({ problem: { code: 'forbidden' } })
+    renderScreen(<Settings />)
+
+    expect(await screen.findByText('ต้องเป็นผู้จัดการขึ้นไป')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'เพิ่มผู้ใช้' })).toBeDisabled()
+    expect(api.authUsers).not.toHaveBeenCalled()
+    expect(screen.queryByText('forbidden')).not.toBeInTheDocument()
+  })
+
   it('invite carries the registry officer and never offers one above the actor', async () => {
     api.authConfig.mockResolvedValue({ mode: 'on' })
     api.authUsers.mockResolvedValue({
