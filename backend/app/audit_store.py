@@ -64,62 +64,57 @@ def persisted():
     return db.configured()
 
 
-def append(fields):
-    # Both paths must agree on what an unknown key means. audit.Chain.append
-    # (the in-memory path, reached below) already raises ValueError on a key
-    # outside audit.FIELDS — Ruling 6: an unhashed field is an unprotected
-    # field, and that must be a loud error, not a silent drop. The DB path
-    # used to build its entry with {k: fields.get(k) for k in audit.FIELDS},
-    # which drops a misspelled key instead of raising it — the same mistake
-    # was a crash with no database and silent data loss with one. Checking
-    # here, before either branch, makes both paths refuse the same way.
+def _validate_fields(fields):
     unknown = set(fields) - set(audit.FIELDS)
     if unknown:
         raise ValueError("audit entry has fields the chain does not hash: %s"
                          % ", ".join(sorted(unknown)))
+
+
+def append_entries(conn, entries):
+    """Append at a short READ COMMITTED transaction tail under one chain lock.
+
+    MAX(seq)+1 intentionally remains transactional and contiguous. The chain head
+    is read after acquiring its lock, with a fresh statement snapshot. Repeating
+    a stale REPEATABLE READ snapshot here can create duplicate primary keys.
+    """
+    if not entries:
+        return []
+    for fields in entries:
+        _validate_fields(fields)
+    conn.execute(text("SET LOCAL lock_timeout = '2s'"))
+    conn.execute(text("select pg_advisory_xact_lock(:k)"), {"k": AUDIT_LOCK_KEY})
+    head = conn.execute(text("SELECT seq,hash FROM audit.entry ORDER BY seq DESC LIMIT 1")).mappings().first()
+    previous, sequence = (head["hash"], head["seq"]) if head else (audit.GENESIS, 0)
+    saved = []
+    for fields in entries:
+        sequence += 1
+        entry = {key: fields.get(key) for key in audit.FIELDS}
+        entry.update(seq=sequence, at=_now_iso(), business_date=str(settings.business_date),
+                     detail=fields.get("detail") or {}, prev_hash=previous)
+        entry["hash"] = audit.hash_entry(entry, previous)
+        params = dict(entry)
+        params["detail"] = json.dumps(entry["detail"], ensure_ascii=False, default=str)
+        conn.execute(_INSERT, params)
+        previous = entry["hash"]
+        saved.append(entry)
+    return saved
+
+
+def append(fields):
+    _validate_fields(fields)
     if not persisted():
         return MEMORY.append(**fields)
-    with db.connect() as conn:
-        with conn.begin():
-            # The chain head and the insert share one transaction, so two concurrent
-            # requests cannot both chain from the same predecessor. FOR UPDATE would
-            # need a row to lock; the chain lock is coarse and correct — every writer
-            # to audit.entry comes through here — and this is a prototype writing a
-            # few hundred rows a day, not a queue.
-            #
-            # SET LOCAL lock_timeout, scoped to this transaction only, and an advisory
-            # wait honours it like any other: without it, a writer queued behind
-            # another holding the chain lock waits with no cap of its own, tying up
-            # one of the pool's 5+2 connections (db.py) for as long as the lock is
-            # held. Enough of those queued at once and a LATER writer cannot even
-            # check out a connection, and fails only after
-            # riding out SQLAlchemy's own 30s pool timeout — a much slower, much
-            # less legible failure than the one below.
-            conn.execute(text("SET LOCAL lock_timeout = '2s'"))
-            conn.execute(text("select pg_advisory_xact_lock(:k)"), {"k": AUDIT_LOCK_KEY})
-            head = conn.execute(text(
-                "SELECT hash FROM audit.entry ORDER BY seq DESC LIMIT 1")).scalar()
-            prev_hash = head or audit.GENESIS
-            next_seq = conn.execute(text(
-                "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM audit.entry"
-            )).mappings().one()["next"]
-
-            entry = {k: fields.get(k) for k in audit.FIELDS}
-            entry["seq"] = next_seq
-            entry["at"] = _now_iso()
-            entry["business_date"] = str(settings.business_date)
-            entry["detail"] = fields.get("detail") or {}
-            entry["prev_hash"] = prev_hash
-            entry["hash"] = audit.hash_entry(entry, prev_hash)
-
-            params = dict(entry)
-            # default=str, matching audit.canonical(): without it, a `detail` value
-            # that canonical() happily stringifies for hashing (a Decimal, a date)
-            # raises TypeError right here instead — the entry hashes fine and then
-            # the DB write crashes on the exact value the hash already covers.
-            params["detail"] = json.dumps(entry["detail"], ensure_ascii=False, default=str)
-            conn.execute(_INSERT, params)
-            return entry
+    from copy import deepcopy
+    from .production_unit import CURRENT
+    unit = CURRENT.get()
+    if unit is not None:
+        # The owning business unit publishes its audit at commit, never while
+        # expensive calculations still hold the shared chain lock.
+        unit.setdefault("pending_audits", []).append(deepcopy(fields))
+        return dict(fields)
+    with db.connect() as conn, conn.begin():
+        return append_entries(conn, [fields])[0]
 
 
 def read(filters, limit, before_seq):

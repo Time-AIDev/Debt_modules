@@ -45,6 +45,34 @@ def case_token(customer_uid, version):
     return 'case:%s:%d' % (customer_uid, version)
 
 
+def queued_audits(unit, refusal=None):
+    from copy import deepcopy
+    entries = deepcopy(unit.get("pending_audits", []))
+    if unit.get("refusal_audit"):
+        entries.append(deepcopy(unit["refusal_audit"]))
+    if refusal:
+        for entry in entries:
+            entry.update(outcome="REFUSED", status=refusal.status, error_code=refusal.code)
+    return entries
+
+
+def append_audit_tail(conn, unit, refusal=None, fresh=False):
+    from . import audit_store
+    entries = queued_audits(unit, refusal)
+    if not entries:
+        return
+    if fresh:
+        if conn.in_transaction():
+            conn.rollback()
+        conn.execution_options(isolation_level="READ COMMITTED")
+        with conn.begin():
+            audit_store.append_entries(conn, entries)
+        unit.pop("pending_audits", None)
+        unit.pop("refusal_audit", None)
+    else:
+        audit_store.append_entries(conn, entries)
+
+
 def independent_control(scope):
     if scope.get("path", "").startswith("/v1/operation-runs/"):
         return True
@@ -370,6 +398,17 @@ class ProductionUnitMiddleware:
                 auth_session.get("sub") not in os.environ.get("PROD_CANDIDATE_TEST_SUBJECTS", "").split(",")):
                 raise self.problem("production_maintenance", 503)
             if capacity and scoped_customer and (auth_session or not auth.current_config().on):
+                if auth_session and not scope.get("volt_worker"):
+                    from . import officers, production_permissions, user_accounts
+                    allowed = await run_in_threadpool(user_accounts.session_allowed,
+                                                      auth_session, auth.current_config().allowlist, fresh=True)
+                    if not allowed:
+                        raise auth.session_withdrawn()
+                    roster = officers.registry() if auth_session.get("can_switch") else []
+                    role, officer = auth.effective_identity(auth_session, auth._header(scope, b"x-volt-role"),
+                                                            auth._header(scope, b"x-volt-officer"), roster)
+                    await run_in_threadpool(production_permissions.enforce, scope,
+                                            dict(auth_session, role=role, officer=officer), b"{}")
                 from . import read_projection
                 await run_in_threadpool(read_projection.current, conn)
                 # A cold full generation seeded complete stores. Restore a fresh
@@ -474,11 +513,12 @@ class ProductionUnitMiddleware:
                     failed_run = view
             if start["status"] >= 400 or failed_run:
                 await run_in_threadpool(transaction.rollback)
-                if unit.get("refusal_audit"):
-                    from . import audit_store
-                    borrowed = CURRENT.set(None)
-                    try: await run_in_threadpool(audit_store.append, unit["refusal_audit"])
-                    finally: CURRENT.reset(borrowed)
+                refused = None
+                if failed_run:
+                    failed_problem = failed_run.get("problem") or {}
+                    refused = self.problem(failed_problem.get("code", "job_execution_unavailable"),
+                                           failed_problem.get("status", 503))
+                await run_in_threadpool(append_audit_tail, conn, unit, refused, fresh=True)
                 if failed_run:
                     borrowed = CURRENT.set(None)
                     try:
@@ -525,7 +565,17 @@ class ProductionUnitMiddleware:
                             "h": json.dumps([(k.decode("latin-1"), v.decode("latin-1")) for k, v in start["headers"]
                                              if k.lower() != b"set-cookie"]),
                             "b": b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")})
-                await run_in_threadpool(transaction.commit)
+                if mutation and not control_request:
+                    await run_in_threadpool(append_audit_tail, conn, unit)
+                    await run_in_threadpool(transaction.commit)
+                    unit.pop("pending_audits", None)
+                    unit.pop("refusal_audit", None)
+                else:
+                    # End the repeatable read before reading the global chain.
+                    # Reuse its connection rather than exhausting the pool with
+                    # a second checkout while the original is still leased.
+                    await run_in_threadpool(transaction.commit)
+                    await run_in_threadpool(append_audit_tail, conn, unit, fresh=True)
         except Exception as exc:
             from .production_runtime import BookRefreshRequired
             if isinstance(exc, BookRefreshRequired):
@@ -539,6 +589,12 @@ class ProductionUnitMiddleware:
                 await run_in_threadpool(transaction.rollback)
             # Error details can contain PII; the response and log contain no driver text.
             problem = exc if isinstance(exc, errors.Problem) else self.problem("production_write_unavailable", 503)
+            if conn is not None and unit_token is not None:
+                try:
+                    await run_in_threadpool(append_audit_tail, conn, unit, problem, fresh=True)
+                except Exception as audit_error:
+                    from . import audit_store
+                    audit_store.record_gap(type(audit_error).__name__)
             messages = []
             await problem.response()(scope, receive, capture)
         finally:
