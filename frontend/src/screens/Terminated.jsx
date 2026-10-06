@@ -62,6 +62,7 @@ export function Terminated() {
     <p className="scr-meta">ค้นหาเหตุผลและเปิดข้อมูลเคสที่เก็บไว้ย้อนหลัง • ไม่รวมการชำระครบตามปกติ</p>
     <section className="card">
       <form className="history-filters" onSubmit={(e) => e.preventDefault()}>
+        <label>รหัสลูกค้า<input className="field" value={params.get('customer_uid') || ''} onChange={(e) => update('customer_uid', e.target.value)} /></label>
         <label>ค้นหาลูกค้า / VOLT ID / เลขลูกค้า<input className="field" type="search" aria-label="ค้นหาลูกค้า / เลขลูกค้า" value={params.get('q') || ''} onChange={(e) => update('q', e.target.value)} /></label>
         <label>ตั้งแต่วันที่ยุติ<input className="field" type="date" value={params.get('since') || ''} onChange={(e) => update('since', e.target.value)} /></label>
         <label>ถึงวันที่ยุติ<input className="field" type="date" value={params.get('until') || ''} onChange={(e) => update('until', e.target.value)} /></label>
