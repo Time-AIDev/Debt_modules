@@ -48,16 +48,19 @@ def case_token(customer_uid, version):
 def independent_control(scope):
     if scope.get("path", "").startswith("/v1/operation-runs/"):
         return True
-    if scope.get("path") != "/v1/imports" or scope.get("method") != "POST":
+    if scope.get("path") not in ("/v1/imports", "/v1/imports:start") or scope.get("method") != "POST":
         return False
     try:
-        profiles = parse_qs(scope.get("query_string", b"").decode("ascii"), keep_blank_values=True).get("profile", [])
+        query = parse_qs(scope.get("query_string", b"").decode("ascii"), keep_blank_values=True)
+        profiles = query.get("profile", [])
+        install = query.get("install", [])
     except (ValueError, UnicodeDecodeError):
         return False
     # These audited finance profiles parse/stage an owned preview only. Duplicate
     # selectors, legacy full-sheet imports, and every apply route retain the
     # exclusive business-publication barrier.
-    return len(profiles) == 1 and profiles[0] in ("debt_status", "contract_supplement")
+    return (len(profiles) == 1 and profiles[0] in ("debt_status", "contract_supplement")
+            and (not install or len(install) == 1 and install[0].lower() in ("false", "0", "off", "no")))
 
 
 class _StoreTemplates:

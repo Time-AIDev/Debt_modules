@@ -200,9 +200,12 @@ def test_compatible_fallback_uses_legacy_calculations_without_old_codec(monkeypa
     (b"profile=debt_status", True), (b"profile=contract_supplement", True),
     (b"profile=debt_status&profile=full", False), (b"profile=full", False),
     (b"profile=", False), (b"profile=unknown", False), (b"", False),
+    (b"profile=debt_status&install=false", True), (b"profile=debt_status&install=true", False),
+    (b"profile=debt_status&install=false&install=true", False),
 ])
 def test_only_owned_preview_profiles_bypass_publication_lock(query, expected):
     assert independent_control({"path": "/v1/imports", "method": "POST", "query_string": query}) is expected
+    assert independent_control({"path": "/v1/imports:start", "method": "POST", "query_string": query}) is expected
     assert independent_control({"path": "/v1/imports/example:apply", "method": "POST", "query_string": query}) is False
 
 
