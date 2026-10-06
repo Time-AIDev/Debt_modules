@@ -234,6 +234,10 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     # two grids, two PMTs and two notes (N2-03).
     fixture.requires_schedule_confirmation = True
     fixture.requires_installation_confirmation = True
+    if evidence_only:
+        from . import debt_imports
+        installation = debt_imports.installation_for(uid)
+        fixture.acceptance_date = _date(installation["completed_on"]) if installation else None
     fixture.schedule_confirmation = confirmation
     fixture.calendar_months = row.get("calendar_months") or []
     fixture.pmt = pmt
@@ -305,7 +309,9 @@ def _cash_contract(uid, customer_uid, row, invoices, as_of):
                                  acceptance_date=signed)
     if (row or {}).get("financial_evidence_only"):
         fixture.status = "ACTIVE"
-        fixture.acceptance_date = None
+        from . import debt_imports
+        installation = debt_imports.installation_for(uid)
+        fixture.acceptance_date = _date(installation["completed_on"]) if installation else None
         fixture.requires_installation_confirmation = True
         fixture.requires_schedule_confirmation = True
         from . import schedule_confirmation

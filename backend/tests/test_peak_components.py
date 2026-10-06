@@ -58,6 +58,12 @@ def test_missing_invoice_balance_is_unknown_not_zero_paid():
     assert parsed["rejected"][0]["code"] == "invoice_balance_missing"
 
 
+def test_paid_receipt_word_without_cached_cash_and_date_is_quarantined():
+    parsed = peak_receipt.parse(receipt_report([receipt_line(**{"จำนวนเงิน": "", "วันที่": ""})]))
+    assert parsed["receipts"] == []
+    assert parsed["meta"]["rejected"][0]["code"] == "payment_component_incomplete"
+
+
 def test_component_money_equivalent_formatting_is_not_a_false_conflict():
     parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line(**{"จำนวนเงิน": "8399.00"})]))
     assert len(parsed["receipts"]) == 1

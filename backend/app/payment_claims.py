@@ -988,7 +988,8 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
         "nullif(r.meta->>'report_as_of',''),'') desc, r.id desc"
     )).mappings().all()
 
-    uid_by_no = {str(customer.customer_no): customer.uid for customer in journey.book_customers()
+    uid_by_no = {str(customer.customer_no): customer.uid for customer in
+                 list(journey.book_customers()) + list(journey.identity_customers())
                  if getattr(customer, "customer_no", None)}
     invoices = []
     adjusted = {r["customer_uid"] for r in service_deferrals.records()}

@@ -128,6 +128,10 @@ def _receipt(lines):
         "source_rows": [line["sheet_row"] for line in lines],
         "payments": components,
     }
+    if rec["status"] == "PAID" and (not components or any(
+            not value["on"] or value["amount"] is None or invoice_report.Decimal(value["amount"]) <= 0
+            for value in components)):
+        raise invoice_report.Unreadable("payment_component_incomplete", "paid_amount_or_date")
     if components:
         if any(value["amount"] is None for value in components):
             raise invoice_report.Unreadable("payment_component_incomplete", "paid_amount")

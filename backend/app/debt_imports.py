@@ -200,10 +200,18 @@ def build_entries(records, customers):
                 for field in ("pmt_inc_vat", "term_original", "first_payment_date"):
                     if record.get(field) in (None, ""):
                         unknown.append(field)
+                for field in ("pmt_inc_vat", "term_original"):
+                    if field not in unknown and (_amount(record[field]) is None or _amount(record[field]) <= 0):
+                        unknown.append(field)
             elif kind == "CASH_TAB":
                 for field in ("price", "dp_inc_vat", "first_payment_date"):
                     if record.get(field) in (None, ""):
                         unknown.append(field)
+                price, deposit = _amount(record.get("price")), _amount(record.get("dp_inc_vat"))
+                if price is not None and price <= 0 and "price" not in unknown:
+                    unknown.append("price")
+                if deposit is not None and (deposit < 0 or price is not None and deposit > price):
+                    unknown.append("dp_inc_vat")
             result.append({"key": digest(record), "customer_uid": customer.uid if customer else None,
                            "customer_no": str(customer.customer_no) if customer else None,
                            "contract_uid": contract_uid, "product": product,
@@ -378,7 +386,8 @@ def apply(uid, body, actor, role):
         if payload["version"] != body.get("preview_version") or payload["epoch"] != _epoch():
             raise problem("preview_stale", "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจตัวอย่างใหม่", 409)
         selected = body.get("selected_keys")
-        if not isinstance(selected, list) or not selected or len(selected) != len(set(selected)):
+        if (not isinstance(selected, list) or not selected or any(not isinstance(value, str) for value in selected)
+                or len(selected) != len(set(selected))):
             raise problem("selection", "เลือกแถวที่จะยืนยันโดยไม่ซ้ำกัน")
         entries = {entry["key"]: entry for entry in payload["entries"]}
         if any(value not in entries or not entries[value]["eligible"] for value in selected):
@@ -438,6 +447,8 @@ def _confirm_terminations(payload, body, actor, role, selected):
     entries = {entry["key"]: entry for entry in payload["entries"]}
     terminated = 0
     for confirmation in confirmations:
+        if not isinstance(confirmation, dict):
+            raise problem("termination", "ข้อมูลยืนยันยุติสัญญาไม่ถูกต้อง")
         entry = entries.get(confirmation.get("key"))
         if not entry or entry["key"] not in selected or not (entry.get("termination_candidate") or {}).get("completed_evidence"):
             raise problem("termination_incomplete", "ยังไม่มีหลักฐานการยึดคืนที่เสร็จสมบูรณ์", 409)
@@ -482,7 +493,8 @@ def confirm_installation(contract, body, actor, role):
     completed = _date(body.get("completed_on"))
     if not completed or completed > str(settings.business_date):
         raise problem("installation_date", "ต้องระบุวันติดตั้งสำเร็จจริง ไม่เกินวันทำการปัจจุบัน")
-    if not all(isinstance(body.get(key), str) and body[key].strip() for key in
+    if not all(isinstance(body.get(key), str) and body[key].strip() and len(body[key]) <= (200 if key == "idempotency_key" else 1000)
+               and "\x00" not in body[key] for key in
                ("document_ref", "reason", "idempotency_key")):
         raise problem("installation_evidence", "ต้องมีเอกสารอ้างอิง เหตุผล และรหัสคำสั่ง")
     payload = {"contract_uid": contract.uid, "customer_uid": contract.customer_uid,
