@@ -9,6 +9,8 @@ import json
 import os
 import secrets
 from decimal import Decimal
+from functools import lru_cache
+from pathlib import Path
 
 from sqlalchemy import text
 
@@ -19,6 +21,20 @@ FIELDS = ("entity", "product", "payment_status", "dc_status", "officer", "tier",
 SORTS = {"aggregate_overdue": "overdue", "aggregate_outstanding": "outstanding", "oldest_dpd": "dpd",
          "display_name": "display_name", "next_action_on": "next_action_on", "tier": "tier_rank",
          "oldest_unpaid": "oldest_unpaid_on"}
+
+
+@lru_cache(maxsize=1)
+def code_fingerprint():
+    """Immutable application code identifies the interpretation of stored JSON.
+
+    Cached once per process/image; source imports and settings retain their own
+    epoch/date invalidation. No customer or environment values enter this hash.
+    """
+    root = Path(__file__).resolve().parent
+    digest = hashlib.sha256()
+    for path in sorted(root.rglob("*.py")):
+        digest.update(path.relative_to(root).as_posix().encode() + b"\0" + hashlib.sha256(path.read_bytes()).digest())
+    return digest.hexdigest()
 
 
 def _unit():
@@ -144,7 +160,8 @@ def _rebuild(conn):
             "insert into app.projection_generation(source_epoch,business_date,metadata) "
             "values(:epoch,:day,cast(:metadata as jsonb)) returning id"), {
                 "epoch": source_epoch, "day": settings.business_date,
-                "metadata": json.dumps({"today": {"run": today["run"], "meta": today["meta"]},
+                "metadata": json.dumps({"code_fingerprint": code_fingerprint(),
+                                        "today": {"run": today["run"], "meta": today["meta"]},
                                         "workbook": {"meta": workbook["meta"]}}, ensure_ascii=False)}).scalar_one()
         today_rows = {row["customer"]["uid"]: row for row in today["items"]}
         rows = [_row(row["customer"]["uid"], row, today_rows.get(row["customer"]["uid"]), cs,
@@ -180,7 +197,9 @@ def current(conn):
         "from app.projection_current c left join app.projection_generation g on g.id=c.generation where singleton"
     )).mappings().one()
     epoch = int(conn.execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar_one())
-    if row["dirty"] or row["generation"] is None or row["source_epoch"] != epoch or row["business_date"] != settings.business_date:
+    if (row["dirty"] or row["generation"] is None or row["source_epoch"] != epoch
+            or row["business_date"] != settings.business_date
+            or (row["metadata"] or {}).get("code_fingerprint") != code_fingerprint()):
         if _unit().get("book_exclusive") is False:
             from .production_runtime import BookRefreshRequired
             raise BookRefreshRequired()

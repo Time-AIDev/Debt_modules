@@ -124,7 +124,8 @@ def projected(uid, *, overdue=0, entity="SPV", worked=False, tier="ROUTINE", pen
 
 
 def generation(conn, rows):
-    metadata = {"workbook": {"meta": {"total": len(rows)}},
+    metadata = {"code_fingerprint": read_projection.code_fingerprint(),
+                "workbook": {"meta": {"total": len(rows)}},
                 "today": {"run": {}, "meta": {"officer_totals": {"synthetic": len(rows)}, "reminder_batch": []}}}
     import json
     key = conn.execute(text("insert into app.projection_generation(source_epoch,business_date,metadata) "
@@ -291,6 +292,37 @@ def test_shadow_build_failure_never_publishes_partial_generation(capacity, monke
         savepoint.rollback()
     assert capacity.execute(text("select generation from app.projection_current where singleton")).scalar_one() == current
     assert capacity.execute(text("select count(*) from app.customer_projection where generation=:g"), {"g": current}).scalar_one() == 1
+
+
+def test_code_upgrade_refreshes_same_epoch_day_projection_before_reading(capacity, monkeypatch):
+    from app import production_runtime
+    from app.production_runtime import BookRefreshRequired
+    old = generation(capacity, [projected("obsolete-json", overdue=100)])
+    capacity.execute(text("update app.projection_generation set metadata=metadata||cast(:m as jsonb) where id=:g"),
+                     {"g": old, "m": '{"code_fingerprint":"old-application"}'})
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **kwargs: None)
+    with unit(capacity) as context:
+        context["book_exclusive"] = False
+        with pytest.raises(BookRefreshRequired):
+            read_projection.current(capacity)
+        assert capacity.execute(text("select generation from app.projection_current where singleton")).scalar_one() == old
+    with unit(capacity):
+        fresh = read_projection.current(capacity)
+        assert fresh["generation"] != old
+        assert fresh["metadata"]["code_fingerprint"] == read_projection.code_fingerprint()
+        assert capacity.execute(text("select count(*) from app.customer_projection where generation=:g and customer_uid='obsolete-json'"),
+                                {"g": fresh["generation"]}).scalar_one() == 0
+
+
+def test_failed_code_upgrade_keeps_old_complete_pointer(capacity, monkeypatch):
+    old = generation(capacity, [projected("old-complete", overdue=100)])
+    capacity.execute(text("update app.projection_generation set metadata=metadata-'code_fingerprint' where id=:g"), {"g": old})
+    def fail(_conn):
+        raise RuntimeError("Synthetic new image rebuild failure")
+    monkeypatch.setattr(read_projection, "rebuild", fail)
+    with unit(capacity), pytest.raises(RuntimeError):
+        read_projection.current(capacity)
+    assert capacity.execute(text("select generation from app.projection_current where singleton")).scalar_one() == old
 
 
 def test_global_rebuild_reads_proof_metadata_once_and_preserves_money_rows(capacity, pg_url, monkeypatch):
