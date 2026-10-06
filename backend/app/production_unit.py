@@ -158,9 +158,12 @@ def restore(key, factory):
         # identity prevents reuse across databases. Personal keys include subject.
         signature = conn.execute(text(
             "select count(*),coalesce(sum(version),0),max(updated_at),"
-            "coalesce(sum(octet_length(payload::text)),0) from app.business_record where store_key=:k"),
+            "coalesce(sum(octet_length(payload::text)),0),min(schema_version),max(schema_version) "
+            "from app.business_record where store_key=:k"),
             {"k": saved_key}).one()
         if signature[0]:
+            if signature[4] != 1 or signature[5] != 1:
+                raise ValueError("unsupported business record schema")
             cached_key = (conn.engine, saved_key, *signature[:3])
             size = int(signature[3])
             value, found = _STORE_TEMPLATES.get(cached_key)

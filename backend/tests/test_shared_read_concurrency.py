@@ -239,3 +239,24 @@ def test_subject_owned_store_templates_do_not_cross_accounts(shared, monkeypatch
     for _ in range(2):
         assert clients[0].get("/v1/preferences").json()["value"] == "first"
         assert clients[1].get("/v1/preferences").json()["value"] == "second"
+
+
+def test_template_hit_cannot_bypass_record_schema_validation(shared):
+    store = session.Store(dict, key="test.cached-schema")
+    app = FastAPI()
+    @app.post("/v1/value")
+    def write():
+        store.for_current()["value"] = 1
+        return {"saved": True}
+    @app.get("/v1/value")
+    def read():
+        return store.for_current()
+    app.add_middleware(ProductionUnitMiddleware, enabled=lambda: True)
+    api = TestClient(app)
+    assert api.post("/v1/value").status_code == 200
+    assert api.get("/v1/value").json()["value"] == 1
+    assert api.get("/v1/value").json()["value"] == 1
+    with db.connect() as conn, conn.begin():
+        # Preserve versions/timestamps to exercise validation on the cache-hit path.
+        conn.execute(text("update app.business_record set schema_version=2 where store_key=:k"), {"k": store.key})
+    assert api.get("/v1/value").status_code == 503
