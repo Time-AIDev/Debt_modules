@@ -1,6 +1,7 @@
 """Login through HTTP: the middleware, the routes, and what the audit log records."""
 import asyncio
 import json
+from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
@@ -345,6 +346,17 @@ def test_an_expired_session_is_refused(on, monkeypatch):
     monkeypatch.setattr(auth, "_now", lambda: 1_000_000)
     _login(client, "tester", "tester-pw")
     monkeypatch.setattr(auth, "_now", lambda: 1_000_000 + auth.IDLE_SECONDS + 1)
+    assert client.get("/v1/workbook").status_code == 401
+
+
+def test_staging_six_hour_idle_window_through_middleware(on, monkeypatch):
+    auth.set_config(replace(auth.current_config(), idle_seconds=6 * 60 * 60))
+    client = TestClient(app)
+    monkeypatch.setattr(auth, "_now", lambda: 1_000_000)
+    assert _login(client, "tester", "tester-pw").status_code == 200
+    monkeypatch.setattr(auth, "_now", lambda: 1_000_000 + 6 * 60 * 60)
+    assert client.get("/v1/workbook", headers={"X-Volt-Background": "1"}).status_code == 200
+    monkeypatch.setattr(auth, "_now", lambda: 1_000_000 + 6 * 60 * 60 + 1)
     assert client.get("/v1/workbook").status_code == 401
 
 

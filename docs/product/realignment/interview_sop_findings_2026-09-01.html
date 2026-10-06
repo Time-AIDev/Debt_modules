@@ -1,0 +1,159 @@
+<h1>Volt Debt Collection — Interview and SOP Findings, 2026-09-01</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>What the Debt team actually does today, in their own words and their own sheet, and where that differs from the written specification. The source document for Requirements Amendment v2.6, Collection Workflow Alignment v3.0, Integration Alignment v2.3 and FullSpec v4.0 Annex G.</td></tr>
+<tr><td>Version</td><td>1.0. Dated 2026-09-02. Sources dated 2026-09-01 and earlier.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Status</td><td>In force as the top-ranked source of fact about current practice.</td></tr>
+<tr><td>Read with</td><td>Grilling Session Record 2026-09-02 · Requirements Amendment v2.6 · the SOP docx and flowcharts (Drive folder "Origin workflow")</td></tr>
+</table>
+
+<blockquote><strong>Correction notice, 2026-09-09.</strong> This record was written when the
+late-fee rate was 0.3 %/day with 14 days' grace. Rulings 87 and 88 set 0.03 %/day and no
+grace — see <code>docs/design/round-6/00-ledger.md</code> rulings 87–88. The rate and grace
+figures below report what the sheet's own tabs, the Executive Brief/FullSpec and the
+interviewed lead said at the time (a quoted formula, a quoted table cell, a quoted
+remark) and are preserved unchanged as the record of that source material; none of it
+states this document's own current policy.</blockquote>
+
+<h2>0. Plain language first</h2>
+<p><strong>The sheet</strong> — the Google Sheet "New Order Master" the team works in; its two working tabs are Done-Collection (leasing) and Done-Cash. <strong>PTP</strong> — promise to pay: the date and amount a customer commits to. <strong>Broken PTP</strong> — the date passed without the money. <strong>DPD</strong> — days past due. <strong>Bucket</strong> — the sheet's grouping of how many weeks late a customer is. <strong>DC Status</strong> — the sheet's "debt collection status" dropdown; it records the last action taken, not the money state. <strong>Payment Status</strong> — the money state: Current, Late, NPL, Closed. <strong>NPL</strong> — non-performing loan. <strong>Next Action</strong> — what the officer must do next for a case, and when. <strong>LINE OA</strong> — the company LINE Official Account, where most customer conversations happen. <strong>PEAK</strong> — the accounting system where invoices and receipts are created. <strong>Odoo</strong> — the ERP that holds orders, installation dates and helpdesk tickets. <strong>O&amp;M</strong> — operations and maintenance, the team that fixes systems. <strong>CX / CS</strong> — customer service, who open tickets. <strong>EPC</strong> — the installation crews (VOLT, IPW, SLT, KAT, EMP, RICH and others).</p>
+
+<h2>1. Sources and how they were read</h2>
+<table>
+<tr><th>Source</th><th>Form</th><th>How it was read</th><th>Rank</th></tr>
+<tr><td>Interview, 2026-09-01</td><td>1 h 47 m video and a Thai/English transcript, screen-shares of the sheet, LINE OA Manager, a PEAK invoice, the weekly report email</td><td>Transcript read end to end; 107 video frames at one per minute reviewed; screen-shares of the sheet read at full resolution</td><td>1</td></tr>
+<tr><td>Team SOP</td><td>"SOP – Collection and Debt Follow-up" (10 sections), four flowcharts, "Debt Collection Workflow" (17 numbered steps)</td><td>Read in full</td><td>2</td></tr>
+<tr><td>Executive Brief v2.0</td><td>29 August, for Jo and Dan</td><td>Read in full</td><td>3</td></tr>
+<tr><td>FigJam "Debt to PEAK — Process Handoff by Scenario"</td><td>24 scenarios, two diagrams</td><td>Every node read</td><td>4</td></tr>
+<tr><td>New Order Master</td><td>Drive export, 1.28 MB, 47 table blocks, truncated per tab</td><td>Profiled for tabs, columns, vocabularies and counts; the sheet's own pivots trusted over recomputed rows</td><td>5 (data)</td></tr>
+<tr><td>Older full specification</td><td>55-page PDF; FullSpec v3.9 parts 1–8</td><td>Read for features worth keeping; wins nothing in a conflict</td><td>6</td></tr>
+</table>
+
+<h2>2. The team and its day</h2>
+<p>Two collection officers and one lead. The lead does the supervisor's and the manager's work at once and sits with the officers, so review today is a conversation across the desk. One officer follows leasing, the other cash; they cover each other when a list is quiet. About 700 customers are installed. The sheet's own pivots show 642 leasing customers (579 Current, 53 Late, 10 NPL) and, on the portfolio summary, 816 contracts with THB 3,189,318.70 overdue; the cash tab shows 42 overdue invoices worth THB 4,438,121.05.</p>
+<p>The morning starts in the Done-Collection tab. The first filter is PTP Date equal to today. The second is the Bucket column, looking for customers at two missed instalments who are about to slide toward NPL. After that the officer works down the list by judgement. There is no action-date column, so the question "who called this customer last, and when" cannot be answered from the sheet; the officer opens LINE OA, searches the VOLT ID, and reads the conversation. LINE OA on the standard plan keeps six months, so for a customer installed a year ago the first six months are gone. Some conversations are summarised into the Comment cell, which grows without limit and is read top to bottom.</p>
+<p>Contact is by LINE first and phone second. The phone number column exists in the sheet but is hidden because the sheet is shared with other departments. Reminders are sent by hand: the invoice link when the invoice is created, a reminder three days before the due date, a reminder on the due date, and a "please send the slip" message after. The team estimates two thousand or more messages a month and has never counted.</p>
+<p>The lead's own words on the sheet: it is the view management wants, not a view for working. Adding a column for the team's own needs is resisted because the sheet is also the report.</p>
+
+<h2>3. The sheet as it is used</h2>
+<h3>3.1 Tabs</h3>
+<p>Working tabs: Done-Collection (leasing, 72 in the tab strip) and Done-Cash (6). Every other tab is an event tab — created for one management question, never removed: Working Sheet, Loan Book, Done Report, Loan Report (five near-identical snapshots with different totals), Repossessed 1, NPL trackers, monthly clones of the order master. The lead wants the working tabs to be the only two that survive.</p>
+<h3>3.2 How a customer enters the working tab</h3>
+<p>Orders arrive from Odoo into the order tab ("x"). A formula copies every row whose Order Status is "Order - Done" into Done-Collection or Done-Cash by Order Type. The flip from "Order - EPC Installation" to "Order - Done" is manual and its trigger is not known to the team (it may be the EPC Start Date and EPC End Date columns being filled). Customers who are installed but never flipped do not appear and are not chased. The team member with edit rights flips them by hand when they notice. The sheet shows 907 rows at Order - Done and 182 at Order - EPC Installation.</p>
+<h3>3.3 Columns the team reads and writes</h3>
+<table>
+<tr><th>Column</th><th>Meaning in practice</th><th>Values seen</th></tr>
+<tr><td>VOLT ID</td><td>The join key everywhere; also the LINE OA search key</td><td>99999000001_VOLT_0001 · 99999000219_… · 99999000351_…; suffix is the EPC crew</td></tr>
+<tr><td>Term, Original / Term, Remain</td><td>Total instalments and instalments left; a formula counts the month cells until the first non-number</td><td>60, 72, 84, 96</td></tr>
+<tr><td>PMT, Inc VAT / PMT paid / PMT remain</td><td>Instalment, paid to date, remaining</td><td>Amounts</td></tr>
+<tr><td>M1 … M96</td><td>One cell per instalment month. An amount means paid; a word means an event</td><td>amount · Late · Link Sent · Restructure · Credit Note · No payment: service issue · Paid · Closed</td></tr>
+<tr><td>Payment Status</td><td>The money state, set by formula from the month cells and Days Late</td><td>Current · Late · NPL · Closed · Not Installed</td></tr>
+<tr><td>DC Status</td><td>The last action taken by the team; set by hand</td><td>No Action · Unreachable · Extend Payment To · Contact Back · Tech Issue · Power Cutoff · Power Bill Issue · Restructure Loan · Legal Letter · Retrieve Asset · Visit Customer · Terminate Contract (cash tab also PTP · Paid)</td></tr>
+<tr><td>NPL Type</td><td>Set by the lead only</td><td>NPL 1 - Restructure · NPL 2 - Cooperative - Decommission · NPL 3 - Uncooperative - Legal action · Repossessed In Process · Repossessed - Ready Resell · Repossessed - Sold</td></tr>
+<tr><td>Bucket - Weeks Late</td><td>Formula from Days Late; the second daily filter</td><td>– · &lt;30 days · &lt;45 · &lt;60 · &lt;75 · &lt;90 · &gt;90 days · NPL</td></tr>
+<tr><td>PTP Date / PTP Amount</td><td>The commitment; cleared when paid or when the customer will not commit; overwritten on renegotiation</td><td>7/31/2026 (leasing, month first) · 31/08/26 (cash, day first)</td></tr>
+<tr><td>Comment (Thai) / Comment (English)</td><td>Free text, appended; the second column is a translation kept for management</td><td>Dates inside the text: 21/07, 13/6/69</td></tr>
+<tr><td>Art Comment / Legal Comment / Dan Comment / Permit Comment / EPC Comment</td><td>Columns added during past events when other departments came to the sheet; no longer used but still present</td><td></td></tr>
+<tr><td>Legal / Contract Canceled?</td><td>Flags set by the lead</td><td>Legal Letter · yes</td></tr>
+<tr><td>Cash tab: Action Type · Responsible Team · Ticket Link · Deadline · Case Status · Remark</td><td>The CS ticket follow-up block for cash customers with a technical issue</td><td>New Ticket · Follow-up; Installation (EPC) · O&amp;M · Permit; https://odoo.volt.co.th/odoo/helpdesk-tickets/286; In Progress</td></tr>
+<tr><td>Cash tab: PEAK Contact Code · Invoice Number · Date Issued · Due Date · Days Overdue</td><td>The PEAK references for cash invoices; due date is seven days after issue</td><td>V00500 · IV-20260400028 · IVT-20260100388</td></tr>
+</table>
+<h3>3.4 The call log that exists inside a cell</h3>
+<p>A structured string is appended to the Comment cell when a call is logged from the LINE tooling: an opening tag with the VOLT ID, a timestamp and the agent's name, then the contact result, the PTP amount, the PTP date, the next call date and a free note, all separated by vertical bars. Three contact results are used: reached and answered, unreachable and no answer, reached and payment appointment made. This is the only place a "next call" date exists today. Because the separator is a vertical bar inside a spreadsheet cell, every export of the sheet shifts those rows' columns. It is the strongest evidence in the data that the contact log needs a table of its own.</p>
+<h3>3.5 Formulas whose origin nobody knows</h3>
+<p>Days Late, Bucket, Payment Status, NPL at 90 days and Late Fees are all formula-driven. The team reads the results and trusts them but cannot say how the late fee is built. The sheet's own "Late Fee Calculation Logic" tab states: 0.3 percent per day on the total unpaid balance, the balance grows by one instalment each month, the due date is the 10th, and the fee is computed in monthly blocks on the cumulative balance. Its worked example reaches THB 41,040 on 190 days late. The "Flow Stages" tab on the same sheet says the due date is the 1st, the late fee starts on day 11 and power cut-off is warned on days 14–15 and executed on day 16. The lead called the daily rate impossible — nine percent a month, 108 percent a year — and said Legal is re-reading the agreement.</p>
+
+<h2>4. The SOP ladder and the seventeen steps</h2>
+<h3>4.1 The written ladder</h3>
+<table>
+<tr><th>When</th><th>SOP says</th><th>Practice, from the interview</th></tr>
+<tr><td>By the 5th</td><td>Send every invoice and record it sent</td><td>Invoices exist in PEAK for the whole contract from the start; the link is sent and "Link Sent" written in the month cell</td></tr>
+<tr><td>D-1 / D0</td><td>Short reminder; due-day reminder; if no slip by end of day, remind again</td><td>Reminder three days before; on the day; slips confirmed by eye</td></tr>
+<tr><td>D+1 to D+3</td><td>Check payment, start calling</td><td>Same</td></tr>
+<tr><td>D+4 to D+7</td><td>Call again, ask the reason, get a PTP date</td><td>Same; PTP date and amount go in the two columns</td></tr>
+<tr><td>D+8 to D+15</td><td>Follow the PTP; keep chasing the uncommitted</td><td>PTP Date filter each morning; a missed PTP is renegotiated by overwriting the date</td></tr>
+<tr><td>D+16 to D+30</td><td>Manager Review for cases with no plan</td><td>Review is a conversation at the desk; power cut-off may happen here after a failed PTP</td></tr>
+<tr><td>30+</td><td>Must have a PTP or an action plan</td><td>Same</td></tr>
+<tr><td>60+</td><td>Manager Review for NPL and recovery action</td><td>The lead sets NPL Type; the sheet flips Payment Status to NPL at 90 by formula</td></tr>
+</table>
+<h3>4.2 The seventeen steps and where they sit</h3>
+<p>Steps 1–5 are pre-installation: check the installation plan for the next three days, prepare the invoice data, issue the invoice, deliver it, check on installation day. The workflow narrative marks all five as owned by nobody in the written specification and proposes AR as owner of invoice create, amend and cancel, with Collection owning delivery and follow-up. Steps 6–8 are receipt matching, the monthly invoice run and the pre-due reminders. Steps 9–13 are the daily loop: build the arrears list, contact and record, record and track PTP, handle a service complaint, handle no contact. Steps 14–16 are Manager Review, arrangement or restructure, and NPL, legal and recovery escalation. Step 17 is reporting. The SOP's minimum record standard is that every case answers: status, last contact, what the customer said, PTP date, whether there is an issue, who owns it, what the next action is. "No case without Next Action."</p>
+
+<h2>5. What the team asked for</h2>
+<table>
+<tr><th>Ask</th><th>Said as</th><th>Consequence for the design</th></tr>
+<tr><td>Next Action with a date and an alert list</td><td>"Today: ten next-actions, five PTPs, five callbacks — done." Next Action is not only PTP; it includes "call back in three days" and internal follow-up rules</td><td>A mandatory next_action and next_action_on per case; the Today screen is that list</td></tr>
+<tr><td>A contact log with date, officer and result</td><td>"We can't see who called whom last unless we read the comments"</td><td>A contact_log table; the MapLog string is migrated into it</td></tr>
+<tr><td>Broken-PTP count per customer</td><td>"How many times has this customer promised and missed — that tells us whether the next promise is worth anything"</td><td>broken_ptp_count computed by the system, never typed</td></tr>
+<tr><td>Request review from the officer, a review list for the manager, and a comment back</td><td>"The officer should be able to flag: please review this one. Five cases waiting. The manager can't scan 700 rows to find what matters"</td><td>review_request with a manager answer that returns to the officer's Today list</td></tr>
+<tr><td>Three roles and caseload assignment</td><td>Officer, Supervisor, Manager; "ten officers, a hundred customers each, the manager assigns"</td><td>Roles and an assignee per customer, assignment at customer level</td></tr>
+<tr><td>Configurable buckets</td><td>"Dan set 15, 30, 40, 50, 60. For working we need 30, 60, 90. Let us define them"</td><td>Buckets are configuration; DPD is the number; reports pick their own cuts</td></tr>
+<tr><td>A policy for NPL, not the manager's mood</td><td>"It could be 60 days, or two instalments with no contact — but it must be a policy so decisions don't change with the manager"</td><td>npl_policy configuration with the value left to the Owner; the accounting flag stays automatic per the Brief</td></tr>
+<tr><td>Service issue tied to the ticket, and told when it is fixed</td><td>"Nobody tags Collection when the ticket closes; I find out when I chase the customer again"</td><td>service_issue carries the Odoo helpdesk ticket link; closure tags the officer's Today list</td></tr>
+<tr><td>Power cut-off as a governed act</td><td>"Not automatic. After two instalments and a failed PTP. O&amp;M must know it was cut for arrears, not for a fault. Restore the moment they pay"</td><td>power_restriction request with approver, reason visible to O&amp;M, restoration on any confirmed payment</td></tr>
+<tr><td>Separate the payment state from the customer state</td><td>"Status must be split: Payment Status and the customer's status"</td><td>payment_status (system) and dc_status (human) are two fields</td></tr>
+<tr><td>Auto-reconcile payments</td><td>"If we had a gateway or bank statement we would not depend on slips"</td><td>Out of scope for the prototype; slip confirmation creates a PEAK draft receipt</td></tr>
+<tr><td>Keep LINE history</td><td>"Premium keeps five years for 699 a month; nobody signed up"</td><td>Carried as a business item</td></tr>
+</table>
+
+<h2>6. The systems around the team</h2>
+<table>
+<tr><th>System</th><th>What it holds</th><th>What the team does in it</th><th>What must change</th></tr>
+<tr><td>Odoo</td><td>Orders, customer, EPC crew, installation start and end dates, helpdesk tickets (odoo.volt.co.th/odoo/helpdesk-tickets/…)</td><td>Reads only; the order tab in the sheet is fed from it</td><td>Debt reads orders and installation dates directly; the Order-Done gap list is computed, not discovered</td></tr>
+<tr><td>PEAK</td><td>Invoices for the whole contract created up front; receipts; contact codes V00500; invoice numbers IV-YYYYMM#####</td><td>Sends invoice links; can edit invoice dates (the lead says it should not); AR matches receipts</td><td>Debt creates drafts only; approval happens in PEAK; Debt reads the approved state back</td></tr>
+<tr><td>LINE OA</td><td>Customer conversations, slips, issue reports; six-month retention</td><td>Search by VOLT ID; send links, reminders, requests for slips; read history</td><td>The contact log holds the facts so LINE history is not the record</td></tr>
+<tr><td>Odoo helpdesk (opened by CX)</td><td>Tickets for technical issues; no SLA; no closure notice</td><td>Pastes the ticket link into the cash tab</td><td>Ticket link on the case; closure notification to the officer</td></tr>
+<tr><td>Weekly report (email to Jo)</td><td>Cash-in against target, month-on-month, week-on-week late count, NPL up and down with reasons, issue count, next-week focus</td><td>Assembled by hand from the sheet's pivots</td><td>Generated from the case data in the same shape</td></tr>
+</table>
+
+<h2>7. Money rules as practised against the written rules</h2>
+<table>
+<tr><th>Rule</th><th>Executive Brief / FullSpec</th><th>The sheet</th><th>The interview</th></tr>
+<tr><td>Late fee rate</td><td>0.3 percent per day; disputed against 0.1 (CF1)</td><td>0.3 percent per day</td><td>"Impossible", Legal re-reading</td></tr>
+<tr><td>Grace</td><td>14 days, fee from day 15</td><td>Late Fee Logic: from the due date; Flow Stages: from day 11</td><td>Not stated</td></tr>
+<tr><td>Base and method</td><td>Each instalment aged separately, simple, never compounding</td><td>Cumulative balance in monthly blocks</td><td>The formula's origin is unknown to the team</td></tr>
+<tr><td>Fee during a service issue</td><td>Frozen with the chargeable clock</td><td>Keeps accruing</td><td>"The formula does not know there is an issue"</td></tr>
+<tr><td>Allocation of a short payment</td><td>Unsettled (agreement VL0010399)</td><td>Instalment and penalty on one invoice; customers pay the instalment</td><td>No rule; a policy is needed and it changes behaviour</td></tr>
+<tr><td>Due date</td><td>Configured offset</td><td>Lease: the 10th; cash: issue plus seven days; Flow Stages: the 1st</td><td>Lease due on the 10th</td></tr>
+<tr><td>NPL</td><td>Automatic accounting flag at 90 days or two missed on a restructured schedule; recovery decision human</td><td>Formula at 90 days</td><td>Wants a policy; lead sets NPL Type</td></tr>
+<tr><td>Restructure entry payment</td><td>40 percent of overdue instalments plus fees</td><td>Three real restructures; months merged into a new contract</td><td>"25 percent" mentioned once, context unclear</td></tr>
+<tr><td>Power cut-off</td><td>Governed act, Owner approver (26 Aug)</td><td>Flow Stages day 16</td><td>Manual after two instalments and a failed PTP; restore on payment</td></tr>
+<tr><td>Removal fee</td><td>THB 3 per watt (Brief); v2.5 still says 5</td><td>Repossess Fee lines on the cash tab</td><td>Costs are gathered by Dan and Wa, not Collection</td></tr>
+<tr><td>Legal timeline</td><td>Notice, cure period</td><td>Legal Letter status</td><td>Notice → 14 or 30 days → draft suit 4–6 weeks → file → hearing 2–6 months; lawyer signs the termination letter</td></tr>
+</table>
+
+<h2>8. Conflict register</h2>
+<table>
+<tr><th>Id</th><th>Conflict</th><th>Position taken in v2.6</th><th>Owner of the final answer</th></tr>
+<tr><td>I-01</td><td>Late fee method: per instalment (Brief) vs cumulative monthly blocks (sheet)</td><td>Per instalment, simple; the sheet method documented as the legacy calculation and shown beside it during migration</td><td>Legal, Win, Accounting (CF1)</td></tr>
+<tr><td>I-02</td><td>Grace 14 (Brief) vs 0 (Late Fee Logic) vs 11 (Flow Stages)</td><td>Configuration, default 14, flagged indicative</td><td>Legal (OD-31)</td></tr>
+<tr><td>I-03</td><td>Fee accrues during a service issue (sheet) vs freezes (Brief, 26 Aug decision)</td><td>Freezes; migration recomputes and shows the difference per contract</td><td>Owner</td></tr>
+<tr><td>I-04</td><td>NPL at 90 by formula (sheet) vs policy (interview) vs automatic accounting flag (Brief)</td><td>Accounting flag automatic per the Brief; the collection treatment is a policy value in configuration</td><td>Owner, Whan (OD-04)</td></tr>
+<tr><td>I-05</td><td>Buckets 15/30/40/50/60 (sheet) vs 30/60/90 (interview) vs 1–7/8–29/30–59/60–89/90–119/120+ (full spec)</td><td>Buckets are configuration; two seeded sets, OPERATIONAL (30/60/90) and LEGACY_SHEET</td><td>Debt lead</td></tr>
+<tr><td>I-06</td><td>Restructure entry 40 percent (Brief) vs 25 percent (interview)</td><td>40 percent, configurable</td><td>Owner</td></tr>
+<tr><td>I-07</td><td>Removal fee THB 5 per watt (Amendment v2.5) vs 3 (Brief, live book)</td><td>3, configurable; v2.5 text corrected by v2.6</td><td>Owner</td></tr>
+<tr><td>I-08</td><td>Pre-installation out of scope (PRD, Brief) vs eight of seventeen daily steps (workflow)</td><td>In scope (C4); invoice ownership stays open</td><td>Owner</td></tr>
+<tr><td>I-09</td><td>PEAK full write of QR invoices (R15) vs draft only (C3)</td><td>Draft only for all twenty-three outcomes</td><td>Decided (C3)</td></tr>
+<tr><td>I-10</td><td>Debt can edit PEAK invoice dates today</td><td>Debt never edits a PEAK record; a change is a draft amendment approved in PEAK</td><td>Decided (C3)</td></tr>
+<tr><td>I-11</td><td>Manager review is a conversation (practice) vs a stored assessment record (FigJam S13)</td><td>Officer-raised review request with a stored answer; the Credit and Risk assessment record stays for NPL routing</td><td>Debt lead</td></tr>
+<tr><td>I-12</td><td>Order-Done flip is manual and untriggered</td><td>Debt computes an "installed but not Order-Done" gap list from Odoo installation dates</td><td>Operations, Dan</td></tr>
+<tr><td>I-13</td><td>Contact history in LINE OA (six months) vs the daily-slot law needing a durable log</td><td>contact_log in Debt is the record; LINE is a channel</td><td>Decided</td></tr>
+<tr><td>I-14</td><td>Lease due on the 10th (sheet, interview) vs per-contract offset (spec)</td><td>Per-contract due day, seeded to the 10th on migration</td><td>Accounting</td></tr>
+<tr><td>I-15</td><td>Two officers, one lead who is Supervisor and Manager at once vs the vacant Debt Manager post</td><td>Roles exist; one person may hold two; the vacancy guard stays</td><td>Win</td></tr>
+</table>
+
+<h2>9. The authority ladder, re-based</h2>
+<table>
+<tr><th>Rank</th><th>Document</th><th>Authority</th></tr>
+<tr><td>1</td><td>Interview 2026-09-01 and this findings document</td><td>Fact about current practice and the team's stated needs</td></tr>
+<tr><td>2</td><td>Team SOP: docx, four flowcharts, seventeen-step workflow</td><td>The process the team follows and owns</td></tr>
+<tr><td>3</td><td>Requirements Amendment v2.6 and Grilling Session Record 2026-09-02</td><td>What the system must do, for what it names</td></tr>
+<tr><td>4</td><td>Executive Brief v2.0 and FigJam board</td><td>Money rules with worked numbers; the PEAK outcome table</td></tr>
+<tr><td>5</td><td>Requirements Amendment v2.5 and v2.4, Grilling Records of 30 and 26 August</td><td>For what they name and nothing above touches</td></tr>
+<tr><td>6</td><td>PRD v2.1, Data Model v2.1 plus deltas, API Surface, Integration and Runbook alignments</td><td>Everything not named above</td></tr>
+<tr><td>7</td><td>FullSpec v4.0 and the 55-page scenario catalogue</td><td>Reference; features worth keeping; never wins a conflict</td></tr>
+</table>
+
+<h2>10. What this document does not decide</h2>
+<p>It records practice and asks. It does not settle the late-fee rate, the grace period, the allocation order, the NPL policy value, the restructure entry gate, who signs the termination letter, who owns the invoice, or the LINE retention plan. Those sit in Case Register v1.4 with owners. It also does not claim the sheet counts are exact: the export is truncated per tab, so every number quoted comes from the sheet's own summary rows.</p>

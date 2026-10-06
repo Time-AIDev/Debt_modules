@@ -7,6 +7,7 @@ needing a plan, not a patch.
 """
 import json
 import os
+from .runtime_policy import shared_state_enabled
 import re
 import sys
 import threading
@@ -78,7 +79,7 @@ async def _lifespan(app_):
         from . import cases as _cases, journey as _journey
         from .config import settings as _settings
         from .ptp_watch import notice_early_payments as _notice_early
-        if os.environ.get("ENV") != "prd":
+        if not shared_state_enabled():
             _notice_early(_journey.for_current(), _cases.for_current(), _settings.business_date)
     except Exception as exc:                       # noqa: BLE001 — boot must proceed
         print("early-payment scan failed: %s" % exc.__class__.__name__, file=sys.stderr)
@@ -90,7 +91,7 @@ async def _lifespan(app_):
     # the black-box gate) is a silent no-op.
     from .pipelines import service as pipelines_service
     try:
-        if os.environ.get("ENV") != "prd" and pipelines_service.refresh_if_stale():
+        if not shared_state_enabled() and pipelines_service.refresh_if_stale():
             print("crm.lead refresh started in the background")
     except Exception as exc:                       # noqa: BLE001 — boot must proceed
         print("crm.lead refresh not started: %s" % exc.__class__.__name__, file=sys.stderr)
@@ -101,14 +102,14 @@ async def _lifespan(app_):
     # tick when there is no database or no Odoo credentials.
     from .pipelines import schedule as schedule_mod
     try:
-        if os.environ.get("ENV") != "prd":
+        if not shared_state_enabled():
             schedule_mod.ensure_auto()
         print("crm.lead auto-sync on: every %d minutes" % schedule_mod.INTERVAL_DEFAULT)
     except Exception as exc:                       # noqa: BLE001 — boot must proceed
         print("crm.lead auto-sync not enabled: %s" % exc.__class__.__name__, file=sys.stderr)
     # Monthly history (2026-09-25): a new month has its row from the first boot in it.
     from . import monthly_history
-    if os.environ.get("ENV") != "prd": monthly_history.safe_snapshot("boot")
+    if not shared_state_enabled(): monthly_history.safe_snapshot("boot")
     # WP10 (F13): the start-up merge of records.user_account over AUTH_ALLOWLIST. A
     # database that does not answer at boot is not fatal here — every sign-in and
     # every session check reads the rows again and refuses 503 until it answers. The
@@ -128,9 +129,9 @@ async def _lifespan(app_):
 
 
 app = FastAPI(title="Volt Debt", version="0.1.0", lifespan=_lifespan,
-              openapi_url=None if os.environ.get("ENV") == "prd" else "/openapi.json",
-              docs_url=None if os.environ.get("ENV") == "prd" else "/docs",
-              redoc_url=None if os.environ.get("ENV") == "prd" else "/redoc")
+              openapi_url=None if shared_state_enabled() else "/openapi.json",
+              docs_url=None if shared_state_enabled() else "/docs",
+              redoc_url=None if shared_state_enabled() else "/redoc")
 
 # The browser only ever talks to this API through the vite proxy in development and
 # through the load balancer in every deployed environment.
@@ -489,7 +490,7 @@ async def request_identity(request: Request, call_next):
 async def tester_session(request: Request, call_next):
     """Bind durable work to the authenticated account; retain browser fallback in dev."""
     from .production_unit import CURRENT as production_current
-    if production_current.get() is not None or os.environ.get("ENV") == "prd":
+    if production_current.get() is not None or shared_state_enabled():
         return await call_next(request)
     existing = request.cookies.get(session_domain.COOKIE)
     auth_session = None
@@ -768,7 +769,7 @@ def healthz():
 async def readyz():
     """For the LB uptime check and the deploy smoke test. Cloud Run never calls this —
     readiness in the Kubernetes sense does not exist there."""
-    if os.environ.get("ENV") == "prd":
+    if shared_state_enabled():
         from .production_runtime import readiness
         from fastapi.responses import JSONResponse
         import anyio
@@ -1109,6 +1110,8 @@ def _work_out_contract(contract, as_of=None):
     # 2026-09-24: the business date is resolved on read (config.resolve_business_date),
     # so the default is the date NOW, not the one this module was imported on.
     as_of = as_of or settings.business_date
+    from . import instalment_evidence, payment_summary, journey
+    strict = instalment_evidence.required(contract)
     # The fee state decides the fee, and separately the clock. Never derive one from
     # the other: a permit hold pauses the fee and leaves the clock running.
     #
@@ -1125,6 +1128,9 @@ def _work_out_contract(contract, as_of=None):
     # Ruling 49: the schedule itself is session-scoped too, the same way — a session
     # that has not restructured this contract never sees another session's addendum.
     instalments = _contract_field_of(contract, "instalments")
+    if strict:
+        instalments = instalment_evidence.collection_lines(
+            contract, journey.for_current(), payment_summary._active_lines(contract))
 
     def state_on(day):
         # Round-3 J3-18: the fee FELL the moment a ticket opened — the hold's own opening
@@ -1170,7 +1176,10 @@ def _work_out_contract(contract, as_of=None):
         instalments, as_of=as_of, frozen_days=frozen
     )
 
-    arrears_at = _arrears_as_of(contract)
+    if strict and not instalments:
+        dpd = None
+
+    arrears_at = _arrears_as_of(contract, instalments if strict else None)
 
     oldest_overdue = [i for i in instalments
                       if i.due_date < as_of and i.outstanding_amount > 0]
@@ -1187,7 +1196,10 @@ def _work_out_contract(contract, as_of=None):
         period = None
 
     # Ruling 43 / R4-F03: session-scoped read — never contract.status directly.
-    band = resolve_band(_contract_field_of(contract, "status"), dpd, settings.band_set_code)
+    status = _contract_field_of(contract, "status")
+    band = resolve_band(status, dpd, settings.band_set_code)
+    if strict and dpd is None and band.code is None:
+        band = resolve_band("EVIDENCE_UNVERIFIED", dpd, settings.band_set_code)
     block = arrears_block(
         instalments,
         ledger_date=as_of,
@@ -1199,7 +1211,7 @@ def _work_out_contract(contract, as_of=None):
     return contract, dpd, band, block, period
 
 
-def _arrears_as_of(contract):
+def _arrears_as_of(contract, evidence_lines=None):
     """The fee base for each day, respecting EACH instalment's own grace.
 
     Not simply "everything past due": an instalment that fell due yesterday is in
@@ -1207,14 +1219,15 @@ def _arrears_as_of(contract):
     by 234.36 on a two-instalment contract — see tests/test_contract_accrual.py.
     """
     return chargeable_arrears_by_day(
-        _contract_field_of(contract, "instalments"), settings.late_payment_grace_days)
+        evidence_lines if evidence_lines is not None else _contract_field_of(contract, "instalments"),
+        settings.late_payment_grace_days)
 
 
 # Aging bands ordered by how bad they are. A customer's band must be the most severe
 # band among their contracts: an officer reading a DPD from one contract beside a band
 # from another cannot tell whether the customer is in Risk Review at all.
 _BAND_SEVERITY = {
-    None: -1, "CLOSED": 0, "RESOLVED": 0, "CURRENT": 1,
+    None: -1, "CLOSED": 0, "RESOLVED": 0, "CURRENT": 1, "EVIDENCE_UNVERIFIED": 1.5,
     "EARLY_OVERDUE": 2, "MID_OVERDUE": 3, "RISK_REVIEW": 4, "NPL_CONFIRMED": 5,
     "COLLECTION_1_30": 2, "COLLECTION_31_60": 3,
     "COLLECTION_61_89": 4, "COLLECTION_90_PLUS": 5,
@@ -1239,11 +1252,17 @@ def _customer_aggregate(customer):
     oldest = None
     pairs = []
     for contract in customer.contracts:
-        _, dpd, _, block, _ = _contract_view(contract)
-        total += block.cumulative_arrears
+        _, dpd, contract_band, block, _ = _contract_view(contract)
+        from . import invoice_reviews, journey
+        imported = invoice_reviews.contract_arrears(customer, contract, journey.for_current(), settings.business_date)
+        arrears = block.cumulative_arrears
+        if imported is not None:
+            arrears, dpd = imported
+        total += arrears
         outstanding += block.closing_balance
         # Ruling 43 / R4-F03: session-scoped read.
-        pairs.append((_contract_field_of(contract, "status"), dpd))
+        status = "EVIDENCE_UNVERIFIED" if contract_band.code == "EVIDENCE_UNVERIFIED" else _contract_field_of(contract, "status")
+        pairs.append((status, dpd))
         if dpd is not None and (oldest is None or dpd > oldest):
             oldest = dpd
     return total, oldest, _customer_band(pairs, settings.band_set_code), outstanding
@@ -1769,7 +1788,7 @@ def log_contact(body: dict = Body(...)):
               "message": str(exc), "message_th": "ผลการติดต่อไม่อยู่ในรายการที่กำหนด"}]
         )
 
-    _retractable()[("production" if os.environ.get("ENV") == "prd" else session_domain.current(), attempt.contact_id)] = {
+    _retractable()[("production" if shared_state_enabled() else session_domain.current(), attempt.contact_id)] = {
         # The 90-second retraction window is measured against the client's own moment
         # when it sent one (a real elapsed wall time); the LOCK is on the business day.
         "at": reported or moment,
@@ -1828,7 +1847,7 @@ def retract_contact(contact_id: int, body: dict = Body(default={})):
     there is no way to hold a slot open by delaying.
     """
     audit.describe(act="CONTACT_RETRACTED", subject=("contact", str(contact_id)))
-    record = _retractable().get(("production" if os.environ.get("ENV") == "prd" else session_domain.current(), contact_id))
+    record = _retractable().get(("production" if shared_state_enabled() else session_domain.current(), contact_id))
     if record is None:
         raise errors.not_found("contact")
 
@@ -1858,6 +1877,12 @@ def retract_contact(contact_id: int, body: dict = Body(default={})):
     return {"slot_restored": True, "contact_id": contact_id}
 
 
+@app.get("/v1/config/approval-paths")
+def list_approval_paths():
+    from . import approval_paths
+    return {"items": approval_paths.list_all()}
+
+
 # --- approval paths ------------------------------------------------------------------
 
 @app.post("/v1/config/approval-paths", status_code=201)
@@ -1878,7 +1903,9 @@ def create_approval_path(body: dict = Body(...)):
     for candidate in candidates:
         if _normalise_role(candidate) in vacant:
             raise errors.authority_gap_blocks_approval(candidate, body.get("action"))
-    return {"created": True, "action": body.get("action"), "role": role}
+    from . import approval_paths
+    path = approval_paths.create(body.get("action"), [_normalise_role(r) for r in candidates])
+    return {"created": True, "action": path["action"], "role": role, "path": path}
 
 
 def _normalise_role(value):
@@ -1975,6 +2002,8 @@ app.include_router(payment_claims_router)
 from .routers.service_deferrals import router as service_deferrals_router, queue_router as service_deferral_queue_router
 app.include_router(service_deferrals_router)
 app.include_router(service_deferral_queue_router)
+from .routers.invoice_reviews import router as invoice_reviews_router
+app.include_router(invoice_reviews_router)
 app.include_router(today_router)
 app.include_router(settings_router)
 app.include_router(pipeline_router)

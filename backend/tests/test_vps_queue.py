@@ -39,14 +39,15 @@ def test_completed_job_is_acknowledged_once_without_cloud_identity(queue):
     assert asyncio.run(local_worker.run_once()) == 0
 
 
-def test_corrupt_payload_is_not_acknowledged_and_retry_survives_poll(queue):
+def test_corrupt_payload_is_dead_lettered_without_retrying_permanent_failure(queue):
     from app import local_worker
     seed(queue, state="queued")
     task_objects.put("jobs/local-job/body", b"file")
     assert asyncio.run(local_worker.run_once()) == 1
     queue.commit()
-    row = queue.execute(text("select finished_at,attempt_count,next_attempt_at > now() as delayed from app.task_outbox")).one()
-    assert row.finished_at is None and row.attempt_count == 1 and row.delayed
+    row = queue.execute(text("select finished_at,dead_lettered_at,attempt_count,next_attempt_at,last_error_code from app.task_outbox")).one()
+    assert row.finished_at and row.dead_lettered_at and row.attempt_count == 1
+    assert row.next_attempt_at is None and row.last_error_code == "job_body_changed"
     assert asyncio.run(local_worker.run_once()) == 0
 
 

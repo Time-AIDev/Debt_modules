@@ -384,6 +384,8 @@ def _invoice(lines):
                     if paid_on or first["receipt_no"] else None),
         "note": first["note"] or None, "lines": [],
     }
+    from ..instalment_evidence import service_period
+    inv["service_month"], inv["service_month_conflict"] = service_period(lines)
     for ln in lines:
         if inv["cycle"] is None:
             inv["cycle"] = _cycle(ln["description"], ln["product_name"])

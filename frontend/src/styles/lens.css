@@ -272,3 +272,6 @@
 /* F16 / TASK-025: the PTP report's own filter row. */
 .ptpfilters { display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
 .ptpfilters label { display: flex; flex-direction: column; gap: 3px; min-width: 150px; }
+.monthgrid__cell--inferred { background: var(--volt-warm); border: 2px dashed var(--volt-yellow); color: var(--volt-ink); }
+.monthgrid__cell--reported { background: var(--volt-warm); border: 2px solid var(--volt-yellow); color: var(--volt-ink); }
+.monthgrid__cell--unconfirmed { background: var(--volt-warm); border: 2px dotted var(--volt-ink-2); color: var(--volt-ink-2); }

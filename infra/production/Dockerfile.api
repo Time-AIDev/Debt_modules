@@ -1,11 +1,14 @@
-FROM python:3.12-slim
+FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1 PORT=8080
 WORKDIR /app
+RUN apt-get update && apt-get upgrade -y && rm -rf /var/lib/apt/lists/*
 COPY infra/production/requirements.lock ./requirements.lock
 RUN pip install --require-hashes -r requirements.lock && adduser --disabled-password --gecos "" --uid 10001 app
 COPY backend/app ./app
 COPY scripts/import_master_sheet.py ./scripts/import_master_sheet.py
 COPY docs/odoo-comparison/odoo_compare.md ./docs/odoo-comparison/odoo_compare.md
 USER app
+ARG VOLT_GIT_REVISION=unknown
+LABEL org.opencontainers.image.revision=$VOLT_GIT_REVISION
 EXPOSE 8080
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

@@ -166,17 +166,22 @@ describe('the case header and tabs (design D)', () => {
     expect(screen.getByRole('button', { name: 'Facebook' })).toBeEnabled()
   })
 
-  it('keeps ยุติสัญญา visible and disabled below manager, open to a manager', async () => {
+  it('lets an officer terminate a live contract and excludes OPS', async () => {
     const { unmount } = view(kase())
     const officer = await screen.findByRole('button', { name: 'ยุติสัญญา' })
-    expect(officer).toBeDisabled()
-    expect(officer).toHaveAttribute('title', 'เฉพาะผู้จัดการขึ้นไป')
-    unmount()
-    setRole('MANAGER')
+    expect(officer).toBeEnabled()
     const user = userEvent.setup()
-    view(kase())
-    await user.click(await screen.findByRole('button', { name: 'ยุติสัญญา' }))
+    await user.click(officer)
     expect(await screen.findByRole('dialog', { name: 'ยุติสัญญาลูกค้ารายนี้' })).toBeInTheDocument()
+    unmount()
+    setRole('OPS')
+    view(kase())
+    expect(await screen.findByRole('button', { name: 'ยุติสัญญา' })).toBeDisabled()
+  })
+
+  it('hides termination when every contract has already ended', async () => {
+    view(kase({ payment_status: 'CLOSED' }, { contracts: [{ ...CASE.contracts[0], status: 'CLOSED' }] }))
+    expect(screen.queryByRole('button', { name: 'ยุติสัญญา' })).toBeNull()
   })
 
   it('carries a close in the pop-up sheet that calls onClose', async () => {
@@ -193,6 +198,17 @@ describe('the case header and tabs (design D)', () => {
     const card = (await screen.findAllByText('ตารางงวด')).find((el) => el.tagName === 'H2').closest('.card')
     await user.click(within(card).getByRole('button', { name: 'ข้อมูลเพิ่มเติม' }))
     expect(within(card).getByText('ตัวเลขเสิร์ฟจาก API')).toBeInTheDocument()
+  })
+
+  it('explains that the displayed CASH instalment count comes from PEAK', async () => {
+    const user = userEvent.setup()
+    view(kase({}, { payment_summary: { ...CASE.payment_summary,
+      display_instalments: { total_count: 2, paid_count: 1, remaining_count: 1, overdue_count: 1,
+        contract_outstanding: '325000.00', peak_outstanding: '165000.00',
+        provenance_th: 'จำนวนงวดจากใบแจ้งหนี้ PEAK ที่ยืนยันสัญญา', contracts: [] } } }))
+    const card = (await screen.findAllByText('ตารางงวด')).find((el) => el.tagName === 'H2').closest('.card')
+    await user.click(within(card).getByRole('button', { name: 'ข้อมูลเพิ่มเติม' }))
+    expect(within(card).getByText('จำนวนงวดจากใบแจ้งหนี้ PEAK ที่ยืนยันสัญญา')).toBeInTheDocument()
   })
 
   it('says the history in words: channel, allowance, event kinds and ticket teams', async () => {
@@ -283,4 +299,65 @@ describe('the case header and tabs (design D)', () => {
     expect(await screen.findByText('ต้องมีฐานข้อมูลก่อน')).toBeInTheDocument()
     expect(screen.queryByText('ไม่พบรหัสผู้ติดต่อ PEAK ที่ตรงกับคำค้น')).toBeNull()
   })
+})
+
+describe('invoice waiting label and Odoo identity', () => {
+  it('shows Awaiting on an unpaid PEAK invoice', async () => {
+    const user = userEvent.setup()
+    view(kase({}, { invoices: [{ ...CASE.invoices[0], state: 'SENT', source: 'PEAK_REPORT', link_sent: false }] }))
+    await user.click(await screen.findByRole('tab', { name: 'ใบแจ้งหนี้และเงินเข้า' }))
+    expect(await screen.findByText('Awaiting')).toBeInTheDocument()
+  })
+
+  it('copies the exact Odoo lead name separately from the customer number', async () => {
+    const user = userEvent.setup()
+    view(kase({}, { customer: { ...CASE.customer, volt_id: 'old_sheet_name', customer_no: '28006752779',
+      odoo_crm: { url: 'https://odoo.example.com/web#id=163222', name: '28006752779_Danudech_ดนุเดช เลขะสันต์_VOLT' } } }))
+    const copy = await screen.findByRole('button', { name: 'คัดลอกชื่อจาก Odoo' })
+    expect(screen.getByRole('link', { name: '28006752779_Danudech_ดนุเดช เลขะสันต์_VOLT' })).toHaveAttribute('href', 'https://odoo.example.com/web#id=163222')
+    expect(screen.getByText('28006752779', { exact: true })).toBeInTheDocument()
+    await user.click(copy)
+    expect(await navigator.clipboard.readText()).toBe('28006752779_Danudech_ดนุเดช เลขะสันต์_VOLT')
+    expect(await screen.findByRole('status')).toHaveTextContent('คัดลอกแล้ว')
+  })
+})
+
+it('removes the prerequisite contract confirmation form from overview', () => {
+  setRole('MANAGER')
+  api.confirmContractSchedule.mockResolvedValue({ confirmation: {
+    first_due: '2025-10-10', document_ref: 'signed.pdf', confirmed_by: 'Manager', reason: 'checked',
+  } })
+  view(kase({}, { contracts: [{ uid: 'K-review', product: 'LEASE', first_due: '2025-02-10' }],
+    payment_summary: { contracts: [{ contract_uid: 'K-review', product: 'LEASE', requires_schedule_confirmation: true, schedule_verified: false,
+      cycles: [], unplaced_peak_details: [] }], totals: { counts: {}, cycle_count: 0 } } }))
+  expect(screen.queryByLabelText('วันครบกำหนดงวดแรกตามสัญญา')).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: 'ยืนยันวันเริ่มงวด' })).not.toBeInTheDocument()
+})
+
+it('does not display a sheet balance as confirmed or its M mark as a verified contract cycle', async () => {
+  const user = userEvent.setup()
+  view(kase({}, { invoices: [{ ...CASE.invoices[0], uid: 'sheet-review',
+    payment_evidence: 'UNCONFIRMED', confirmed_paid: null, confirmed_outstanding: null,
+    projected_outstanding: null, month_index: 17, contract_cycle: null,
+    unmatched_reason: 'CONTRACT_UNCONFIRMED', outstanding: '12323.00',
+  }] }))
+  await user.click(screen.getByRole('tab', { name: /ใบแจ้งหนี้/ }))
+  const table = screen.getByRole('table', { name: /ใบแจ้งหนี้/ })
+  expect(within(table).getByText('ยังไม่ยืนยันหลักฐาน')).toBeInTheDocument()
+  expect(within(table).queryByText('M17')).not.toBeInTheDocument()
+  expect(within(table).queryByText(/12,323\.00/)).not.toBeInTheDocument()
+})
+
+it('shows confirmed receipt money without presenting the sheet remainder as confirmed debt', async () => {
+  const user = userEvent.setup()
+  view(kase({}, { invoices: [{ ...CASE.invoices[0], uid: 'receipt-only',
+    payment_evidence: 'CONFIRMED', liability_verified: false, confirmed_paid: '40.00',
+    confirmed_outstanding: null, projected_outstanding: null, outstanding: '12323.00',
+    contract_cycle: 1,
+  }] }))
+  await user.click(screen.getByRole('tab', { name: /ใบแจ้งหนี้/ }))
+  const table = screen.getByRole('table', { name: /ใบแจ้งหนี้/ })
+  expect(within(table).getByText(/รับชำระยืนยันแล้ว.*ยอดใบแจ้งหนี้รอตรวจสอบ/)).toBeInTheDocument()
+  expect(within(table).getByText(/40\.00/)).toBeInTheDocument()
+  expect(within(table).queryByText(/12,323\.00/)).not.toBeInTheDocument()
 })

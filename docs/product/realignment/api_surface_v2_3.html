@@ -1,0 +1,45 @@
+<h1>Volt Debt — API Surface v2.3 — Realignment delta</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>API Surface v2.3 — the delta atop v2.2: every endpoint the 2026-09 realignment adds or changes, its refusals, and the routes retired. Where nothing here touches a route, v2.2, v2.1 and v1.0 stand.</td></tr>
+<tr><td>Version</td><td>2.3. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Wire version</td><td>The path segment stays /v1 — every v2.x change is additive; GET /v1/meta/version reports document_version 2.6</td></tr>
+<tr><td>Read with</td><td>Requirements Amendment v2.6 · Data Model v2.3 · Collection Workflow Alignment v3.0</td></tr>
+</table>
+
+<h2>0. Conventions extended</h2>
+<p>Everything from v1.0 to v2.2 holds: RFC 9457 problems with code the only branchable field, message_th always present, band pairs and entity pairs travel together, journey state per tester session. New: every case payload carries next_action and next_action_on (never null in collection); a role header X-Volt-Role (OFFICER | SUPERVISOR | MANAGER | OWNER) selects the session role in the prototype in place of SSO; responses that list PEAK documents carry state and never a QR for anything but APPROVED_IN_PEAK.</p>
+
+<h2>1. Today and the work book</h2>
+<p>GET /v1/today?officer= — the seven-tier list of REQ-COL-071 with meta.counts_by_tier, next_up and reminder_batch (the D-3 and D0 reminders due). GET /v1/workbook?product=&amp;payment_status=&amp;dc_status=&amp;bucket=&amp;band_set=&amp;officer=&amp;q= — the book as rows with the sheet's columns; GET|PUT /v1/workbook/views — saved views per user; GET /v1/workbook:export — CSV. GET /v1/working-list (v2.2) stays as an alias of /v1/today with the old tiers marked deprecated.</p>
+
+<h2>2. Cases, contacts, next actions</h2>
+<p>GET /v1/cases/{uid} — the case with both statuses, the counts, holds, power_state, open PTP, the month grid, invoices and receipts with PEAK state, the contact log. POST /v1/cases/{uid}/next-action {next_action, next_action_on, note} — 422 next_action_required when either is missing. POST /v1/cases/{uid}/dc-status {code} — dictionary-checked (dictionary_value_unknown). POST /v1/contacts (v2.2) now requires next_action and next_action_on in the body unless a PTP or service issue is created in the same call; the response carries the contact_log row. GET /v1/cases/{uid}/contacts — the log, newest first. POST /v1/contacts/{uid}:correct — a new row referencing the old.</p>
+
+<h2>3. Reviews</h2>
+<p>POST /v1/cases/{uid}/review-requests {reason, question} (201) — one open per case (review_pending). GET /v1/reviews?status=OPEN — the shared list (requests and system-raised reviews) for SUPERVISOR and MANAGER. POST /v1/reviews/{uid}:answer {decision, comment} — role-gated; returns the case with the tier-6 item set. The v2.2 manager-review routes stay as aliases.</p>
+
+<h2>4. Power restriction</h2>
+<p>POST /v1/cases/{uid}/power-restriction (201) — refused with power_restriction_preconditions when missed instalments or the broken-PTP condition are not met; opens a review item for the approver. POST /v1/power-restrictions/{uid}:approve · :execute {by, notified_om} · :restore. GET /v1/power-restrictions — the register including the eighteen backfilled.</p>
+
+<h2>5. Invoice pipeline</h2>
+<p>GET /v1/pipeline — items within the look-ahead with both gates. POST /v1/pipeline/{uid}/gates/down-payment {receipt_ref | slip_ref} · POST .../gates/epc-confirmed (read from Odoo; manual with a reason when Odoo is unavailable). POST /v1/pipeline/{uid}:release — 422 gate_not_passed while a gate is open; on success creates the invoice and its PEAK draft and returns both. POST /v1/pipeline/{uid}/delivery {channel} — records sent_at and sent_by; refused with invoice_not_approved when the PEAK document is not APPROVED_IN_PEAK (no link exists yet). POST /v1/pipeline/{uid}/reschedule {decision: STAND | AMEND_DUE_DATE | CANCEL_AND_REISSUE, reason} — the last two create PEAK drafts.</p>
+
+<h2>6. Payments and PEAK documents</h2>
+<p>POST /v1/receipts (v2.2) now takes slip_ref and creates a draft receipt (RECEIPT_FULL or RECEIPT_PARTIAL) — allocation still refuses while OD-02 is open. GET /v1/peak-documents?state= — the queue. POST /v1/peak-documents/{uid}:resend — UNSENT only. POST /v1/peak-documents/{uid}:refresh — read state back. POST /v1/peak-documents/{uid}:approve — does not exist; a request returns 403 peak_draft_only from the fallback handler, and a test asserts no router defines it. POST /v1/credit-notes {invoice_uid, reason} (201) — Manager only, creates CREDIT_NOTE_STANDALONE. POST /v1/invoices/{uid}:issue-peak (v2.2) is retired; release and the monthly run create drafts.</p>
+
+<h2>7. Settings and dictionaries</h2>
+<p>GET /v1/dictionaries · GET /v1/dictionaries/{name} · POST /v1/dictionaries/{name}/values (201, Manager) · POST .../values/{code}:deactivate. GET|PUT /v1/config — the register keys of Amendment v2.6 section 4 with their OPEN or LOCKED state; a LOCKED key (peak_write_mode) refuses PUT with config_locked. GET|POST /v1/band-sets (Manager). POST /v1/customers/{uid}/assign {officer_uid} (Supervisor or Manager).</p>
+
+<h2>8. Migration and data sources</h2>
+<p>POST /v1/migration/runs {source} (201) — imports the working tabs; GET /v1/migration/runs/{uid} — counts by tab, pivot reconciliation, warnings, the gap list. GET /v1/integrations/status now includes the three Odoo reads (dates, tickets, status) each CONFIGURED | UNAVAILABLE | FALLBACK.</p>
+
+<h2>9. Reports</h2>
+<p>GET /v1/reports/weekly?period= — the report in Jo's shape; PUT /v1/reports/weekly/{period}/focus — the lead's next-week text. GET /v1/reports/officers — indicators per officer. GET /v1/reports/bucket-flow?band_set= — movement between buckets over the period.</p>
+
+<h2>10. Retired behind the legacy tag until the last UAT round</h2>
+<p>/v1/orders (the approval queue), /v1/loan-book, /v1/board/*, /v1/recovery-board/*, /v1/today-list, /v1/scenarios, /v1/uat/tasks (replaced by the blind UAT apparatus), and the screen-specific routes the eleven screens do not call. Removed at the end of WS4 with a note in the evidence addendum.</p>
+
+<h2>11. New problem codes</h2>
+<p>next_action_required · dictionary_value_unknown · review_pending · power_restriction_preconditions · gate_not_passed · invoice_not_approved · peak_draft_only · config_locked · migration_source_invalid · pipeline_item_unknown.</p>

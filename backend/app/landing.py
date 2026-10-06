@@ -7,6 +7,7 @@ instead of being re-implemented by every reader.
 import json
 
 from sqlalchemy import text
+from .crm_policy import won_only
 
 BLOCKS = ("leasing", "tracking", "cash", "cash_invoices", "asset", "contact_log")
 
@@ -209,6 +210,38 @@ SHAPED_ONLY = "and t.volt_id not like 'phone-%%' and t.volt_id not like 'lead-%%
 PLACEHOLDER_PREFIXES = ("phone-", "lead-")
 
 
+def _served_filter(shaped_only):
+    if not shaped_only:
+        return ""
+    if not won_only():
+        return SHAPED_ONLY
+    # Only successful, live Odoo snapshots prove CRM eligibility. A verified link
+    # takes precedence over a shared VOLT stem, so another lead cannot admit a
+    # customer whose own linked lead has left Won. Phone matches are insufficient.
+    return SHAPED_ONLY + """
+    and exists (
+      select 1 from landing.customer w
+      join landing.import_run wr on wr.id=w.import_run_id and wr.status='OK'
+      join landing."order" wo on wo.volt_id=w.volt_id and wo.data_source='ODOO'
+      join landing.import_run wor on wor.id=wo.import_run_id and wor.status='OK'
+      where w.data_source='ODOO' and w.retired_at is null and wo.retired_at is null
+      and (wo.extra->>'crm_status'='Won' or
+           (not (wo.extra ? 'crm_status') and wo.order_status='Order - Done'))
+      and ((t.data_source='ODOO' and w.volt_id=t.volt_id) or
+           (t.data_source='SHEET' and case when exists (
+              select 1 from records.identity_link l where l.source='ODOO_CRM_LEAD'
+              and l.retired_at is null and l.customer_no=t.customer_no
+           ) then wo.crm_id::text = (
+              select l.odoo_lead_id::text from records.identity_link l
+              where l.source='ODOO_CRM_LEAD' and l.retired_at is null
+              and l.customer_no=t.customer_no order by l.uid desc limit 1
+           ) else (
+              upper(w.customer_no)=upper(t.customer_no) or
+              split_part(upper(w.volt_id),'_',1)=split_part(upper(t.volt_id),'_',1)
+           ) end))
+    )"""
+
+
 def resolved_customers(conn, shaped_only=False):
     """The precedence-resolved rows. `shaped_only` asks the DATABASE for the served
     slice instead of filtering 350k rows in Python afterwards (bench 2026-09-20: a
@@ -216,14 +249,14 @@ def resolved_customers(conn, shaped_only=False):
     rows = conn.execute(text(
         "select distinct on (t.volt_id) t.* "
         "from landing.customer t %s where true %s %s"
-        % (_ok_runs_clause(), SHAPED_ONLY if shaped_only else "", _PRECEDENCE))).mappings().all()
+        % (_ok_runs_clause(), _served_filter(shaped_only), _PRECEDENCE))).mappings().all()
     return [dict(r) for r in rows]
 
 
 def count_customers(conn, shaped_only=False):
     """Resolved customers, counted in SQL. A header label must not build 33k fixture
     rows to print one number (that cost ~1.4 s on every workbook request)."""
-    extra = " " + SHAPED_ONLY if shaped_only else ""
+    extra = " " + _served_filter(shaped_only)
     return conn.execute(text(
         "select count(distinct t.volt_id) from landing.customer t %s%s"
         % (_ok_runs_clause(), extra))).scalar() or 0

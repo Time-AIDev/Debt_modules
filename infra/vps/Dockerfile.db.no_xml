@@ -1,0 +1,76 @@
+# PostgreSQL 16.15 with the app's supported feature set, excluding unused SQL XML
+# and LLVM JIT. Keep glibc/ICU/locales and the official startup/UID-drop scripts.
+FROM golang:1.27.1-alpine@sha256:8a5910f31396cd4d89662f56c68b3ae31d374308270a1c3bd96672ee5ed43414 AS gosu-builder
+ENV CGO_ENABLED=0 GOMAXPROCS=1 GOMEMLIMIT=128MiB
+WORKDIR /src/gosu
+RUN wget -O /tmp/gosu.tar.gz https://codeload.github.com/tianon/gosu/tar.gz/6456aaa0f3c854d199d0f037f068eb97515b7513 \
+    && echo '33d7537d588ea49458b9509bcf4554bdf5ceacc66da71e5caa1058ea3b689c3b  /tmp/gosu.tar.gz' | sha256sum -c \
+    && tar -xzf /tmp/gosu.tar.gz --strip-components=1 \
+    && go mod download && go mod verify \
+    && go build -trimpath -buildvcs=false -ldflags '-d -w' -o /out/gosu .
+
+FROM postgres@sha256:65b16a8b326e0cfbdf33fa7e783f2a0cb352a61448616ccccfd616ef42aa0f65 AS upstream
+
+FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016 AS postgres-builder
+RUN apt-get update && apt-get install --yes --no-install-recommends \
+    build-essential wget ca-certificates bzip2 pkg-config gettext \
+    libreadline-dev zlib1g-dev libssl-dev libicu-dev liblz4-dev libzstd-dev \
+    libpam0g-dev libkrb5-dev libldap2-dev uuid-dev libsystemd-dev libselinux1-dev
+WORKDIR /src/postgres
+RUN wget -O /tmp/postgresql.tar.bz2 https://ftp.postgresql.org/pub/source/v16.15/postgresql-16.15.tar.bz2 \
+    && echo 'c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed  /tmp/postgresql.tar.bz2' | sha256sum -c \
+    && tar -xjf /tmp/postgresql.tar.bz2 --strip-components=1 \
+    && ./configure --prefix=/usr/lib/postgresql/16 \
+       --bindir=/usr/lib/postgresql/16/bin --libdir=/usr/lib/postgresql/16/lib \
+       --datadir=/usr/share/postgresql/16 --includedir=/usr/include/postgresql/16 \
+       --sysconfdir=/etc/postgresql-common --enable-nls --enable-thread-safety --enable-debug \
+       --disable-rpath --with-pgport=5432 --with-system-tzdata=/usr/share/zoneinfo \
+       --with-openssl --with-icu --with-lz4 --with-zstd --with-pam --with-gssapi \
+       --with-ldap --with-uuid=e2fs --with-systemd --with-selinux \
+       --without-libxml --without-libxslt --without-llvm \
+       CFLAGS='-g -O2 -fstack-protector-strong -fstack-clash-protection -Wformat -Werror=format-security -fcf-protection -fno-omit-frame-pointer' \
+       CPPFLAGS='-D_FORTIFY_SOURCE=2' LDFLAGS='-Wl,-z,relro -Wl,-z,now' \
+    && make -j1 world-bin \
+    && make DESTDIR=/out install-world-bin
+
+FROM python:3.12-slim@sha256:dddfd7e07f9d15aeeca61529320492139d21cac7f0070c00609243e51e4e0016
+RUN apt-get update && apt-get upgrade --yes --no-install-recommends \
+    && apt-get install --yes --no-install-recommends \
+       locales gzip xz-utils zstd libreadline8t64 zlib1g libssl3t64 libicu76 liblz4-1 libzstd1 \
+       libpam0g libgssapi-krb5-2 libldap2 libuuid1 libsystemd0 libselinux1 \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --system --gid 999 postgres \
+    && useradd --system --uid 999 --gid postgres --home-dir /var/lib/postgresql --shell /bin/bash postgres \
+    && echo 'en_US.UTF-8 UTF-8' >> /etc/locale.gen && locale-gen \
+    && mkdir -p /docker-entrypoint-initdb.d /var/lib/postgresql/data /var/run/postgresql \
+    && chown -R postgres:postgres /var/lib/postgresql /var/run/postgresql \
+    && chmod 3777 /var/run/postgresql
+COPY --from=postgres-builder /out/ /
+COPY --from=gosu-builder /out/gosu /usr/local/bin/gosu
+COPY --from=upstream /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+COPY --from=upstream /usr/local/bin/docker-ensure-initdb.sh /usr/local/bin/docker-ensure-initdb.sh
+COPY scripts/check_elf_dependencies.py /tmp/check_elf_dependencies.py
+RUN chmod 0755 /usr/local/bin/gosu /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-ensure-initdb.sh \
+    && sed -ri "s!^#?(listen_addresses)\\s*=\\s*\\S+.*!\\1 = '*'!" /usr/share/postgresql/16/postgresql.conf.sample \
+    && grep -F "listen_addresses = '*'" /usr/share/postgresql/16/postgresql.conf.sample \
+    && echo '/usr/lib/postgresql/16/lib' > /etc/ld.so.conf.d/postgresql.conf && ldconfig \
+    && for package in libxml2 libxslt1.1 libllvm19; do \
+         if dpkg-query -W -f='${db:Status-Abbrev}' "$package" 2>/dev/null | grep -q '^ii'; then \
+           echo 'Excluded XML/JIT runtime dependency remains installed' >&2; exit 1; \
+         fi; \
+       done \
+    && python /tmp/check_elf_dependencies.py /usr/lib/postgresql/16 \
+    && rm /tmp/check_elf_dependencies.py \
+    && gosu postgres id
+ENV PG_MAJOR=16 PG_VERSION=16.15 PGDATA=/var/lib/postgresql/data LANG=en_US.utf8 \
+    PATH=/usr/lib/postgresql/16/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+LABEL volt-debt.postgres.source_version="16.15" \
+      volt-debt.postgres.source_sha256="c1575341fa7bd40f5274ea465b34390f4dc64cdd0770af327005caaeb9f6b7ed" \
+      volt-debt.postgres.sql_xml="disabled" volt-debt.postgres.llvm_jit="disabled" \
+      volt-debt.gosu.version="1.19" volt-debt.gosu.go_version="go1.27.1" \
+      volt-debt.gosu.source_commit="6456aaa0f3c854d199d0f037f068eb97515b7513"
+VOLUME /var/lib/postgresql/data
+EXPOSE 5432
+STOPSIGNAL SIGINT
+ENTRYPOINT ["docker-entrypoint.sh"]
+CMD ["postgres"]

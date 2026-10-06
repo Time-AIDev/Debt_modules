@@ -27,6 +27,10 @@ Asia/Bangkok. This supersedes the initial installation history below.
   HTTP redirects to HTTPS with 308. Unauthenticated auth/me and workbook API
   requests return 401. Google auth configured, seven allowlist entries,
   zero test accounts, tab sessions, `PROD_GO_LIVE_ENABLED=false`.
+- Caddy was reloaded for `collection.volt.co.th`. Requests with that Host header
+  return 200 for the frontend and `/api/v1/auth/config` through the existing
+  temporary hostname's TLS connection. DNS and a certificate for the new name
+  still need separate verification.
 - ClamAV accepted clean bytes and refused standard EICAR test bytes through the
   API's scanner adapter; private object directory writable by the application.
 - Daily backup timer enabled for 03:15–03:25 Asia/Bangkok, capturing PostgreSQL,
@@ -50,7 +54,7 @@ Operational instructions: [README.md](README.md), [BACKUPS.md](BACKUPS.md).
 
 ## Still required before public production use
 
-1. DNS A record `debtcollection.volt.co.th` → `143.198.207.143`; resolution still
+1. DNS A record `collection.volt.co.th` → `143.198.207.143`; resolution still
    failed during final checks. Do not publish AAAA without global IPv6.
 2. Production-host certificate issuance and a real Google login, with that origin
    registered in the OAuth client.

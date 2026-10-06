@@ -327,6 +327,7 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
                 run = peak_writer.apply_run(conn, run_id, by=x_volt_officer or x_volt_role.upper(),
                                             allow_older=bool(body.get("allow_older")),
                                             force=bool(body.get("force")))
+                reconciliation = payment_claims.reconcile_applied(conn, run_id, reason="invoice_apply")
             except peak_writer.WriterRefused as exc:
                 raise _refused(exc)
     finally:
@@ -338,8 +339,9 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
     audit.describe(act="PEAK_REPORT_APPLIED", subject=("import_run", str(run_id)),
                    detail={"report_as_of": meta.get("report_as_of"), "matched": meta.get("matched"),
                            "candidates": meta.get("candidates"), "unmatched": meta.get("unmatched"),
-                           "allow_older": bool(body.get("allow_older"))})
-    return _served({"run": run, "note_th": "ใช้รายงานนี้แล้ว — เซสชันนี้เห็นข้อมูลใหม่ทันที เซสชันอื่นอัปเดตอัตโนมัติเมื่อเปิดหน้าถัดไป",
+                           "allow_older": bool(body.get("allow_older")), "reconciliation": reconciliation})
+    return _served({"run": run, "reconciliation": reconciliation,
+                    "note_th": "ใช้รายงานนี้แล้ว — เซสชันนี้เห็นข้อมูลใหม่ทันที เซสชันอื่นอัปเดตอัตโนมัติเมื่อเปิดหน้าถัดไป",
                     "note_en": "This report is now in use — this session sees the new data at once; other sessions catch up automatically on their next request"},
                    "peak", run_id)
 
@@ -410,12 +412,14 @@ def confirm_link(body: dict = Body(...), x_volt_role: str = Header(default="OFFI
         with _write_tx(conn):
             link = peak_links.confirm(conn, code, no, by=x_volt_officer or x_volt_role.upper(), reason=body.get("reason"),
                                       contract_uid=body.get("contract_uid"))
+            reconciliation = payment_claims.reconcile_current("identity_link_confirmed", conn=conn)
     finally:
         conn.close()
     # I2: audit before _after_apply() — see apply_run's own note above.
     audit.describe(act="PEAK_LINK_CONFIRMED", subject=("customer", "sheet-%s" % no),
-                   detail={"contact_code": link["contact_code"], "reason": body.get("reason")})
-    return _served({"link": link}, "peak-link")
+                   detail={"contact_code": link["contact_code"], "reason": body.get("reason"),
+                           "reconciliation": reconciliation})
+    return _served({"link": link, "reconciliation": reconciliation}, "peak-link")
 
 
 @router.post(PREFIX + "/links/{uid}:retire")
@@ -427,14 +431,16 @@ def retire_link(uid: int, body: dict = Body(default=None), x_volt_role: str = He
     try:
         with _write_tx(conn):
             link = peak_links.retire(conn, uid, by=x_volt_officer or x_volt_role.upper())
+            reconciliation = payment_claims.reconcile_current("identity_link_retired", conn=conn) if link else None
     finally:
         conn.close()
     if link is None:
         raise errors.not_found("active link %s" % uid)
     # I2: audit before _after_apply() — see apply_run's own note above.
     audit.describe(act="PEAK_LINK_RETIRED", subject=("customer", "sheet-%s" % link["customer_no"]),
-                   detail={"contact_code": link["contact_code"], "reason": (body or {}).get("reason")})
-    return _served({"link": link}, "peak-link")
+                   detail={"contact_code": link["contact_code"], "reason": (body or {}).get("reason"),
+                           "reconciliation": reconciliation})
+    return _served({"link": link, "reconciliation": reconciliation}, "peak-link")
 
 
 # --- feedback round 2 / Q6: the receipt report door (TASK-205) ----------------------

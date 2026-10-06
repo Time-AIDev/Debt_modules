@@ -1,4 +1,18 @@
-debtcollection.volt.co.th, debt.143-198-207-143.sslip.io {
+collection.volt.co.th, debt.143-198-207-143.sslip.io {
+    header Strict-Transport-Security "max-age=31536000"
+    request_body {
+        max_size 100MB
+    }
+    handle /readyz {
+        reverse_proxy api:8080
+    }
+    handle /healthz {
+        reverse_proxy api:8080
+    }
+    handle /api/readyz {
+        uri strip_prefix /api
+        reverse_proxy api:8080
+    }
     handle /api/* {
         reverse_proxy api:8080
     }

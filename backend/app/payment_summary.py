@@ -19,20 +19,22 @@ The overdue figure is not re-derived here: it is the engine's `cumulative_arrear
 passed in by the caller, so the overview can never disagree with the header.
 """
 from decimal import Decimal
+from collections import Counter
 
 from . import cases as cases_domain
 from . import journey
 
 ZERO = Decimal("0.00")
-STATUSES = ("PAID", "OVERDUE", "UPCOMING", "NO_AMOUNT")
+CENT = Decimal("0.01")
+STATUSES = ("PAID", "OVERDUE", "UPCOMING", "NO_AMOUNT", "INFERRED_PAID", "SHEET_REPORTED_PAID", "UNCONFIRMED", "REJECTED")
 
 PROVENANCE_TH = ("ยอดชำระแต่ละงวดมาจากตารางผ่อนชำระของแอป ซึ่งคำนวณย้อนจากชีต "
                  "(งวดที่ครบกำหนดแล้ว ลบงวดที่ชีตเขียนว่าค้าง) ไม่ใช่จากใบเสร็จรับเงินโดยตรง")
 PROVENANCE_EN = ("each cycle's paid figure comes from the app's schedule, walked back from the sheet "
                  "(cycles due, minus the cycles the sheet marks late) — not from receipts")
 
-PROVENANCE_PEAK_TH = "สถานะแต่ละงวดมาจากรายงานใบแจ้งหนี้ PEAK (จ่ายแล้ว / เกินกำหนด / รอชำระ) ตามเลขงวด M n/N บนใบแจ้งหนี้"
-PROVENANCE_PEAK_EN = "each cycle's status comes from the PEAK invoice report, by the M n/N cycle mark on the invoice"
+PROVENANCE_PEAK_TH = "สถานะแต่ละงวดมาจากรายงานใบแจ้งหนี้ PEAK (จ่ายแล้ว / เกินกำหนด / รอชำระ) ตามสัญญาที่ยืนยันและเดือน/วันที่ของใบแจ้งหนี้"
+PROVENANCE_PEAK_EN = "each cycle's status comes from the PEAK invoice report, by verified contract and invoice calendar period"
 PROVENANCE_MIXED_TH = PROVENANCE_TH + " · งวดที่มีใบแจ้งหนี้ PEAK ใช้สถานะจาก PEAK"
 PROVENANCE_MIXED_EN = PROVENANCE_EN + " · cycles with a PEAK invoice take PEAK's status"
 
@@ -41,7 +43,8 @@ PEAK_CYCLE_STATUS = {"PAID": "PAID", "OVERDUE": "OVERDUE", "SENT": "UPCOMING", "
 
 
 def _money(value):
-    return str(Decimal(str(value)).quantize(Decimal("0.01")))
+    value = value if isinstance(value, Decimal) else Decimal(str(value))
+    return str(value.quantize(CENT))
 
 
 def _kind(product, n):
@@ -51,9 +54,10 @@ def _kind(product, n):
     return "INSTALMENT"
 
 
-def _status(line, business_date):
-    outstanding = line.outstanding_amount
-    if line.total_amount <= 0:
+def _status(line, business_date, *, outstanding=None, total=None):
+    outstanding = line.outstanding_amount if outstanding is None else outstanding
+    total = line.total_amount if total is None else total
+    if total <= 0:
         return "NO_AMOUNT"
     if outstanding <= 0:
         return "PAID"
@@ -81,9 +85,18 @@ def _breakdown(cycles):
         "instalment": [cycle for cycle in cycles if cycle["kind"] != "DEPOSIT"],
     }
     breakdown = {}
+    statuses = STATUSES if any(c.get("payment_evidence") for c in cycles) else STATUSES[:4]
     for name, rows in groups.items():
-        counts = {status: sum(1 for row in rows if row["status"] == status) for status in STATUSES}
+        counted = Counter(row["status"] for row in rows)
+        counts = {status: counted[status] for status in statuses}
+        unverified_paid = sum(1 for row in rows
+                              if row["status"] in ("INFERRED_PAID", "SHEET_REPORTED_PAID")
+                              or (row["status"] == "PAID" and row.get("source") == "SHEET_DERIVED"))
+        display_paid = counts["PAID"] + counts.get("INFERRED_PAID", 0) + counts.get("SHEET_REPORTED_PAID", 0)
         breakdown[name] = {
+            "display_paid_count": display_paid,
+            "unverified_paid_count": unverified_paid,
+            "display_remaining_count": len(rows) - display_paid,
             "count": len(rows),
             "counts": counts,
             "remaining_count": len(rows) - counts["PAID"],
@@ -99,55 +112,78 @@ def _active_lines(contract):
     return ordered_regular(cases_domain.contract_field_of(contract, "instalments") or [])
 
 
+class PeakCycles(dict):
+    """Per-read cycle matches with unplaced evidence; never stored on shared fixtures."""
+    def __init__(self, unresolved):
+        super().__init__()
+        self.unplaced_details = unresolved
+
+
 def peak_cycles_for(contract_uid, jstate):
-    """This session's PEAK invoices for one contract, keyed by cycle. An invoice with no
-    cycle mark, below cycle 1, or past the contract's own last cycle, is counted as
-    unplaced, never dropped onto a slot. Two invoices landing on the same cycle: the one
-    issued latest wins (ties by the greater doc_no); the one it beats is superseded, not
-    silently lost — each winning cycle carries how many it beat."""
+    """Verified contract/calendar matches, retaining every effective document and
+    exposing unmatched evidence separately without mutating shared fixtures."""
+    from . import instalment_evidence as evidence
     found = journey.contract_by_uid(contract_uid)
-    cycle_count = len(_active_lines(found[1])) if found else None
-    by_cycle = {}
-    unplaced = 0
-    as_of = None
-    for inv in jstate.invoices.values():
-        if inv["contract_uid"] != contract_uid or inv.get("source") != "PEAK_REPORT":
-            continue
-        # journey.py's _seed_peak_invoices stamps this note from the template
-        # "จากรายงานใบแจ้งหนี้ PEAK ณ %s" — an edit to that template must change this parse too.
-        as_of = as_of or (inv.get("peak_state_note_th") or "").rsplit(" ", 1)[-1]
-        n = inv.get("month_index")
-        if not n or n < 1 or (cycle_count is not None and n > cycle_count):
-            unplaced += 1
-            continue
-        by_cycle.setdefault(n, []).append(inv)
-    cycles = {}
-    for n, invs in by_cycle.items():
-        winner = max(invs, key=lambda i: (i.get("issued_on") or "", i.get("peak_number") or ""))
-        outstanding = Decimal(winner.get("outstanding") or winner["amount"])
-        cycles[n] = {"status": PEAK_CYCLE_STATUS.get(winner["state"], "UPCOMING"),
-                     "paid": _money(Decimal(winner["amount"]) - outstanding), "outstanding": _money(outstanding),
-                     "doc_no": winner.get("peak_number"), "superseded_count": len(invs) - 1}
-    return cycles, unplaced, (as_of if as_of and as_of != "—" else None)
+    if not found:
+        return {}, 0, None
+    contract = found[1]
+    own = evidence.evidence_invoices(contract_uid, jstate)
+    lines = _active_lines(contract)
+    groups, unresolved = evidence.group_invoices(contract, own, lines)
+    cycles = PeakCycles(unresolved)
+    from . import invoice_reviews
+    reviews = invoice_reviews.decisions()
+    rejected = [i for i in own if invoice_reviews.decorate(i, reviews)["review_status"] == "REJECTED"]
+    rejected_groups = {}
+    for inv in rejected:
+        n = evidence.match_invoice(contract, inv, lines)[0]
+        if n and n not in groups:
+            rejected_groups.setdefault(n, []).append(inv)
+    cycles.rejected = rejected_groups
+    for n, invoices in groups.items():
+        amount = sum((Decimal(inv["amount"]) for inv in invoices), ZERO)
+        outstanding = sum((evidence.invoice_outstanding(inv) for inv in invoices), ZERO)
+        dates = sorted({inv["due_date"] for inv in invoices if inv.get("due_date")})
+        cycles[n] = {"status": "NO_AMOUNT" if amount <= 0 else "PAID" if outstanding <= 0 else
+                     "OVERDUE" if any(PEAK_CYCLE_STATUS.get(inv["state"]) == "OVERDUE" for inv in invoices)
+                     else "UPCOMING", "paid": _money(max(ZERO, amount - outstanding)),
+                     "source": "PEAK" if any(i.get("source") == "PEAK_REPORT" for i in invoices) else "RECEIPT",
+                     "amount": _money(amount), "outstanding": _money(outstanding),
+                     "doc_no": invoices[0].get("peak_number"), "superseded_count": 0,
+                     "invoices": [{"uid": i["uid"], "doc_no": i.get("peak_number"),
+                                   "due_date": i.get("due_date"), "state": i["state"],
+                                   "matching_method": i["matching_method"]} for i in invoices],
+                     "due_date": dates[0] if dates else None, "due_dates": dates,
+                     "open_due_date": min((inv["due_date"] for inv in invoices
+                        if Decimal(inv.get("outstanding") or "0") > 0 and inv.get("due_date")), default=None),
+                     "matching_method": invoices[0]["matching_method"],
+                     "liability_verified": all(not i.get("receipt_only") for i in invoices)}
+    as_of = next(((inv.get("peak_state_note_th") or "").rsplit(" ", 1)[-1] for inv in own), None)
+    return cycles, len(unresolved), as_of if as_of and as_of != "—" else None
 
 
 def for_contract(contract, business_date, overdue_amount, month_cells=None, peak_cycles=None):
     """One contract's cycles. A superseded line (a restructure's old schedule) is not
     a cycle — the engine follows is_active_regular, and so does this."""
+    from . import instalment_evidence as evidence
+    strict = evidence.required(contract)
     lines = _active_lines(contract)
     cycles = []
     instalment_n = 0
     for n, line in enumerate(lines, start=1):
         paid = line.paid_principal + line.paid_interest + line.paid_fee
-        outstanding = max(line.outstanding_amount, ZERO)
+        total = line.total_amount
+        raw_outstanding = line.outstanding_amount
+        outstanding = max(raw_outstanding, ZERO)
         kind = _kind(contract.product, n)
         if kind != "DEPOSIT":
             instalment_n += 1
         cycle = {
             "n": n, "kind": kind, "instalment_n": instalment_n if kind != "DEPOSIT" else None,
             "due_date": str(line.due_date),
-            "amount": _money(line.total_amount), "paid": _money(paid), "outstanding": _money(outstanding),
-            "status": _status(line, business_date), "partly_paid": paid > 0 and outstanding > 0,
+            "amount": _money(total), "paid": _money(paid), "outstanding": _money(outstanding),
+            "status": _status(line, business_date, outstanding=raw_outstanding, total=total),
+            "partly_paid": paid > 0 and outstanding > 0,
             "source": "SHEET_DERIVED", "doc_no": None,
         }
         hit = (peak_cycles or {}).get(n)
@@ -156,16 +192,41 @@ def for_contract(contract, business_date, overdue_amount, month_cells=None, peak
             # replace the engine's for this slot, and the slot says so.
             cycle.update(status=hit["status"], paid=hit["paid"], outstanding=hit["outstanding"],
                          partly_paid=Decimal(hit["paid"]) > 0 and Decimal(hit["outstanding"]) > 0,
-                         source="PEAK", doc_no=hit.get("doc_no"))
+                         source=hit.get("source", "PEAK"), doc_no=hit.get("doc_no"))
         move = getattr(line, "service_deferral", None)
-        if move:
+        if move and not strict:
             cycle.update(deferral=move, collection_status="DEFERRED",
                          status=_status(line, business_date), paid=_money(paid),
                          outstanding=_money(outstanding), partly_paid=paid > 0 and outstanding > 0)
+        if strict:
+            cycle["original_status"] = _status(line, business_date)
+            evidence.cycle_evidence(contract, line, cycle, hit)
+            if move:
+                cycle.update(deferral=move, collection_status="DEFERRED", collection_due_date=str(line.due_date))
+            if hit and Decimal(cycle["outstanding"]) > 0:
+                due = str(line.due_date) if move else hit.get("open_due_date") or cycle["due_date"]
+                cycle["status"] = "OVERDUE" if due and due < str(business_date) else "UPCOMING"
+            if line.due_date > business_date:
+                cycle["review_amount"] = "0.00"
+        elif hit and hit.get("due_date") and not move:
+            cycle["schedule_due_date"] = str(line.due_date)
+            cycle["due_date"] = hit["due_date"]
+            if Decimal(cycle["outstanding"]) > 0:
+                cycle["status"] = "OVERDUE" if cycle["due_date"] < str(business_date) else "UPCOMING"
+        if n in getattr(peak_cycles, "rejected", {}):
+            cycle.update(status="REJECTED", review_status="REJECTED", collection_included=False,
+                         paid="0.00", outstanding="0.00", review_amount="0.00", partly_paid=False)
         cycles.append(cycle)
-    upcoming = min((c for c in cycles if c["status"] == "UPCOMING"),
+    upcoming = min((c for c in cycles if c["status"] == "UPCOMING" and c["due_date"]),
                    key=lambda c: c["due_date"], default=None)
-    counts = {s: sum(1 for c in cycles if c["status"] == s) for s in STATUSES}
+    unplaced = getattr(peak_cycles, "unplaced_details", []) if strict else []
+    confirmed_unplaced = [inv for inv in unplaced if inv.get("contract_resolved")]
+    unplaced_paid = sum((max(ZERO, Decimal(inv["amount"]) - Decimal(inv["outstanding"])) for inv in confirmed_unplaced), ZERO)
+    unplaced_outstanding = sum((Decimal(inv["outstanding"]) for inv in confirmed_unplaced), ZERO)
+    counted = Counter(c["status"] for c in cycles)
+    counts = {s: counted[s] for s in (STATUSES if strict else STATUSES[:4])}
+    cycle_paid = sum((Decimal(c["paid"]) for c in cycles), ZERO)
+    cycle_outstanding = sum((Decimal(c["outstanding"]) for c in cycles), ZERO)
     return {
         "contract_uid": contract.uid,
         "product": contract.product,
@@ -184,15 +245,30 @@ def for_contract(contract, business_date, overdue_amount, month_cells=None, peak
         # quantized paid/outstanding must show up here too, or the contract totals would
         # disagree with the very cycle table they sit above. `cycles` is one entry per
         # `lines` entry (same loop), so nothing here is dropped or counted twice.
-        "paid_amount": _money(sum((Decimal(c["paid"]) for c in cycles), ZERO)),
-        "outstanding_amount": _money(sum((Decimal(c["outstanding"]) for c in cycles), ZERO)),
+        "matched_paid_amount": _money(cycle_paid),
+        "unplaced_confirmed_paid": _money(unplaced_paid),
+        "unplaced_confirmed_outstanding": _money(unplaced_outstanding),
+        "paid_amount": _money(cycle_paid + unplaced_paid),
+        "outstanding_amount": _money(cycle_outstanding + unplaced_outstanding),
+        "review_amount": _money(sum((Decimal(c.get("review_amount", "0")) for c in cycles), ZERO)),
+        "review_count": sum(1 for c in cycles if Decimal(c.get("review_amount", "0")) > 0 or
+                            (c.get("liability_verified") is False and c["due_date"] <= str(business_date))),
+        "schedule_confirmation": getattr(contract, "schedule_confirmation", None),
+        "requires_schedule_confirmation": strict,
+        "source_first_due": getattr(contract, "sheet_row", {}).get("first_payment_date") if strict else str(contract.first_due),
+        "schedule_verified": bool(getattr(contract, "schedule_confirmation", None)) if strict else True,
+        "schedule_conflict": ({"source_first_due": contract.sheet_row.get("first_payment_date"),
+            "confirmed_first_due": str(contract.first_due)} if strict and getattr(contract, "schedule_confirmation", None)
+            and contract.sheet_row.get("first_payment_date") != str(contract.first_due) else None),
+        "unplaced_peak_details": unplaced,
         "overdue_amount": _money(overdue_amount),
         "next_due": ({"n": upcoming["n"], "due_date": upcoming["due_date"], "amount": upcoming["amount"]}
                      if upcoming else None),
         "sheet": _sheet_count(month_cells),
         "cycles": cycles,
-        "source": "PEAK" if any(c["source"] == "PEAK" for c in cycles) else "SHEET_DERIVED",
-        "peak": ({"invoices": len(peak_cycles), "report_as_of": None,
+        "source": "PEAK" if any(c["source"] == "PEAK" for c in cycles) else
+                  "RECEIPT" if any(c["source"] == "RECEIPT" for c in cycles) else "SHEET_DERIVED",
+        "peak": ({"invoices": sum(len(v.get("invoices") or [None]) for v in peak_cycles.values()), "report_as_of": None,
                   "superseded_invoices": sum(v.get("superseded_count", 0) for v in peak_cycles.values())}
                  if peak_cycles else None),
         "unplaced_peak_invoices": 0,
@@ -202,8 +278,11 @@ def for_contract(contract, business_date, overdue_amount, month_cells=None, peak
 def build(entries, business_date):
     """The case's overview from its per-contract entries, with the totals summed here."""
     totals = {
+        "review_amount": _money(sum((Decimal(e.get("review_amount", "0")) for e in entries), ZERO)),
+        "review_count": sum(e.get("review_count", 0) for e in entries),
         "cycle_count": sum(e["cycle_count"] for e in entries),
-        "counts": {s: sum(e["counts"][s] for e in entries) for s in STATUSES},
+        "counts": {s: sum(e["counts"].get(s, 0) for e in entries)
+                   for s in (STATUSES if any(c.get("payment_evidence") for e in entries for c in e["cycles"]) else STATUSES[:4])},
         "contract_amount": _money(sum((Decimal(e["contract_amount"]) for e in entries), ZERO)),
         "paid_amount": _money(sum((Decimal(e["paid_amount"]) for e in entries), ZERO)),
         "outstanding_amount": _money(sum((Decimal(e["outstanding_amount"]) for e in entries), ZERO)),
@@ -225,6 +304,10 @@ def build(entries, business_date):
         "summed_across_contracts": len(entries) > 1,
         "business_date": str(business_date),
         "indicative": not all_peak,
-        "provenance_th": PROVENANCE_PEAK_TH if all_peak else (PROVENANCE_MIXED_TH if any_peak else PROVENANCE_TH),
-        "provenance_en": PROVENANCE_PEAK_EN if all_peak else (PROVENANCE_MIXED_EN if any_peak else PROVENANCE_EN),
+        "provenance_th": ("ยอดชำระและยอดค้างยืนยันนับจาก PEAK หรือใบรับเงินที่ยืนยันแล้วเท่านั้น ชีตระบุว่าจ่ายและงวดอนุมานแสดงแยก และไม่รวมในยอดยืนยัน"
+                          if any(e.get("requires_schedule_confirmation") for e in entries) else
+                          PROVENANCE_PEAK_TH if all_peak else (PROVENANCE_MIXED_TH if any_peak else PROVENANCE_TH)),
+        "provenance_en": ("Confirmed totals use PEAK or verified receipts only. Sheet-reported and inferred payments are shown separately and excluded from confirmed totals."
+                          if any(e.get("requires_schedule_confirmation") for e in entries) else
+                          PROVENANCE_PEAK_EN if all_peak else (PROVENANCE_MIXED_EN if any_peak else PROVENANCE_EN)),
     }

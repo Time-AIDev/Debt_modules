@@ -828,9 +828,9 @@ def case_arrears(case):
 # --- ending a contract (2026-09-20, the Closed/Terminated ruling) --------------------
 
 def termination_gate(customer):
-    """The money rule for ending a contract: every contract is either already ended or
-    owes nothing. Returns `(blocking, checks)` — an empty `blocking` means the way is
-    open, and `checks` is the served evidence for the ones that passed.
+    """Legacy balance-closure diagnostic, not used by the termination command.
+
+    Returns `(blocking, checks)` for callers checking whether a balance is settled.
 
     A contract's `closing_balance` is the engine's own figure (money/arrears.py) and it
     does NOT move because a status changed, so the gate is "the balance was closed by
@@ -846,6 +846,12 @@ def termination_gate(customer):
         if status in ENDED_CONTRACT_STATUSES:
             checks.append({"contract_uid": contract.uid, "status": status, "closed_by": "status"})
             continue
+        from . import instalment_evidence, payment_summary, journey
+        if instalment_evidence.required(contract) and not instalment_evidence.fully_reviewed(
+                contract, journey.for_current(), payment_summary._active_lines(contract)):
+            blocking.append({"contract_uid": contract.uid, "reason": "BALANCE_REQUIRES_REVIEW",
+                             "outstanding": None, "payoff_amount": None})
+            continue
         block = main._contract_view(contract)[3]
         if block.closing_balance > 0:
             blocking.append({"contract_uid": contract.uid,
@@ -857,9 +863,7 @@ def termination_gate(customer):
 
 
 def validate_termination_inputs(cause, reason):
-    """The cheap checks first — a malformed request must not hide behind the money
-    gate (the same order set_dc_status/set_payment_status keep). Returns the reason.
-    Raises CaseError `termination_cause_unknown` / `reason_required`."""
+    """Validate the required cause and reason for ending a live contract."""
     if cause not in TERMINATION_CAUSES:
         raise CaseError("termination_cause_unknown",
                         "%r is not a termination cause; use one of %s" % (cause, ", ".join(TERMINATION_CAUSES)),
@@ -875,8 +879,8 @@ def validate_termination_inputs(cause, reason):
 def record_termination(contract, cause, by, reason, instrument, status="TERMINATED", on=None):
     """The ONE writer of an ended contract (2026-09-20).
 
-    Both terminal paths go through here: the terminate act (status TERMINATED, any
-    instrument that closed the balance) and the OWNER write-off (status WRITTEN_OFF —
+    Both terminal paths go through here: the terminate act (status TERMINATED,
+    which preserves the outstanding balance) and the OWNER write-off (status WRITTEN_OFF —
     its own contract status, because the books must keep saying the loss was written
     off, while the case derives TERMINATED all the same).
 
@@ -963,7 +967,13 @@ def derive_dc_status(state, case, trigger, result=None, next_action=None, by="SY
         # ยอดค้าง of 8,798.00 is the app disagreeing with itself: the status stays
         # where it was and the hold is carried on the case, beside the money.
         arrears = case_arrears(case)
-        if arrears > 0:
+        from . import instalment_evidence, journey, payment_summary
+        customer = customer_by_uid(case["customer_uid"])
+        awaiting_review = customer is not None and any(
+            instalment_evidence.required(k) and not instalment_evidence.fully_reviewed(
+                k, journey.for_current(), payment_summary._active_lines(k))
+            for k in customer.contracts)
+        if arrears > 0 or awaiting_review:
             set_allocation_hold(case, arrears)
             return None
         clear_allocation_hold(case)
@@ -1615,12 +1625,12 @@ def set_payment_status(state, case, code, by, reason=None):
                         (code, ", ".join(MANUAL_PAYMENT_STATUSES)),
                         message_th="ไม่รู้จักสถานะการชำระนี้", known=list(MANUAL_PAYMENT_STATUSES))
     # 2026-09-20: TERMINATED exists, but not as a free pick — it must carry a cause
-    # and a closed balance, so it is set by the terminate act alone. The refusal
+    # and a reason, so it is set by the terminate act alone. The refusal
     # points there rather than letting this route write a status with no cause.
     if code == "TERMINATED":
         raise CaseError("payment_status_terminate_via_route",
                         "TERMINATED is set by terminating the contract, with a cause",
-                        message_th="สถานะยุติสัญญาตั้งได้จากคำสั่งยุติสัญญาเท่านั้น (ต้องระบุสาเหตุและปิดยอดก่อน)")
+                        message_th="สถานะยุติสัญญาตั้งได้จากคำสั่งยุติสัญญาเท่านั้น (ต้องระบุสาเหตุและเหตุผล)")
     if not reason or not str(reason).strip():
         raise CaseError("reason_required", "Changing the payment status needs a reason",
                         message_th="ต้องระบุเหตุผลในการเปลี่ยนสถานะการชำระ")

@@ -32,6 +32,7 @@ resume_writers() {
     for attempt in 1 2 3; do
         if docker start "${resume_ids[@]}" >>"$backup_dir/diagnostics.log" 2>&1; then
             resume_ids=()
+            rm -f "$CONFIG_ROOT/backup-paused-writers.json"
             return 0
         fi
         sleep 1
@@ -112,7 +113,18 @@ if [[ "$QUIESCE_WRITERS" == 1 ]]; then
         resume_ids+=("${ids[@]}")
     done
     if ((${#resume_ids[@]})); then
-        # Register all original IDs before stopping any, so EXIT can resume them.
+        # Persist original IDs before stopping any, so reboot/SIGKILL recovery can resume them.
+        python3 - "$CONFIG_ROOT/backup-paused-writers.json" "${resume_ids[@]}" <<'PYRECOVERY'
+import json, os, sys
+from pathlib import Path
+p = Path(sys.argv[1]); temporary = p.with_suffix(".tmp")
+with temporary.open("w") as file:
+    json.dump(sys.argv[2:], file); file.flush(); os.fsync(file.fileno())
+temporary.chmod(0o600); temporary.replace(p)
+directory = os.open(p.parent, os.O_RDONLY | os.O_DIRECTORY)
+try: os.fsync(directory)
+finally: os.close(directory)
+PYRECOVERY
         log 'Pausing API and worker while capturing database and private objects.'
         timeout --signal=TERM --kill-after=15s 90s \
             docker stop --time 60 "${resume_ids[@]}" >>"$backup_dir/diagnostics.log"

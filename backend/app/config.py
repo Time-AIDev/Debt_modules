@@ -362,7 +362,8 @@ def resolve_business_date():
 class _SettingsProxy:
     def __getattr__(self, name):
         current = _store.for_current()
-        if os.environ.get("ENV") == "prd":
+        from .runtime_policy import shared_state_enabled
+        if shared_state_enabled():
             if name == "business_date": return resolve_business_date()
             if name == "penalty_invoicing_enabled": return False
         if name == "business_date":

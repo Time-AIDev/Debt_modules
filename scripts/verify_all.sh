@@ -23,7 +23,7 @@ step "starting the API for the black-box pass"
 # leave uvicorn running, holding the pipe open, and this script would never return.
 # Output goes to a log so the server never holds stdout either.
 LOG="$(mktemp -t volt-debt-verify)"
-( cd "$ROOT/backend" && exec .venv/bin/uvicorn app.main:app --port 8099 --log-level warning ) >"$LOG" 2>&1 &
+( cd "$ROOT/backend" && exec env DATABASE_URL= AUTH_MODE=off ENV=dev VOLT_SHARED_STATE_ENABLED=false ODOO_URL= ODOO_DB= ODOO_LOGIN= ODOO_API_KEY= VOLT_BUSINESS_DATE=2026-10-23 .venv/bin/uvicorn app.main:app --port 8099 --log-level warning ) >"$LOG" 2>&1 &
 API_PID=$!
 cleanup() { kill "$API_PID" 2>/dev/null; wait "$API_PID" 2>/dev/null; rm -f "$LOG"; }
 trap cleanup EXIT

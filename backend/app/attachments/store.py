@@ -1,13 +1,25 @@
-"""Where attachment bytes live: records.attachment when a database is configured,
-a process dict labelled not-durable when it is not (the same three-state seam db.py
-states). Bytes never touch disk and never appear in a log line.
+"""Attachment metadata plus integrity-checked private bytes.
+
+Production stores clean bytes in immutable private filesystem/GCS objects. Local
+database mode uses records.attachment; without a DB files are explicitly volatile.
+Private bytes and their contents never appear in a log line.
 """
 import uuid
+import hashlib
 from datetime import datetime, timezone
 
 from sqlalchemy import text
 
 from .. import db
+
+
+def _verified(row, raw):
+    if len(raw) != row["size"] or hashlib.sha256(raw).hexdigest() != row["sha256"]:
+        from ..errors import Problem
+        raise Problem("attachment_integrity_failed", 409, "File refused",
+                      "Stored file integrity verification failed.",
+                      "ไฟล์ที่จัดเก็บไม่ตรงกับข้อมูลต้นฉบับ กรุณาติดต่อผู้ดูแลระบบ", "DEBT-ATT-409")
+    return raw
 
 NOT_DURABLE_EN = "No database — this file is held in memory and is lost on restart"
 NOT_DURABLE_TH = "ไม่มีฐานข้อมูล — ไฟล์นี้อยู่ในหน่วยความจำและหายเมื่อรีสตาร์ท"
@@ -38,6 +50,7 @@ def _public(row, durable):
 
 
 def put(meta, raw, uploaded_by, scan):
+    _verified(meta, raw)
     # I2 (fix round 1): uploaded_at is stamped tz-aware on the memory path, and on
     # the Postgres path the INSERT ... RETURNING hands back the column's own
     # DEFAULT now() value rather than this module's clock guess — so put() and a
@@ -71,7 +84,7 @@ def put(meta, raw, uploaded_by, scan):
 def get(uid):
     if not db.configured():
         row = _MEMORY.get(uid)
-        return (None if row is None or row["deleted_at"] else (_public(row, False), row["bytes"]))
+        return (None if row is None or row["deleted_at"] else (_public(row, False), _verified(row, row["bytes"])))
     conn = db.connect()
     try:
         row = conn.execute(text("select * from records.attachment where uid = :u and deleted_at is null"),
@@ -84,7 +97,18 @@ def get(uid):
         raw = task_objects.get(row["object_name"], bucket_env="CLEAN_BUCKET")
     else:
         raw = bytes(row["bytes"])
-    return _public(dict(row), True), raw
+    return _public(dict(row), True), _verified(row, raw)
+
+
+def metadata(uid):
+    """Permission checks need attachment targets without loading private bytes."""
+    if not db.configured():
+        row = _MEMORY.get(uid)
+        return _public(row, False) if row else None
+    with db.connect() as conn:
+        row = conn.execute(text("select " + ", ".join(COLUMNS) + " from records.attachment where uid=:u"),
+                           {"u": uid}).mappings().first()
+    return _public(dict(row), True) if row else None
 
 
 def attach(uid, target):

@@ -83,7 +83,7 @@ def _cutoff_candidate():
                 if c["power_state"] == "ON" and not c["review_uid"] and _ok(c))
 
 
-def test_executing_a_power_cutoff_does_not_inherit_the_nested_dc_status_detail():
+def test_executing_a_power_cutoff_does_not_inherit_the_nested_dc_status_detail(evidence_for_power):
     # RULING 13: execute_power calls set_dc_status internally, and set_dc_status
     # describes ITSELF first (act=DC_STATUS_SET, detail={from, to, reason} for the
     # POWER_CUTOFF transition). execute_power's own describe(act=POWER_EXECUTED)
@@ -93,6 +93,9 @@ def test_executing_a_power_cutoff_does_not_inherit_the_nested_dc_status_detail()
     # change it never made. This exercises the real call path (the API route ->
     # cases.execute_power -> cases.set_dc_status), not a unit stand-in for it.
     c = _shared_client()
+    for case in cases_domain.for_current().cases.values():
+        if case["product"] == "LEASE":
+            evidence_for_power(case["customer_uid"])
     uid = _cutoff_candidate()
     r = c.post("/v1/cases/by-customer/%s/power-restriction" % uid,
               json={"reason": "ค้างหลายงวดและผิดนัด"}, headers={"X-Volt-Officer": "nantapol"})

@@ -383,12 +383,14 @@ def _landing_rows(conn, customers, orders, blocks, merged=()):
     # honest source for the case's Odoo deep link.
     from .pipelines import odoo_links
     odoo_lead_ids = odoo_links.active_for_customers(conn, nos)
+    odoo_names = odoo_links.names_for_customers(conn, nos)
     odoo_social = odoo_links.social_for_customers(conn, nos)
     for record in rows:
         customer_no = str(record.get("customer_no") or "")
         lead_id = odoo_lead_ids.get(customer_no)
         if lead_id is not None:
             record["odoo_lead_id"] = lead_id
+            record["odoo_lead_name"] = odoo_names.get(customer_no)
         social = odoo_social.get(customer_no)
         if social is not None:
             record.update(social)

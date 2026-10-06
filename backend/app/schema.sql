@@ -825,12 +825,44 @@ CREATE TABLE IF NOT EXISTS records.service_deferral (
     payload jsonb NOT NULL
 );
 ALTER TABLE records.attachment ADD COLUMN IF NOT EXISTS object_name text;
+-- One append-only event contains an atomic invoice review operation.
+CREATE TABLE IF NOT EXISTS records.invoice_review (
+    sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    uid text UNIQUE NOT NULL, payload jsonb NOT NULL
+);
+CREATE OR REPLACE FUNCTION records.invoice_review_no_change() RETURNS trigger AS $guard$
+BEGIN
+    RAISE EXCEPTION 'invoice review history is append-only';
+END;
+$guard$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS invoice_review_no_change ON records.invoice_review;
+CREATE TRIGGER invoice_review_no_change BEFORE UPDATE OR DELETE ON records.invoice_review
+    FOR EACH ROW EXECUTE FUNCTION records.invoice_review_no_change();
 ALTER TABLE records.attachment ALTER COLUMN bytes DROP NOT NULL;
 CREATE TABLE IF NOT EXISTS app.schedule_config (
     name text PRIMARY KEY, enabled boolean NOT NULL DEFAULT false,
     interval_minutes integer NOT NULL DEFAULT 120 CHECK(interval_minutes BETWEEN 15 AND 1440),
     actor jsonb NOT NULL, last_run_at timestamptz, last_run_uid text
 );
+
+-- Reviewed contract schedules outlive all landing reimports. History is append-only.
+create table if not exists app.schedule_confirmation (
+    sequence bigint generated always as identity primary key,
+    contract_uid text not null,
+    payload jsonb not null,
+    created_at timestamptz not null default now()
+);
+create index if not exists schedule_confirmation_contract_idx
+    on app.schedule_confirmation (contract_uid, sequence);
+CREATE OR REPLACE FUNCTION app.schedule_confirmation_no_change() RETURNS trigger AS $guard$
+BEGIN
+    RAISE EXCEPTION 'contract schedule confirmation history is append-only';
+END;
+$guard$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS schedule_confirmation_no_change ON app.schedule_confirmation;
+CREATE TRIGGER schedule_confirmation_no_change
+    BEFORE UPDATE OR DELETE ON app.schedule_confirmation
+    FOR EACH ROW EXECUTE FUNCTION app.schedule_confirmation_no_change();
 
 -- Shared termination facts and API-shaped immutable snapshots (JSON, no pickle).
 CREATE TABLE IF NOT EXISTS app.termination_fact (
@@ -859,3 +891,45 @@ CREATE TRIGGER termination_archive_no_change BEFORE UPDATE OR DELETE ON app.term
 DROP TRIGGER IF EXISTS termination_fact_no_change ON app.termination_fact;
 CREATE TRIGGER termination_fact_no_change BEFORE UPDATE OR DELETE ON app.termination_fact
     FOR EACH ROW EXECUTE FUNCTION app.termination_no_change();
+
+-- Mutable current payment projections never replace the immutable reconciliation
+-- version: retain the full input observations, snapshot provenance, allocations,
+-- customer credits, claim states and receipt matches from every explicit rebuild.
+ALTER TABLE records.payment_claim_receipt ADD COLUMN IF NOT EXISTS active boolean NOT NULL DEFAULT true;
+CREATE TABLE IF NOT EXISTS records.payment_reconciliation_version (
+    sequence bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+    trigger_run_id bigint REFERENCES landing.import_run(id),
+    reason text NOT NULL,
+    invoice_run_id bigint REFERENCES landing.import_run(id),
+    snapshot_as_of date,
+    inputs jsonb NOT NULL,
+    outputs jsonb NOT NULL,
+    created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS payment_reconciliation_run_idx
+    ON records.payment_reconciliation_version (trigger_run_id, sequence);
+CREATE INDEX IF NOT EXISTS peak_receipt_doc_status_idx
+    ON landing.peak_receipt (doc_no, status, import_run_id DESC);
+CREATE OR REPLACE FUNCTION records.payment_reconciliation_no_change() RETURNS trigger AS $guard$
+BEGIN
+    RAISE EXCEPTION 'payment reconciliation history is append-only';
+END;
+$guard$ LANGUAGE plpgsql;
+DROP TRIGGER IF EXISTS payment_reconciliation_no_change ON records.payment_reconciliation_version;
+CREATE TRIGGER payment_reconciliation_no_change
+    BEFORE UPDATE OR DELETE ON records.payment_reconciliation_version
+    FOR EACH ROW EXECUTE FUNCTION records.payment_reconciliation_no_change();
+
+-- Release 2: bounded durable jobs, observable private worker and upload retention.
+ALTER TABLE app.task_outbox ADD COLUMN IF NOT EXISTS dead_lettered_at timestamptz;
+ALTER TABLE app.task_outbox ADD COLUMN IF NOT EXISTS last_error_code text;
+CREATE TABLE IF NOT EXISTS app.worker_heartbeat (
+    name text PRIMARY KEY, last_seen_at timestamptz NOT NULL DEFAULT now(),
+    state text NOT NULL, job_uid text, job_started_at timestamptz
+);
+CREATE INDEX IF NOT EXISTS task_outbox_pending_retry ON app.task_outbox(next_attempt_at,created_at)
+    WHERE finished_at IS NULL AND dead_lettered_at IS NULL;
+CREATE INDEX IF NOT EXISTS upload_session_retention ON app.upload_session(created_at,consumed_at);
+ALTER TABLE app.upload_part ADD COLUMN IF NOT EXISTS sha256 text;
+-- Set only after every preceding additive migration succeeded in this transaction.
+UPDATE app.schema_version SET version=2 WHERE singleton=true AND version<2;

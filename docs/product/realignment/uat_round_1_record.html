@@ -1,0 +1,84 @@
+<h1>Volt Debt — Blind UAT Round 1 Record (2026-09-02)</h1>
+<p>Project: Volt Debt Collection App realignment (decisions C1–C7). Build judged: prototype rebuild, business date 23/10/2026, API :8000, web :5173. Repo records: docs/uat/round-1.md, docs/uat/round-1/judge.md, docs/uat/round-1/p3-sweep.md.</p>
+
+<blockquote><strong>Correction notice, 2026-09-09.</strong> This record was written when the
+late-fee rate was 0.3 %/day with 14 days' grace and CF1 was still open. Rulings 87 and 88
+decided both — see <code>docs/design/round-6/00-ledger.md</code> rulings 87–88. The CF1
+mentions below are glossary terminology and case-bound findings from this 2026-09-02
+round and are preserved unchanged as that record; they do not state today's status.</blockquote>
+
+<h2>0. How to read this record</h2>
+<p>A blind UAT round is run by testers who have never seen the app, playing the Debt team from the SOP and the seventeen-step workflow only. Every claim is re-run by an independent judge before it counts. Severity: P1 = wrong money on screen or a daily task that cannot be done; P2 = a step the tester could not finish unaided or finished wrongly because the screen misled them; P3 = polish. The stop rule (decision C7) is a full round with no P1, no P2 and at most three P3. Codes such as J-38 are the judge's finding ids; CF1, OD-02, OQ-44 are open business items in the Case Register.</p>
+
+<h2>1. Verdict</h2>
+<table>
+<tr><th>Severity</th><th>Confirmed</th></tr>
+<tr><td>P1</td><td>1</td></tr>
+<tr><td>P2</td><td>15</td></tr>
+<tr><td>P3</td><td>30</td></tr>
+<tr><td>By design</td><td>4</td></tr>
+<tr><td>Driver artifact</td><td>2</td></tr>
+<tr><td>Not reproduced</td><td>1</td></tr>
+</table>
+<p>Not clean. Round 2 required after the fix batches.</p>
+
+<h2>2. What mattered most (the judge's plain words)</h2>
+<ol>
+<li>The app could not tell an officer what a real customer owes or has paid: no invoice or receipt existed for the 151 sheet customers; a confirmed receipt did not show on the case; three figures were unexplained (3,199 on a 2,999 contract; sheet penalty 2,726 vs app none; 6,985.42 vs 7,215.83).</li>
+<li>Day one would still be two windows: call and LINE buttons dead on real customers because the fixture masks numbers (by design, production reads the sheet's numbers), and the morning list opened on everybody with four zero-balance June callbacks ranked above fourteen broken promises.</li>
+<li>Some governed acts said done when nothing happened: NPL type from the queue set nothing; a refused cut-off approval was stored and left the Owner's queue; restoring power left the customer marked as cut; a closed ticket stayed open on the case; the work-book export failed silently.</li>
+</ol>
+<p>What worked and is now protected by tests: the mandatory next-action gate, the one-contact-per-day lock with its reason, promises and tickets setting the next action themselves, the officer → lead → officer review round trip, the two release gates and the no-link-before-AR-approves refusal, and the settings page naming which numbers are undecided and whose call they are.</p>
+
+<h2>3. P1 and P2 findings and their fixes</h2>
+<table>
+<tr><th>Id</th><th>Sev</th><th>Finding</th><th>Fix</th></tr>
+<tr><td>J-38</td><td>P1</td><td>No invoices or receipts for the migrated book; a slip could not be confirmed for a real customer</td><td>One overdue invoice per unpaid due instalment, the next one sent; cash rows carry the sheet's PEAK numbers (176 invoices)</td></tr>
+<tr><td>J-01</td><td>P2</td><td>June callbacks with 0.00 overdue outranked 14 broken promises</td><td>A sheet next-call older than 30 days no longer sets the due tier</td></tr>
+<tr><td>J-03</td><td>P2</td><td>Month cell 3,199 on a 2,999 contract carried no label</td><td>Cells that differ from the instalment show the difference and say the sheet does not name it</td></tr>
+<tr><td>J-05</td><td>P2</td><td>A promise after a break restarted the renegotiation count</td><td>Lineage continues within 30 days of a broken promise; the fourth opens the review</td></tr>
+<tr><td>J-06</td><td>P2</td><td>Closed ticket stayed open on the case</td><td>Closing clears the open-issue pointer</td></tr>
+<tr><td>J-07</td><td>P2</td><td>Sheet late fee 2,726 vs app none, unexplained</td><td>Money position on every case: instalments to ask for, accrued penalty at the indicative rate (not invoiced while CF1 is open), the sheet's late-fee cell beside it</td></tr>
+<tr><td>J-16</td><td>P2</td><td>Work-book export returned an error</td><td>Export shares the list's filters and returns a CSV download</td></tr>
+<tr><td>J-17</td><td>P2</td><td>A leasing row was released with amount 0, creating a zero-baht PEAK draft</td><td>Gate 1 takes the amount from the contract; release refuses without one</td></tr>
+<tr><td>J-30</td><td>P2</td><td>Confirmed receipt invisible on the case</td><td>Case shows invoices, receipts, events and the OD-02 allocation note</td></tr>
+<tr><td>J-31</td><td>P2</td><td>Invoice 6,985.42 vs work item 7,215.83 unexplained</td><td>Amount to ask = instalments; the 230.41 is named as accrued penalty</td></tr>
+<tr><td>J-33</td><td>P2</td><td>A service issue did not set DC status Tech Issue</td><td>Logging a service issue sets Tech Issue so the work book finds it</td></tr>
+<tr><td>J-34</td><td>P2</td><td>Contacts were signed with the case owner's name</td><td>The acting person comes from the officer identity in the top bar</td></tr>
+<tr><td>J-40</td><td>P2</td><td>A refused Manager approval was stored and left the Owner's queue</td><td>Refusal happens before anything is stored; the decision is not offered to a role that cannot use it</td></tr>
+<tr><td>J-41</td><td>P2</td><td>Restoring power left DC status Power Cutoff</td><td>Restore clears the status; it is a Supervisor or Ops act</td></tr>
+<tr><td>J-42</td><td>P2</td><td>NPL type from the review closed without a type</td><td>The decision requires and applies the type, with a reason</td></tr>
+<tr><td>J-43</td><td>P2</td><td>Reports counted 151 and 212 with no unit</td><td>Reconciliation block on all three tabs; units named; totals add up</td></tr>
+</table>
+
+<h2>4. P3 sweep</h2>
+<p>Thirty polish items were confirmed; all were fixed before round 2 (sixteen backend, twenty-three frontend, several overlapping). Highlights: the daily-contact refusal names the way through; every error shows one Thai sentence; the month grid opens on the current month; the invoice pipeline heading counts late, today and upcoming installs; a disabled release button says which gate is open; the payments screen says when PEAK is simulated; sidebar counts refresh after every act; the weekly report can be snapshotted; undecided settings are read-only below Owner; band sets can be deactivated but never deleted; the contact lock is per session.</p>
+
+<h2>5. Not defects</h2>
+<table>
+<tr><th>Id</th><th>Verdict</th><th>Rule cited</th></tr>
+<tr><td>J-02</td><td>By design</td><td>R12: the fixture masks phone numbers; production reads the sheet's numbers. Still the biggest adoption blocker to plan for</td></tr>
+<tr><td>J-04 (lock)</td><td>By design</td><td>Debt Collection Act: one counted contact per day</td></tr>
+<tr><td>J-36</td><td>By design</td><td>The role radio stands in for SSO; must go with SSO before day one</td></tr>
+<tr><td>J-39 (refusal)</td><td>By design</td><td>OQ-44: the power cut-off approver is the Owner</td></tr>
+<tr><td>J-14, J-28</td><td>Driver artifact</td><td>Click during layout settle; driver prints 40 characters</td></tr>
+<tr><td>J-35</td><td>Not reproduced</td><td>Deadline was shown</td></tr>
+</table>
+
+<h2>6. Carried to the Case Register</h2>
+<ul>
+<li>CF1 penalty rate and grace: the app shows both books (sheet fee and app accrual) rather than choosing.</li>
+<li>OD-02 allocation order: receipts are held unallocated and the case says so.</li>
+<li>OQ-44 power cut-off approver = Owner.</li>
+<li>Day-one identity: role radio and officer select must be replaced by SSO.</li>
+<li>The fee clock keeps running during a service issue because the team said that is what happens today; the issue block says so and names CF1.</li>
+</ul>
+
+<h2>7. Verification after the batches</h2>
+<table>
+<tr><th>Suite</th><th>Result</th></tr>
+<tr><td>Backend (pytest)</td><td>331 passed</td></tr>
+<tr><td>Frontend (vitest)</td><td>190 passed</td></tr>
+<tr><td>Black-box rules (e2e_check.py)</td><td>29 of 29</td></tr>
+</table>
+<p>Round 2 launched on this build with fresh blind personas.</p>

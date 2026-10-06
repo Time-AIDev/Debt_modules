@@ -82,8 +82,9 @@ def test_n2_03_one_instalment_figure_per_contract_and_the_header_sums_them(clien
     assert odd and odd[min(odd)] == "19500.00"
     mp = d["work_item"]["money_position"]
     assert mp["per_contract"][0]["uid"] == k["uid"] and mp["contract_count"] == 1
-    assert Decimal(mp["instalments_overdue"]) == sum(Decimal(c["instalments_overdue"]) for c in mp["per_contract"]) == Decimal("5799.00")
-    assert d["work_item"]["aggregate_overdue"] == "5799.00"
+    assert Decimal(mp["instalments_overdue"]) == sum(Decimal(c["instalments_overdue"]) for c in mp["per_contract"]) == Decimal("0.00")
+    assert mp["review_required"] is True
+    assert d["work_item"]["aggregate_overdue"] == "0.00"
     assert d["case"]["sheet"]["comment_ref_no"] == "99999000146" and "99999000146" in d["case"]["sheet"]["comment_note_th"]
     assert [r["customer_uid"] for r in d["related_cases"]] == [PAT2] and _thai(d["related_cases"][0]["note_th"])
     # her other contract keeps its own instalment
@@ -99,10 +100,13 @@ def test_n2_04_invoices_and_missed_count_follow_the_month_grid(client):
     assert late == [26] and k["late_cells"] == late
     overdue = [i for i in d["invoices"] if i["state"] == "OVERDUE"]
     assert [i["month_index"] for i in overdue] == late and overdue[0]["due_date"] == "2026-10-10"
-    assert _today_item(client, PAT1)["missed_count"] == len(late)
+    assert _today_item(client, PAT1)["missed_count"] == 0
+    assert _today_item(client, PAT1)["money_position"]["review_required"] is True
     assert "LATE month cell" in k["derivation"]["invoices"] and "LATE month cells" in k["derivation"]["paid_through"]
     # no LINK_SENT cell: the next instalment is ISSUED and claims no link, no invented date
-    nxt = next(i for i in d["invoices"] if i["state"] == "ISSUED")
+    assert not any(i["state"] == "ISSUED" for i in d["invoices"])
+    nxt = next(i for i in journey.for_current().invoices.values()
+               if i["contract_uid"] == k["uid"] and i["state"] == "ISSUED")
     assert nxt["month_index"] == 27 and nxt["link_sent"] is False and nxt["link_sent_on"] is None
     # somewhere in the book a LINK_SENT cell exists: that month's invoice is SENT and says the sheet said so
     jstate = journey.for_current()
@@ -278,7 +282,8 @@ def test_n2_09_dc_status_follows_what_is_logged_unless_a_person_governs_it(state
 
 # --- 7. S2-03 ---------------------------------------------------------------------
 
-def test_s2_03_power_refusal_names_each_precondition_and_banjerd_qualifies(client, state):
+def test_s2_03_power_refusal_names_each_precondition_and_banjerd_qualifies(client, state, evidence_for_power):
+    evidence_for_power(BANJERD)
     r = client.post("/v1/cases/by-customer/%s/power-restriction" % BANJERD, json={"reason": "ค้าง 3 งวด ผิดนัด"},
                     headers={"X-Volt-Officer": "nantapol"})
     assert r.status_code == 201, r.json()
@@ -369,9 +374,10 @@ def test_t2_04_invoice_list_is_uncapped_filterable_and_a_customer_route_prefills
     rows = client.get("/v1/ar/pipeline?customer_uid=%s" % PAT1).json()["invoices"]
     assert rows and all(r["customer"]["uid"] == PAT1 for r in rows)
     mine = client.get("/v1/cases/by-customer/%s/invoices" % PAT1).json()
-    assert mine["meta"]["total"] == len(mine["invoices"]) == 2
+    assert mine["meta"]["total"] == len(mine["invoices"]) == 1
     overdue = next(i for i in mine["invoices"] if i["state"] == "OVERDUE")
-    assert overdue["amount_to_ask"] == overdue["outstanding"] == "5799.00" and mine["money_position"]["amount_to_ask"] == "5799.00"
+    assert overdue["amount_to_ask"] is None and overdue["review_required"] is True
+    assert overdue["outstanding"] == "5799.00" and mine["money_position"]["amount_to_ask"] == "0.00"
     assert client.get("/v1/cases/by-customer/nobody/invoices").status_code == 404
 
 
@@ -455,15 +461,22 @@ def test_n2_13_reminder_offsets_are_a_manager_config_key(client):
 
 # --- 16. S2-07 / S2-08 ------------------------------------------------------------
 
-def test_s2_07_08_tier_order_zero_arrears_answers_waiting_npl_total_and_the_power_line(client, state):
+def test_s2_07_08_tier_order_zero_arrears_answers_waiting_npl_total_and_the_power_line(client, state, evidence_for_power):
+    evidence_for_power(BANJERD)
+    risk = next(c for c in state.cases.values() if c["product"] == "LEASE"
+                and c["customer_uid"] != BANJERD
+                and journey.customer_by_uid(c["customer_uid"]).contracts)
+    risk.update(open_ptp_uid=None, review_uid=None, broken_ptp_count=0,
+                next_action_set_by="SYSTEM")
+    evidence_for_power(risk["customer_uid"])
     body = client.get("/v1/today").json()
     items = body["items"]
     broken = [i for i in items if i["tier"] == "BROKEN_PTP"]
-    assert broken and all(Decimal(i["aggregate_overdue"]) > 0 for i in broken)
+    assert broken and all(Decimal(i["aggregate_overdue"]) > 0 or i["money_position"]["review_required"] for i in broken)
     dpds = [i["oldest_dpd"] or 0 for i in broken]
-    assert dpds == sorted(dpds, reverse=True) and broken[0]["customer"]["uid"] == BANJERD
-    parked = [i for i in items if i["case"]["broken_ptp_count"] and Decimal(i["aggregate_overdue"]) == 0 and not i["case"]["open_ptp"]]
-    assert parked and all(i["tier"] != "BROKEN_PTP" and "ไม่มียอดค้าง" in i["tier_reason_th"] for i in parked)
+    assert dpds == sorted(dpds, reverse=True)
+    parked = [i for i in items if i["case"]["broken_ptp_count"] and Decimal(i["aggregate_overdue"]) == 0 and not i["case"]["open_ptp"] and not i["money_position"]["review_required"]]
+    assert all(i["tier"] != "BROKEN_PTP" and "ไม่มียอดค้าง" in i["tier_reason_th"] for i in parked)
     assert all(_thai(i["tier_reason_th"]) and i["tier_label_th"] for i in items)
     # an answer waiting on a customer who sits in a higher tier is still counted
     target = next(i for i in items if i["tier"] == "AT_RISK_TWO_MISSED" and not i["case"]["review_uid"])["customer"]["uid"]

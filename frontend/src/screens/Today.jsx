@@ -41,6 +41,7 @@ export function Today() {
 
   const [params, setParams] = useSearchParams()
   const [officer, setOfficer] = useState('')
+  const [entity, setEntity] = useState('')
   const [payload, setPayload] = useState(null)
   const [problem, setProblem] = useState(null)
   const [columns, setColumns] = useState(null)
@@ -83,14 +84,15 @@ export function Today() {
     setSelected(new Set())
     // feedback-r2 TASK-015: the "ยังไม่มอบหมาย" option filters through the server's
     // own unassigned desk, never by dropping rows on the client.
-    const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : undefined
-    const request = preInstall ? api.pipeline() : api.today(query)
+    const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : {}
+    if (entity) query.entity = entity
+    const request = preInstall ? api.pipeline() : api.today(Object.keys(query).length ? query : undefined)
     request
       .then((d) => { if (version === loadVersion.current) setPayload(d) })
       .catch((e) => {
         if (version === loadVersion.current) setProblem(e?.problem || { code: 'request_failed' })
       })
-  }, [officer, preInstall])
+  }, [officer, entity, preInstall])
 
   useEffect(() => {
     load()
@@ -300,6 +302,20 @@ export function Today() {
   const canSelect = atLeast('OFFICER')
   const canAssign = atLeast('SUPERVISOR')
   const canSplit = atLeast('MANAGER')
+  const filterControls = !preInstall ? (
+    <div className="today__filters">
+      <select className="field today__filter" aria-label={t('today.officer')} value={officer}
+              onChange={(e) => setOfficer(e.target.value)}>
+        {officerOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
+      </select>
+      <select className="field today__filter" aria-label={t('today.entity')} value={entity}
+              onChange={(e) => setEntity(e.target.value)}>
+        <option value="">{t('today.entityAll')}</option>
+        <option value="EPC">EPC</option>
+        <option value="SPV">SPV</option>
+      </select>
+    </div>
+  ) : null
 
   // F17 / TASK-030: the summary follows the list on screen — the filtered officer's
   // own entry, else "*" (the whole list served, the unassigned desk included).
@@ -402,6 +418,7 @@ export function Today() {
 
       {board ? (
         <>
+          <div className="today__boardFilters">{filterControls}</div>
           {problem ? <LoadError problem={problem} onRetry={load} /> : null}
           {!problem && !columns ? <p className="empty">{t('common.loading')}</p> : null}
           {columns ? (
@@ -426,12 +443,7 @@ export function Today() {
                 <Icon name="sort" />{sortRisk ? t('today.sortRisk') : t('today.sortOrder')}
               </button>
             ) : undefined}
-            filter={!preInstall ? (
-              <select className="field today__filter" aria-label={t('today.officer')} value={officer}
-                      onChange={(e) => setOfficer(e.target.value)}>
-                {officerOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-              </select>
-            ) : undefined}
+            filter={filterControls}
             pinned={(
               <>
                 {selected.size > 0 ? (

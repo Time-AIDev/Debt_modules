@@ -11,10 +11,11 @@ from fastapi.encoders import jsonable_encoder
 from urllib.parse import urlsplit
 
 from .. import audit
+from .. import csv_safety
 from .. import cases as cases_domain
 from .. import clock
 from .. import customer_contact, monthly_history
-from .. import data_epoch, dictionaries, errors, journey, officers, payment_claims, payment_position, payment_summary, sop, today as today_domain
+from .. import data_epoch, dictionaries, errors, journey, officers, payment_claims, payment_display, payment_position, payment_summary, sop, today as today_domain
 from .. import workbook_cursor
 from .. import workbook_index
 from .. import perf
@@ -74,8 +75,14 @@ def _customer_odoo_crm(customer, fallback=None):
     data_source = getattr(customer, "data_source", None) or {}
     identity = data_source.get("identity") if isinstance(data_source, dict) else data_source
     if identity == "ODOO":
-        return _odoo_crm(order.get("crm_id") or fallback)
-    return _odoo_crm(getattr(customer, "odoo_lead_id", None))
+        crm = _odoo_crm(order.get("crm_id") or fallback)
+        name = order.get("odoo_lead_name")
+    else:
+        crm = _odoo_crm(getattr(customer, "odoo_lead_id", None))
+        name = getattr(customer, "odoo_lead_name", None)
+    if crm and name:
+        crm["name"] = name
+    return crm
 
 
 def _json(data):
@@ -185,11 +192,9 @@ def problem_from(exc: CaseError):
         # 2026-09-20 (Closed/Terminated ruling): the terminate act's own refusals.
         "termination_cause_unknown": (422, "DEBT-COL-0473", "Unknown termination cause",
                                       "ไม่รู้จักสาเหตุการยุติสัญญา ต้องเป็น Default หรือ Customer request"),
-        "balance_not_closed": (409, "DEBT-COL-0474", "The remaining balance must be closed before terminating",
-                               "ต้องปิดยอดคงเหลือก่อนยุติสัญญา — ชำระให้ครบ หรือให้ OWNER ตัดจำหน่าย"),
         "payment_status_terminate_via_route": (422, "DEBT-COL-0475",
                                                "TERMINATED is set by the terminate act, with a cause",
-                                               "สถานะยุติสัญญาตั้งได้จากคำสั่งยุติสัญญาเท่านั้น (ต้องระบุสาเหตุและปิดยอดก่อน)"),
+                                               "สถานะยุติสัญญาตั้งได้จากคำสั่งยุติสัญญาเท่านั้น (ต้องระบุสาเหตุและเหตุผล)"),
         # feedback-r2 / R-E (F01c): a promise result needs its amount and date, server-side.
         "ptp_required_for_promise": (422, "DEBT-COL-0476", "A promise needs an amount and a date",
                                      "ผลการติดต่อเป็นนัดชำระ ต้องระบุจำนวนเงินและวันที่นัดก่อนบันทึก"),
@@ -266,6 +271,7 @@ def _valid_choice(field, value, known, message_th):
 def today(officer: str = Query(default=None), ladder_indicative: str = Query(default=None),
           tier: str = Query(default=None), payment_status: str = Query(default=None),
           dc_status: str = Query(default=None), product: str = Query(default=None),
+          entity: str = Query(default=None),
           q: str = Query(default=None), unassigned: str = Query(default=None),
           x_volt_role: str = Header(default="OFFICER"), x_volt_officer: str = Header(default=None)):
     cs = cases_domain.for_current()
@@ -292,9 +298,12 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
                               "ไม่รู้จักสถานะติดตามที่ระบุ กรุณาเลือกจากรายการสถานะ DC")
     product = _valid_choice("product", product, today_domain.PRODUCTS,
                             "ไม่รู้จักผลิตภัณฑ์ที่ระบุ รับเฉพาะ LEASE หรือ CASH")
+    entity = _valid_choice("entity", entity, ("EPC", "SPV"),
+                           "ไม่รู้จักบริษัทที่ระบุ รับเฉพาะ EPC หรือ SPV")
     cases_domain.detect_broken_ptps(cs, settings.business_date)
     data = today_domain.build(officer=officer, ladder_indicative=rung, only_tier=tier,
-                              payment_status=payment_status, dc_status=dc_status, product=product, q=q,
+                              payment_status=payment_status, dc_status=dc_status, product=product,
+                              entity=entity, q=q,
                               unassigned=unassigned_desk)
     # F17 / TASK-118 (R-A): only this desk carries the worked flags and the daily
     # summary — build()'s rows are shared with the workbook's pinned key set.
@@ -437,7 +446,7 @@ def today_selected_export(body: dict = Body(default={}),
     out = io.StringIO()
     writer = csv.DictWriter(out, fieldnames=TODAY_EXPORT_COLUMNS, extrasaction="ignore")
     writer.writeheader()
-    writer.writerows(projected)
+    writer.writerows(csv_safety.mapping(row) for row in projected)
     filename = "volt-debt-%s-selected-%s.csv" % (workstream.replace("_", "-"), settings.business_date)
     return Response(("\ufeff" + out.getvalue()).encode("utf-8"), media_type="text/csv",
                     headers={"Content-Disposition": 'attachment; filename="%s"' % filename})
@@ -906,7 +915,7 @@ def _write_rows(writer, rows):
         pp = r.get("payment_position")
         inv = r.get("invoice_state") or {}
         sheet = c.get("sheet") or {}
-        writer.writerow([c["volt_id"], r["customer"]["display_name"], r["customer"].get("customer_no"),
+        writer.writerow(csv_safety.row([c["volt_id"], r["customer"]["display_name"], r["customer"].get("customer_no"),
                          "LEASE" if r["entity"] == "SPV" else "CASH", r.get("entity"),
                          r.get("company_id"),
                          c["payment_status"], c["dc_status"], r["aggregate_overdue"], r["aggregate_outstanding"],
@@ -934,7 +943,7 @@ def _write_rows(writer, rows):
                          # r["broken_ptp_count"], the row-level twin (R4-F31/F54).
                          c["kept_ptp_count"], c["broken_ptp_count"],
                          # Round-4 F2-CR-2.
-                         (r.get("ladder") or {}).get("stage"), (r.get("ladder") or {}).get("indicative")])
+                         (r.get("ladder") or {}).get("stage"), (r.get("ladder") or {}).get("indicative")]))
 
 
 def _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position=None):
@@ -1430,11 +1439,16 @@ def case_detail(customer_uid: str):
         k_months = getattr(k, "month_cells", None)
         k_months = k_months if k_months is not None else (k_row.get("months") or [])
         _c, k_dpd, _band, block, _period = main_module()._contract_view(k)
+        from .. import invoice_reviews
+        imported = invoice_reviews.contract_arrears(customer, k, jstate, settings.business_date)
+        arrears = block.cumulative_arrears
+        if imported is not None:
+            arrears, k_dpd = imported
         # Arina, 2026-09-14: the payment overview, on the same date and the same arrears
         # figure the block above was computed with.
         peak_cycles, unplaced, peak_as_of = payment_summary.peak_cycles_for(k.uid, journey.for_current())
-        entry = payment_summary.for_contract(k, settings.business_date, block.cumulative_arrears,
-                                             month_cells=k_months, peak_cycles=peak_cycles or None)
+        entry = payment_summary.for_contract(k, settings.business_date, arrears,
+                                             month_cells=k_months, peak_cycles=peak_cycles)
         if entry["peak"]:
             entry["peak"]["report_as_of"] = peak_as_of
         entry["unplaced_peak_invoices"] = unplaced
@@ -1443,6 +1457,10 @@ def case_detail(customer_uid: str):
             # Ruling 43 / R4-F03: session-scoped read — never k.status directly.
             "uid": k.uid, "product": k.product, "entity": k.entity, "status": cases_domain.contract_field_of(k, "status"), "principal": str(k.principal),
             "term_months": k.term_months, "first_due": str(k.first_due), "paid_through": k.paid_through,
+            "schedule_confirmation": getattr(k, "schedule_confirmation", None),
+            "schedule_verified": entry["schedule_verified"], "schedule_conflict": entry["schedule_conflict"],
+            "source_first_due": entry["source_first_due"],
+            "sheet_calendar_months": getattr(k, "calendar_months", []),
             "contract_end": entry["contract_end"],
             # Ruling 43 / R4-F01: session-scoped read — never k.fee_state directly.
             "derivation": getattr(k, "derivation", None), "fee_state": cases_domain.fee_state_of(k),
@@ -1452,7 +1470,7 @@ def case_detail(customer_uid: str):
             "sheet_row": k_row, "month_grid": _month_grid(k_months, k_row, contract_uid=k.uid),
             "comment_th": getattr(k, "comment_th", None) if getattr(k, "comment_th", None) is not None else (k_row.get("comment_th") or k_row.get("comment")),
             "late_cells": list(getattr(k, "late_cells", None) or []), "link_sent_cells": list(getattr(k, "link_sent_cells", None) or []),
-            "instalments_overdue": str(block.cumulative_arrears), "penalty_accrued_unbilled": str(block.penalty_accrued_unbilled),
+            "instalments_overdue": str(arrears), "penalty_accrued_unbilled": str(block.penalty_accrued_unbilled),
             "oldest_dpd": k_dpd,
         })
     first = contracts[0] if contracts else None
@@ -1465,8 +1483,12 @@ def case_detail(customer_uid: str):
     captured = sheet_captured_on()
     served_invoices = [service_deferrals.decorate_invoice(_resolve_amended_due(_with_payment_link(_with_peak_state(inv))))
                        for inv in jstate.invoices.values() if inv["contract_uid"] in contract_uids]
+    from .. import invoice_reviews
+    served_invoices = invoice_reviews.project(customer, jstate, served_invoices)
+    due_totals = invoice_reviews.totals(served_invoices)
     claim_case, served_invoices, claims, claim_position = payment_claims.decorate(
         customer_uid, case, served_invoices)
+    served_invoices = [service_deferrals.invoice_eligibility(inv) for inv in served_invoices if inv["invoice_visible"]]
     served_invoices.sort(key=journey.invoice_collection_sort_key)
     return {
         "service_deferrals": [r for k in customer.contracts for r in service_deferrals.list_for_contract(k.uid)],
@@ -1528,7 +1550,12 @@ def case_detail(customer_uid: str):
         "contracts": contracts,
         "contract_count": len(contracts),
         # Every cycle of every contract and what it adds up to (payment_summary.py).
-        "payment_summary": payment_summary.build(summaries, settings.business_date),
+        "payment_summary": {
+            **payment_summary.build(summaries, settings.business_date),
+            "totals": {**payment_summary.build(summaries, settings.business_date)["totals"], **due_totals},
+            "display_instalments": payment_display.build(customer.contracts, summaries, jstate,
+                settings.business_date, item["contract_outstanding"]),
+        },
         "month_grid": first["month_grid"] if first else _month_grid(months, row),
         "contact_log": [r for r in cs.contact_log if r["customer_uid"] == customer_uid][::-1],
         "ptps": [p for p in cs.ptps.values() if p["customer_uid"] == customer_uid],
@@ -1644,6 +1671,9 @@ def _sheet_reconciliation(case, contracts):
     if dpd is not None and dpd <= grace:
         lines.append("ค่าปรับของแอปยังเป็น 0.00 เพราะค้าง %d วัน ยังไม่พ้นระยะผ่อนผัน %d วัน" % (dpd, grace))
         lines_en.append("The app's penalty is still 0.00: %d days late is within the %d-day grace period" % (dpd, grace))
+    elif dpd is None:
+        lines.append("ยังไม่ยืนยัน DPD จากหลักฐาน — ยอดรอตรวจสอบ; ระยะผ่อนผัน %d วันจะใช้เมื่อยืนยันฐานหนี้ได้" % grace)
+        lines_en.append("Evidence DPD is unconfirmed — balances await review; the %d-day grace applies after the debt basis is verified" % grace)
     elif dpd is not None:
         lines.append("ค่าปรับของแอปเริ่มนับหลังพ้นระยะผ่อนผัน %d วัน จึงคิดจาก %d วัน" % (grace, dpd - grace))
         lines_en.append("The app's penalty starts after the %d-day grace period, so it is charged on %d days" % (grace, dpd - grace))
@@ -1701,6 +1731,13 @@ def customer_open_invoices(customer_uid: str):
         rows.append({**inv, "amount_to_ask": str(Decimal(str(outstanding)).quantize(Decimal("0.01"))),
                      "customer": {"uid": customer.uid, "customer_no": customer.customer_no, "display_name": customer.display_name,
                                   "volt_id": getattr(customer, "volt_id", None)}})
+    from .. import invoice_reviews
+    rows = invoice_reviews.project(customer, jstate, rows)
+    rows = [inv for inv in rows if inv["invoice_visible"]]
+    rows = [dict(inv, amount_to_ask=None, review_required=True)
+            if not inv["is_due"] or not inv["collection_included"] else
+            dict(inv, amount_to_ask=str(Decimal(str(inv["outstanding"])).quantize(Decimal("0.01"))))
+            if inv.get("liability_verified") is True else inv for inv in rows]
     rows.sort(key=lambda i: (i["due_date"] or "", i["uid"]))
     # Feedback Round 1 / Task 10: the same block the work item carries, on the
     # per-customer invoices payload — the slip form reads it beside money_position.
@@ -1754,6 +1791,41 @@ def set_dc_status(customer_uid: str, body: dict = Body(...), x_volt_officer: str
     return {"case": case}
 
 
+@router.get("/v1/contracts/{contract_uid}/schedule-confirmation")
+def get_schedule_confirmation(contract_uid: str):
+    from .. import schedule_confirmation
+    if journey.contract_by_uid(contract_uid) is None:
+        raise errors.not_found("contract")
+    rows = schedule_confirmation.history(contract_uid)
+    return {"confirmation": rows[-1] if rows else None, "history": rows}
+
+
+@router.post("/v1/contracts/{contract_uid}/schedule-confirmation", status_code=201)
+def confirm_contract_schedule(contract_uid: str, body: dict = Body(...),
+                              x_volt_role: str = Header(default="OFFICER"),
+                              x_volt_officer: str = Header(default=None)):
+    from .. import schedule_confirmation
+    found = journey.contract_by_uid(contract_uid)
+    if found is None:
+        raise errors.not_found("contract")
+    if role_of(x_volt_role) not in ("MANAGER", "OWNER"):
+        raise errors.Problem(code="forbidden", status=403, title="Manager or above",
+                             detail="Contract review requires Manager or Owner",
+                             message_th="เฉพาะผู้จัดการหรือเจ้าของยืนยันวันเริ่มงวดได้",
+                             error_id="DEBT-IAM-0403")
+    from .. import instalment_evidence
+    if not instalment_evidence.required(found[1]):
+        raise errors.Problem(code="schedule_format_unsupported", status=422,
+                             title="Reviewed schedule dates unsupported for this format",
+                             detail="This contract format cannot apply a reviewed first due date",
+                             message_th="รูปแบบสัญญานี้ยังไม่รองรับการยืนยันวันเริ่มงวด",
+                             error_id="DEBT-SCHEDULE-0422")
+    audit.describe(act="CONTRACT_SCHEDULE_CONFIRMED", subject=("contract", contract_uid))
+    row = schedule_confirmation.confirm(found[1], body, who({}, x_volt_officer))
+    main_module().reload_book()
+    return {"confirmation": row}
+
+
 @router.post("/v1/cases/by-customer/{customer_uid}/payment-status")
 def set_payment_status(customer_uid: str, body: dict = Body(...), x_volt_role: str = Header(default="OFFICER"),
                        x_volt_officer: str = Header(default=None)):
@@ -1792,40 +1864,32 @@ def set_payment_status(customer_uid: str, body: dict = Body(...), x_volt_role: s
 def terminate_contract(customer_uid: str, body: dict = Body(default=None),
                        x_volt_role: str = Header(default="OFFICER"),
                        x_volt_officer: str = Header(default=None)):
-    """End this customer's live contracts — with a cause, a reason and a closed balance.
+    """End this customer's live contracts with a cause and a reason.
 
     2026-09-20 (Closed/Terminated ruling): CLOSED means paid per the terms and nothing
     else; every other way a contract ends — VOLT on default, or the customer's own
-    request — is TERMINATED and must carry its cause. The money rule is enforced
-    first (`cases.termination_gate`): a live contract that still owes blocks the act,
-    and the refusal carries the payoff figure and points at the OWNER write-off
-    (`recovery-cases/{uid}:resolve` with CLOSED_WRITE_OFF). MANAGER and up, the same
-    gate the NPL type uses. Body {"cause", "reason"} — cause from TERMINATION_CAUSE.
+    request — is TERMINATED and must carry its cause. Outstanding balances remain
+    in the ledger; this act does not pay or write off a debt. OFFICER, SUPERVISOR,
+    MANAGER and OWNER may use it, while OPS may not. Body {"cause", "reason"} —
+    cause from TERMINATION_CAUSE.
     """
     body = body or {}
     audit.describe(act="CONTRACT_TERMINATED", subject=("customer", customer_uid))
     cs = cases_domain.for_current()
     case = _case_or_404(cs, customer_uid)
-    if role_of(x_volt_role) not in ("MANAGER", "OWNER"):
-        raise problem_from(CaseError("forbidden", "Only a Manager ends a contract",
-                                     message_th="เฉพาะผู้จัดการขึ้นไปจึงจะยุติสัญญาได้"))
+    role = role_of(x_volt_role)
+    if role not in ("OFFICER", "SUPERVISOR", "MANAGER", "OWNER"):
+        raise problem_from(CaseError("forbidden", "Operations cannot terminate a contract",
+                                     message_th="บทบาททีมปฏิบัติการไม่มีสิทธิ์ยุติสัญญา"))
     customer = journey.customer_by_uid(customer_uid)
     if customer is None:
         raise errors.not_found("customer")
-    by = who(body, x_volt_officer, role="manager")
+    by = who(body, x_volt_officer, role=role)
     try:
-        # Input first, then the money gate — a malformed body is never answered with a
-        # 409 about a balance.
         reason = cases_domain.validate_termination_inputs(body.get("cause"),
                                                           body.get("reason") or body.get("note"))
     except CaseError as exc:
         raise problem_from(exc)
-    blocking, checks = cases_domain.termination_gate(customer)
-    if blocking:
-        raise problem_from(CaseError(
-            "balance_not_closed", "The remaining balance must be closed before terminating",
-            message_th="ต้องปิดยอดคงเหลือก่อนยุติสัญญา — ชำระให้ครบ หรือให้ OWNER ตัดจำหน่าย",
-            blocking=blocking, payoff_amount=blocking[0]["payoff_amount"]))
     ended = []
     try:
         for contract in customer.contracts:
@@ -1839,7 +1903,9 @@ def terminate_contract(customer_uid: str, body: dict = Body(default=None),
     if not ended:
         raise problem_from(CaseError("status_unchanged", "Every contract on this case has already ended",
                                      message_th="สัญญาทุกฉบับของเคสนี้สิ้นสุดอยู่แล้ว"))
-    return {"case": case, "termination": ended[0], "contracts": checks}
+    return {"case": case, "termination": ended[0], "contracts": [
+        {"contract_uid": contract.uid, "status": cases_domain.contract_field_of(contract, "status")}
+        for contract in customer.contracts]}
 
 
 @router.post("/v1/cases/by-customer/{customer_uid}/phone")

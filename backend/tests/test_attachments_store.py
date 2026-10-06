@@ -1,5 +1,6 @@
 import socket
 import threading
+import hashlib
 
 import pytest
 from sqlalchemy import text
@@ -7,7 +8,7 @@ from sqlalchemy import text
 from app import db, migrate
 from app.attachments import scanner, store
 
-META = {"kind": "PDF", "content_type": "application/pdf", "sha256": "ab" * 32, "size": 20, "filename": "a.pdf"}
+META = {"kind": "PDF", "content_type": "application/pdf", "sha256": hashlib.sha256(b"%PDF-1.4 twenty bytes").hexdigest(), "size": len(b"%PDF-1.4 twenty bytes"), "filename": "a.pdf"}
 CLEAN = {"state": "RULES_ONLY", "by": "rules", "note_th": "x"}
 
 

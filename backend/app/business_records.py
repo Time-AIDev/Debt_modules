@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 ALLOWED_TYPES = {
     "app.config.Settings", "app.config.PendingRule", "app.config.DecidedRule",
+    "app.criteria.Criteria",
     "app.dictionaries.Dictionaries", "app.cases.CaseState", "app.journey.JourneyState",
     "app.collections.contact.ContactLog", "app.collections.contact.Lock",
     "app.collections.contact.ContactAttempt", "app.collections.contact.Disposition",

@@ -54,6 +54,11 @@ def reset():
 
 
 def start(kind, **fields):
+    from ..auth import ACTOR, actor_key
+    actor = ACTOR.get()
+    if actor:
+        fields["initiated_by"] = actor_key(actor)
+        fields["initiated_role"] = actor["role"]
     uid = "run-" + uuid.uuid4().hex[:12]
     with _LOCK:
         _RUNS[uid] = {"uid": uid, "kind": kind, "state": "queued",

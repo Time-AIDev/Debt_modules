@@ -1,0 +1,39 @@
+<h1>Volt Debt — Blind UAT Round 5 Record (2026-09-03)</h1>
+<p>Project: Volt Debt Collection App realignment (decisions C1-C7). Repo records: docs/uat/round-5.md, docs/uat/round-5/judge.md, and the three tester reports in the same folder.</p>
+
+<h2>0. How to read this record</h2>
+<p>A blind UAT round is run by testers who have never seen the app, working from the SOP and the seventeen-step workflow only. Every claim is re-run by an independent judge before it counts. P1 means wrong money on screen or a daily task that cannot be done; P2 means a step the tester could not finish unaided or finished wrongly because the screen misled them; P3 is polish. The stop rule asks for a round with no P1, no P2 and at most three P3.</p>
+
+<h2>1. Verdict</h2>
+<table>
+<tr><th>Severity</th><th>Confirmed</th></tr>
+<tr><td>P1</td><td>0</td></tr>
+<tr><td>P2</td><td>7</td></tr>
+<tr><td>P3</td><td>11</td></tr>
+<tr><td>By design, rule cited</td><td>5</td></tr>
+<tr><td>Not reproduced</td><td>1</td></tr>
+<tr><td>Driver artifact</td><td>2</td></tr>
+<tr><td>Regressions</td><td>0</td></tr>
+</table>
+<p>Not clean, but the money is settled. The P1 class closed after round 3 and stayed closed: every figure the judge recomputed from a case's own invoices and contracts matched the screen, with the penalty always beside the arrears and never inside it, carrying its rate, its grace period and the name of the decision that still owns it.</p>
+
+<h2>2. A process error, recorded rather than hidden</h2>
+<p>The servers were restarted on a newly built bundle while the judge was still verifying, so rows checked after that moment were measured against a different build from the one the testers used. The judge was told immediately and its verdict states, row by row, which build each was measured against. The lesson is the one this project keeps relearning: nothing a tester or a judge is working against may change under them.</p>
+
+<h2>3. What the judge caught that the builder had got wrong</h2>
+<p>Two fixes reported as done had not landed, and the judge proved it on the running build rather than taking the report at face value. The team workload panel still showed nothing, so it now loads with the page rather than waiting for a press that never worked. The renegotiation fix had addressed the wrong half: the route the officer needed already worked, while the one that breaks was left untouched. A third, escalation without a question asked, was half fixed and is now closed on both paths. This is the single strongest argument for keeping an independent judge in the loop.</p>
+
+<h2>4. The dominant defect class, measured again</h2>
+<p>Five payload keys the previous round proved unread are now read by a screen. Four new ones took their place, and the most serious defect of this round was one of them: a whole pre-install customer's pipeline record was served and ignored, so a postponed installation and an amended due date lived only on the pipeline card and never reached the customer's own page. The check that catches this class is mechanical and now standing practice: after every build, search the shipped bundle for each new payload key.</p>
+
+<h2>5. Fixes applied after the verdict</h2>
+<p>The amended due date now reaches the case under draft-only rules: the request sits beside the original date, and the date moves only once Accounting approves the document. The case had never served its accounting documents at all, though the screen was already reading for them. The slip form now leads with the oldest unpaid invoice and marks it, instead of sorting a not-yet-due invoice above an overdue one, which had let a slip post to the wrong month without a word. Escalating or claiming to wait on a manager is refused unless a question was actually asked. A renegotiation on a day whose contact is already spent records itself as a second, not-counted contact, rather than forcing the officer to write that the customer called them. A raw field name that had leaked into a Thai sentence now states the fact in words.</p>
+
+<h2>6. Verification</h2>
+<table>
+<tr><th>Suite</th><th>Result</th></tr>
+<tr><td>Backend</td><td>396 passed</td></tr>
+<tr><td>Frontend</td><td>305 passed</td></tr>
+<tr><td>Black-box rules</td><td>29 of 29</td></tr>
+</table>
+<p>The verification script printed EVERYTHING PASSED, and every payload key added this round was searched for in the shipped bundle to prove a screen reads it.</p>

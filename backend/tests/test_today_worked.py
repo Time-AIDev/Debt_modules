@@ -25,7 +25,7 @@ def client():
 def _pick(client, **where):
     """A row with an officer and no open promise (where the act under test is free)."""
     for item in client.get("/v1/today").json()["items"]:
-        if not item["case"]["officer_uid"] or item["case"]["open_ptp"]:
+        if item["case"]["officer_uid"] != OFFICER["X-Volt-Officer"] or item["case"]["open_ptp"]:
             continue
         if all(item["case"].get(k) == v for k, v in where.items()):
             return item

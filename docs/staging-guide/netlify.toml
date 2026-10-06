@@ -1,0 +1,4 @@
+# Static, no build. Deploy with:
+#   netlify deploy --dir docs/staging-guide --prod --site volt-debt-uat-guide
+[build]
+  publish = "."

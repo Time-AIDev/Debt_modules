@@ -247,6 +247,22 @@ def test_an_allowed_session_still_writes_exactly_its_own_rows(on, monkeypatch):
         assert rows[0]["act"] is not None
 
 
+def test_officer_session_signs_unpaid_termination_as_itself(on, monkeypatch):
+    thip = _google(monkeypatch, THIP)
+    uid = next(c["customer_uid"] for c in cases_domain.for_current().cases.values()
+               if c["customer_no"] == "C-002032")
+    before = _head()
+    response = thip.post("/v1/cases/by-customer/%s:terminate" % uid,
+                         headers={"X-Volt-Role": "OWNER", "X-Volt-Officer": "owner"},
+                         json={"cause": "DEFAULT", "reason": "ยุติขณะมียอดคงเหลือ", "by": "owner"})
+    assert response.status_code == 200, response.json()
+    rows = _rows_after(before)
+    assert len(rows) == 1
+    assert (rows[0]["actor_claimed"], rows[0]["actor_source"], rows[0]["actor_role"]) == (
+        THIP, "SESSION", "OFFICER")
+    assert response.json()["termination"]["by"] == "thip"
+
+
 def test_a_withdrawn_cookie_on_the_logged_case_read_is_recorded_and_an_unlogged_read_is_not(on, monkeypatch):
     thip = _google(monkeypatch, THIP)
     customer_uid = _targets(thip)["payment-status"][1].split("/")[4]
@@ -306,4 +322,3 @@ def test_an_audit_store_that_fails_still_refuses_and_counts_a_gap_that_names_no_
     assert "example.co.th" not in json.dumps(audit_store.MEMORY.gaps())
     out, err = capfd.readouterr()
     assert "example.co.th" not in out + err
-

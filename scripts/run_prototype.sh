@@ -44,6 +44,7 @@ SERVE="${SERVE:-crm-lead}"
 VOLT_DB_NAME="${VOLT_DB_NAME:-volt_debt}"
 
 UVICORN="$ROOT/backend/.venv/bin/uvicorn"
+BACKEND_PYTHON="$ROOT/backend/.venv/bin/python"
 VITE="$ROOT/frontend/node_modules/.bin/vite"
 CHECK="$ROOT/scripts/e2e_check.py"
 
@@ -53,6 +54,7 @@ PYTHON="$(command -v python3 || true)"
 CURL="$(command -v curl || true)"
 
 API_PID=""
+WORKER_PID=""
 WEB_PID=""
 LOGDIR="$(mktemp -d "${TMPDIR:-/tmp}/volt-debt-run.XXXXXX")"
 
@@ -66,10 +68,10 @@ cleanup() {
   if [ -n "$KEEP_UP" ] && [ -n "${API_PID}${WEB_PID}" ]; then
     say ""
     say "KEEP_UP set - leaving up what this script started: $API_URL $WEB_URL"
-    say "  stop it with:  kill ${API_PID} ${WEB_PID}"
+    say "  stop it with:  kill ${API_PID} ${WEB_PID} ${WORKER_PID}"
     exit "$status"
   fi
-  for pid in "$WEB_PID" "$API_PID"; do
+  for pid in "$WEB_PID" "$API_PID" "$WORKER_PID"; do
     if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
       kill "$pid" 2>/dev/null || true
       wait "$pid" 2>/dev/null || true
@@ -117,6 +119,7 @@ wait_for() {
 
 [ -n "$PYTHON" ] || die "python3 is not on PATH; scripts/e2e_check.py needs it"
 [ -f "$CHECK" ] || die "missing $CHECK"
+[[ "$SERVE" = "crm-lead" || "$SERVE" = "fixtures" ]] || die "SERVE must be crm-lead or fixtures"
 
 say "Volt Debt prototype"
 say "  root  $ROOT"
@@ -132,10 +135,19 @@ if [ "$SERVE" = "crm-lead" ]; then
   DB_URL="$("$ROOT/scripts/pg_local.sh" url "$VOLT_DB_NAME")"
   # DATABASE_URL in the real environment, never backend/.env — the same rule
   # AUTH_MODE follows, because the test suite reads that file.
-  API_CMD+=("DATABASE_URL=$DB_URL" AUTH_MODE=on AUTH_COOKIE_SECURE=false)
+  while IFS= read -r setting; do API_CMD+=("$setting"); done < <(python3 "$ROOT/scripts/runtime_env.py" --environment dev --state shared)
+  API_CMD+=("DATABASE_URL=$DB_URL" AUTH_MODE=on AUTH_COOKIE_SECURE=false
+             "OBJECT_STORAGE_BACKEND=filesystem" "OBJECT_STORAGE_ROOT=$ROOT/.runtime/objects"
+             "UPLOADS_BUCKET=uploads" "CLEAN_BUCKET=clean" "DOCS_BUCKET=documents"
+             "TASK_QUEUE_BACKEND=postgres")
+  [ -x "$BACKEND_PYTHON" ] || die "no backend python at $BACKEND_PYTHON"
+  (cd "$ROOT/backend" && "${API_CMD[@]}" "$BACKEND_PYTHON" -m app.migrate) >"$LOGDIR/migrate.log" 2>&1 \
+    || { tail -40 "$LOGDIR/migrate.log" >&2; die "local schema migration failed"; }
   KEEP_UP=1
 else
   say "  data source: sheet fixtures (no database, sign-in off)"
+  while IFS= read -r setting; do API_CMD+=("$setting"); done < <("$PYTHON" "$ROOT/scripts/runtime_env.py" --environment dev --state fixtures)
+  API_CMD+=("DATABASE_URL=" "AUTH_SESSION_POLICY=cookie" "AUTH_COOKIE_SECURE=false")
 fi
 
 # --- the API -----------------------------------------------------------------------
@@ -144,9 +156,12 @@ if probe "$API_URL/healthz"; then
 else
   [ -x "$UVICORN" ] || die "no uvicorn at $UVICORN (build the venv: python3 -m venv backend/.venv && backend/.venv/bin/pip install -r backend/requirements.txt)"
   say "  starting API on $API_PORT"
-  API_CMD+=("$UVICORN" app.main:app --host 127.0.0.1 --port "$API_PORT")
-  ( cd "$ROOT/backend" && exec "${API_CMD[@]}" ) > "$LOGDIR/api.log" 2>&1 &
+  ( cd "$ROOT/backend" && exec "${API_CMD[@]}" "$UVICORN" app.main:app --host 127.0.0.1 --port "$API_PORT" ) > "$LOGDIR/api.log" 2>&1 &
   API_PID=$!
+  if [ "$SERVE" = "crm-lead" ]; then
+    (cd "$ROOT/backend" && exec "${API_CMD[@]}" "$ROOT/backend/.venv/bin/python" -m app.local_worker) >"$LOGDIR/worker.log" 2>&1 &
+    WORKER_PID=$!
+  fi
   wait_for "$API_URL/healthz" "API" "$LOGDIR/api.log" 60 "$API_PID"
 fi
 

@@ -1,0 +1,100 @@
+<h1>Volt Debt Collection — Requirements Amendment v2.6</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>Requirements Amendment v2.6 — the realignment amendment. Where it amends a requirement, its text replaces the text in version 2.1 (as amended by v2.4 and v2.5) in full. Where it adds one, the id is new.</td></tr>
+<tr><td>Version</td><td>2.6. Dated 2026-09-02. Supersedes Requirements Amendment v2.5 for what it names (v2.5 moves to 13 History).</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Status</td><td>In force. Built by the 2026-09 in-place rebuild of ~/volt-debt-prototype.</td></tr>
+<tr><td>Built from</td><td>Interview and SOP Findings 2026-09-01 · Grilling Session Record 2026-09-02 (C1–C7) · Executive Brief v2.0 · FigJam "Debt to PEAK — Process Handoff by Scenario"</td></tr>
+<tr><td>Read with</td><td>Collection Workflow Alignment v3.0 · Integration Alignment v2.3 · Data Model v2.3 · API Surface v2.3 · Case Register v1.4</td></tr>
+</table>
+
+<h2>0. Plain language first</h2>
+<p><strong>Case</strong> — one customer in collection, with every contract they hold. <strong>Next Action</strong> — what the officer must do next and by when; the SOP says no case may be without one. <strong>Contact log</strong> — one row per attempt to reach a customer: when, who, how, what they said. <strong>PTP</strong> — promise to pay. <strong>Broken PTP</strong> — the promised date passed without the money. <strong>Review request</strong> — an officer asking the supervisor or manager to look at one case and answer. <strong>Payment status</strong> — the money state the system computes (Current, Late, NPL, Closed). <strong>DC status</strong> — the last action a person took, chosen from a list. <strong>Bucket</strong> — a named range of days past due; ranges are configuration. <strong>PEAK draft</strong> — a document created in PEAK that only a person inside PEAK can approve into the books. <strong>Invoice pipeline</strong> — the work before installation: check the plan, pass the two gates, create the invoice, deliver it, check on the day. <strong>Dictionary</strong> — a governed list of allowed values, edited by the business, never hard-deleted.</p>
+
+<h2>1. The authority ladder</h2>
+<p>This ladder supersedes the ladder in Amendment v2.5 and must appear byte-identical in every document that states one.</p>
+<table>
+<tr><th>Rank</th><th>Document</th><th>Authority</th></tr>
+<tr><td>1</td><td>Interview 2026-09-01 and Interview and SOP Findings 2026-09-01</td><td>Fact about current practice and the team's stated needs</td></tr>
+<tr><td>2</td><td>Team SOP: docx, four flowcharts, seventeen-step workflow</td><td>The process the team follows and owns</td></tr>
+<tr><td>3</td><td>Requirements Amendment v2.6 and Grilling Session Record 2026-09-02</td><td>What the system must do, for what it names</td></tr>
+<tr><td>4</td><td>Executive Brief v2.0 and FigJam board</td><td>Money rules with worked numbers; the PEAK outcome table</td></tr>
+<tr><td>5</td><td>Requirements Amendment v2.5 and v2.4, Grilling Records of 30 and 26 August</td><td>For what they name and nothing above touches</td></tr>
+<tr><td>6</td><td>PRD v2.1, Data Model v2.1 plus deltas, API Surface, Integration and Runbook alignments</td><td>Everything not named above</td></tr>
+<tr><td>7</td><td>FullSpec v4.0 and the 55-page scenario catalogue</td><td>Reference; features worth keeping; never wins a conflict</td></tr>
+</table>
+
+<h2>2. The one idea that changed</h2>
+<p>Before this amendment the system knew the scenarios but not the day. The interview supplied the day: two officers open a sheet, filter for today's promises, filter for customers two instalments behind, and then read comment cells and LINE history to reconstruct what happened last. The amendment's through-line: <strong>the system carries the day for the officer — every case says what to do next and when, every contact leaves a row, every document that reaches the books leaves PEAK's approval to PEAK.</strong></p>
+
+<h2>3. Amended and new requirements</h2>
+
+<h3>3.1 REQ-COL-070 — NEW: no case without a next action</h3>
+<p>Every case in collection carries next_action (from the NEXT_ACTION dictionary) and next_action_on (a date). Saving a contact log row requires the officer to set or confirm both. An open PTP sets next_action = FOLLOW_PTP on the promise date automatically; a raised service issue sets next_action = AWAIT_TICKET with the ticket's deadline; a review request sets next_action = AWAIT_REVIEW. A case whose next_action_on has passed is overdue on the Today list. The API refuses to close a contact without a next action (next_action_required).</p>
+
+<h3>3.2 REQ-COL-071 — AMENDS REQ-COL-060: the Today list</h3>
+<p>The working list is built per officer at 02:30 and on demand, grouped by customer, and ordered by tiers in sequence: (1) PTP due today; (2) next action due today or overdue; (3) broken PTP not yet renegotiated; (4) arrears at risk — two or more instalments missed with no open PTP; (5) new arrears — DPD 1 to 3 with no contact yet; (6) answers and closures waiting for the officer — a manager's review answer, a service ticket closed, a PEAK draft rejected; (7) everything else by arrears descending. Every item carries priority_reason naming the tier. The header shows the count per tier. The hero card (R9), the guided "next" with free override (R10) and the tel and LINE actions (R12) stand. R11's order (largest arrears second) is superseded by this list.</p>
+
+<h3>3.3 REQ-COL-072 — NEW: the contact log</h3>
+<p>Every attempt to reach a customer is one append-only contact_log row: occurred_at, officer, channel (PHONE | LINE | SMS | EMAIL | VISIT | INBOUND), direction, result (CONTACT_RESULT dictionary, seeded with the sheet's three values — reached and answered, unreachable no answer, reached and payment appointment — plus PROMISED, SERVICE_ISSUE, REFUSED_PAY, INCONVENIENT, CALLBACK_REQUESTED), amount_stated (the Act's counting test), note, and the PTP, service issue or next action created from it. Rows are never edited; a correction is a new row that references the old one. The case header shows last_contact_at, last_contact_by and last_result. The Act's daily-slot law (Amendment v2.4) is unchanged and enforced on this log.</p>
+
+<h3>3.4 REQ-COL-073 — NEW: promise reliability is computed</h3>
+<p>broken_ptp_count, kept_ptp_count and renegotiation_count are computed by the system from PTP outcomes and shown on the case header and in every review snapshot. Nobody types them. A PTP marked BROKEN is marked by the system on the promise date (v2.2 stands); the third renegotiation on one instalment escalates to review (FigJam S10 stands).</p>
+
+<h3>3.5 REQ-COL-074 — NEW: review request and answer</h3>
+<p>An officer may raise a review_request on any case with a reason (REVIEW_REASON dictionary: NO_COMMITMENT, REPEATED_BROKEN_PTP, UNREACHABLE, DISPUTE, RESTRUCTURE_ASK, POWER_CUTOFF_ASK, NPL_TYPE_ASK, OTHER) and a question in their own words. Supervisors and managers see the open requests as a list ordered by age. The answer carries a decision (CONTINUE, ARRANGEMENT, RESTRUCTURE_PROPOSE, POWER_CUTOFF_APPROVE, NPL_TYPE_SET, LEGAL_REFER, OTHER) and a comment, and returns to the officer's Today list as a tier-6 item. The manager_review of v2.2 (system-raised on broken PTP, refusal, unreachable) stands and shares the same list. A request older than review_sla_hours (default 24) is flagged.</p>
+
+<h3>3.6 REQ-COL-075 — NEW: two statuses, never one</h3>
+<p>payment_status is computed by the system: CURRENT, LATE, NPL, CLOSED, NOT_INSTALLED. dc_status is chosen by a person from the DC_STATUS dictionary, seeded verbatim from the sheet: No Action, Unreachable, Extend Payment To, Contact Back, Tech Issue, Power Cutoff, Power Bill Issue, Restructure Loan, Legal Letter, Retrieve Asset, Visit Customer, Terminate Contract. Neither derives the other. NPL Type (NPL_TYPE dictionary: NPL 1 - Restructure, NPL 2 - Cooperative - Decommission, NPL 3 - Uncooperative - Legal action) is set by a manager only. Repossession stages (Repossessed In Process, Ready Resell, Sold) live on the recovery case, not on dc_status.</p>
+
+<h3>3.7 REQ-COL-076 — AMENDS REQ-COL-047 wording: the service issue carries its ticket</h3>
+<p>A service_issue carries ticket_url (the Odoo helpdesk link), responsible_team (INSTALLATION_EPC | O_AND_M | PERMIT | CS), deadline and ticket_status. When the ticket closes — read from Odoo when configured, or marked by the officer — the case receives a tier-6 Today item "ticket closed, resume follow-up". The fee-state rules of Amendment v2.4 and the 26 August decisions stand: a service hold freezes the chargeable clock and the fee, the elapsed clock continues, a permit hold pauses the fee but not the clock.</p>
+
+<h3>3.8 REQ-MOD-040 — NEW: power restriction as a governed act</h3>
+<p>Power restriction is requested by an officer and approved by the role named in config (power_restriction_approver, default OWNER while the Debt Manager post is vacant). Preconditions are configuration: missed instalments at least power_restriction_min_missed (default 2) and a broken PTP on the case (default required). The request carries the reason ARREARS and is visible to O&amp;M with that reason so a cut for arrears is never mistaken for a fault. Restoration is raised on any confirmed payment and is due the same business day before 15:00, otherwise the next business day (26 August decision). Every request, approval, execution and restoration is a logged event. The eighteen existing restrictions are backfilled with no approver (26 August decision stands).</p>
+
+<h3>3.9 REQ-CFG-020 — NEW: governed dictionaries</h3>
+<p>DC_STATUS, CONTACT_RESULT, NEXT_ACTION, REVIEW_REASON, NPL_TYPE and DELAY_CAUSE are dictionaries edited by a Manager, seeded from the sheet's vocabulary, with Thai and English labels, a sort order and an active flag. Values are never hard-deleted; a deactivated value stays readable on history. REQ-CFG (v2.1, F28 code dictionary) stands; these six are its first business lists.</p>
+
+<h3>3.10 REQ-CFG-021 — NEW: buckets are configuration</h3>
+<p>DPD is the number; a bucket is a named range in a band set. Seeded sets: OPERATIONAL (1–29, 30–59, 60–89, 90+) and LEGACY_SHEET (under 30, under 45, under 60, under 75, under 90, over 90) beside the existing OPERATIONAL and LEGACY_LDR sets of Amendment v2.4; a Manager may add a set. Every aging_bucket still travels with its band_set_code (v2.4 stands). Reports choose their own cuts from DPD.</p>
+
+<h3>3.11 REQ-CFG-022 — NEW: the NPL treatment is a policy value</h3>
+<p>The accounting NPL flag stays automatic at the earlier of 90 days past due on the original schedule or two instalments missed on a restructured one (Executive Brief 6.7; REQ-NPL-003 stands). The collection treatment — when a case is routed for NPL review — is configuration: npl_review_dpd (default 60) and npl_review_missed_no_contact (default 2 instalments with no counted contact). The value is OPEN, owner the Owner, carried as OD-04 extended. Officers never set either.</p>
+
+<h3>3.12 REQ-INV-001 to REQ-INV-005 — NEW: the invoice pipeline</h3>
+<p><strong>REQ-INV-001.</strong> The pipeline lists every order whose planned installation date from Odoo falls within pipeline_lookahead_days (default 3), with contract type, deposit or down payment due, and the two gates. <strong>REQ-INV-002.</strong> Gate 1 is a down payment or deposit received (a matched receipt in PEAK or a confirmed slip); gate 2 is EPC confirmation of the installation date read from Odoo. Release is refused while either gate is open (gate_not_passed). <strong>REQ-INV-003.</strong> Release stamps entity and company_id from the product group (REQ-ENT-001 stands) and creates the invoice as a PEAK draft (REQ-ACC-030). <strong>REQ-INV-004.</strong> Delivery is recorded per invoice — channel, sent_at, sent_by — and the customer's reply, if any. <strong>REQ-INV-005.</strong> On installation day the pipeline shows installed / postponed / cancelled from Odoo; a postponement after issue forces the invoice owner to choose STAND, AMEND_DUE_DATE or CANCEL_AND_REISSUE, each a PEAK draft outcome (FigJam S02). The invoice owner role is configuration (invoice_owner_role: AR | COLLECTION), OPEN, owner the Owner.</p>
+
+<h3>3.13 REQ-ACC-030 to REQ-ACC-034 — NEW and AMENDING REQ-INT-004: PEAK draft only</h3>
+<p><strong>REQ-ACC-030.</strong> Every document Debt originates for the books is a peak_document with an intent (the FigJam outcome table, 23 rows), the entity and company_id, the payload, an idempotency key generated and stored before the call, and a state: PENDING, DRAFT_CREATED, APPROVED_IN_PEAK, REJECTED, UNSENT. <strong>REQ-ACC-031.</strong> The PEAK client exposes create-draft and read-status only. No code path in Debt calls approve, post, update or delete on a PEAK document; a test asserts the client has no such method. <strong>REQ-ACC-032.</strong> A replay with the same idempotency key never creates a second draft; a create failure leaves the document UNSENT and re-sendable; PEAK bills per create. <strong>REQ-ACC-033.</strong> Approval or rejection is read back (polling on demand and at 02:30; webhook when available); a rejection returns the document to the screen that raised it with PEAK's reason as a tier-6 Today item. <strong>REQ-ACC-034.</strong> A confirmed slip creates a draft receipt against the invoice at invoice level; instalment components are still never written while OD-02 (allocation order) is open. This amends REQ-INT-004 (v2.5: full write of QR invoices) — the QR is read from the approved invoice, not from the draft.</p>
+
+<h3>3.14 REQ-INT-030 to REQ-INT-032 — NEW: migration from the sheet</h3>
+<p><strong>REQ-INT-030.</strong> The importer reads every working tab of New Order Master (order master, Done-Collection, Done-Cash, DC Cash Tracking, loan report, asset register) and creates customers, contracts, month events, PTPs, dc_status, NPL type and contact log rows, each carrying source_ref (tab, row) and data_source SHEET. Phone, email and identity numbers are masked (R12 stands). <strong>REQ-INT-031.</strong> The MapLog string in the Comment cell is parsed into contact_log rows (timestamp, agent, result, PTP amount and date, next call); the free text remains as the note. Month-cell tokens map to events: an amount to a receipt, Late to nothing, Link Sent to a delivery record, Restructure to a restructure marker, Credit Note to a credit note marker, No payment: service issue to a service hold. Both date formats are accepted and the tab decides which. <strong>REQ-INT-032.</strong> The import reconciles to the sheet's own summary rows (counts by payment status and product) and produces the gap list — orders installed per Odoo but not Order-Done in the sheet — for the operations owner.</p>
+
+<h3>3.15 REQ-KPI-020 and REQ-KPI-021 — NEW: the weekly report and officer indicators</h3>
+<p><strong>REQ-KPI-020.</strong> The weekly report is generated in the shape sent to Jo today: cash-in against target by category, month-on-month, week-on-week late and NPL counts with the reasons for each NPL change, service-issue count, next-week focus (free text by the lead). Every ratio names its period (Executive Brief section 7 stands). <strong>REQ-KPI-021.</strong> Officer indicators are contacts made, counted contacts, PTPs taken, PTP kept rate and cash received on their caseload; all computed server-side (no arithmetic in the interface).</p>
+
+<h3>3.16 REQ-IAM-020 — NEW: three roles, one person may hold two</h3>
+<p>Roles OFFICER, SUPERVISOR, MANAGER (plus OWNER). One person may hold more than one. Caseload assignment is at customer level by a Supervisor or Manager. The vacancy guard (REQ-IAM-015) stands: a route to a vacant role is refused at seeding.</p>
+
+<h3>3.17 REQ-RCV-001 — AMENDED: the uninstall fee</h3>
+<p>The uninstall fee is THB 3 per watt (Executive Brief 6.9; all ten live repossessions priced at 3.00), invoiced separately as a PEAK draft and never netted. Amendment v2.5's "THB 5 per watt" is corrected. The rate is configuration (uninstall_fee_per_watt).</p>
+
+<h2>4. Register changes</h2>
+<table>
+<tr><th>Key</th><th>Change</th></tr>
+<tr><td>peak_write_mode</td><td>NEW · LOCKED DRAFT_ONLY (C3)</td></tr>
+<tr><td>invoice_owner_role</td><td>NEW · OPEN · owner the Owner · RUNNING with COLLECTION while open (the team does it today)</td></tr>
+<tr><td>pipeline_lookahead_days</td><td>NEW · 3</td></tr>
+<tr><td>npl_review_dpd / npl_review_missed_no_contact</td><td>NEW · 60 / 2 · OPEN (OD-04 extended, owner the Owner)</td></tr>
+<tr><td>power_restriction_approver / _min_missed / _require_broken_ptp</td><td>NEW · OWNER / 2 / true</td></tr>
+<tr><td>review_sla_hours</td><td>NEW · 24</td></tr>
+<tr><td>uninstall_fee_per_watt</td><td>5 → 3</td></tr>
+<tr><td>band sets</td><td>OPERATIONAL redefined 1–29 / 30–59 / 60–89 / 90+; LEGACY_SHEET added</td></tr>
+<tr><td>Dictionaries</td><td>DC_STATUS, CONTACT_RESULT, NEXT_ACTION, REVIEW_REASON, NPL_TYPE, DELAY_CAUSE seeded from the sheet</td></tr>
+<tr><td>penalty rate, grace, allocation order</td><td><strong>CF1 and OD-31 superseded 2026-09-09, rulings 87–88</strong> — rate 0.03 %/day, no grace, invoicing ON. Was: "Unchanged: CF1, OD-31, OD-02 remain OPEN; penalty invoicing stays feature-flagged OFF." OD-02 remains OPEN. The sheet's cumulative-block method is still shown beside the per-instalment figure during migration only</td></tr>
+</table>
+
+<h2>5. Unchanged and still pending</h2>
+<p>Amendment v2.4's fee and clock law, the reversal rules, the board identifiers and the daily-slot law stand. Amendment v2.5's entity routing, cash one-format, lease and cash ladders, restructure by supersession, month-37 service, S10 register and Odoo read-only rules stand except where sections 3.2, 3.13 and 3.17 name them. <strong>CF1 and OD-31 are no longer open — superseded 2026-09-09, rulings 87 and 88</strong> (rate 0.03 %/day, no grace; penalty invoicing on). OD-02, OD-03, OD-04, OQ-31 and SVC-37 remain open as before. New open items from the interview are carried in Case Register v1.4: the restructure entry gate value, who signs the termination letter, the LINE retention plan.</p>

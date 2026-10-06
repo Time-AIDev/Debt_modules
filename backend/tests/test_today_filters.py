@@ -55,10 +55,10 @@ def test_an_unknown_filter_value_is_refused_with_the_known_list(client, field, v
 
 def test_an_empty_filter_is_no_filter(client):
     everyone = _today(client)
-    blank = _today(client, tier="", payment_status="", dc_status="", product="", q="", officer="")
+    blank = _today(client, tier="", payment_status="", dc_status="", product="", entity="", q="", officer="")
     assert blank["meta"]["total"] == everyone["meta"]["total"]
     assert blank["meta"]["filters"] == {"officer": None, "tier": None, "payment_status": None,
-                                        "dc_status": None, "product": None, "q": None}
+                                        "dc_status": None, "product": None, "entity": None, "q": None}
 
 
 def test_the_tier_filter_narrows_the_desk_and_its_options_keep_every_tiers_count(client):
@@ -120,6 +120,15 @@ def test_officer_totals_are_each_officers_own_list_and_name_the_whole_team(clien
     assert _thai(meta["officer_totals_note_th"])
 
 
+def test_entity_scopes_assignee_option_counts_and_unassigned_option(client):
+    for entity in ("EPC", "SPV"):
+        meta = _today(client, entity=entity)["meta"]
+        assert sum(meta["officer_totals"].values()) + meta["unassigned_total"] == meta["total"]
+        for uid, count in meta["officer_totals"].items():
+            assert _today(client, entity=entity, officer=uid)["meta"]["total"] == count
+        assert _today(client, entity=entity, unassigned=1)["meta"]["total"] == meta["unassigned_total"]
+
+
 def test_an_officer_a_lead_assigned_work_to_is_a_filter_the_desk_accepts(client):
     uid = _today(client)["items"][0]["customer"]["uid"]
     assigned = client.post("/v1/customers/%s/assign" % uid, headers={"X-Volt-Role": "MANAGER"},
@@ -144,6 +153,30 @@ def test_the_filters_combine_and_the_ladder_filter_is_still_refused_first(client
     refused = client.get("/v1/today", params={"ladder_indicative": "ALMOST_NPL", "tier": "NOPE"})
     assert refused.status_code == 422
     assert refused.json()["errors"][0]["pointer"] == "/ladder_indicative"
+
+
+def test_entity_filter_partitions_the_queue_and_combines_with_officer(client):
+    all_rows = _today(client)["items"]
+    for entity in ("EPC", "SPV"):
+        narrowed = _today(client, entity=entity)
+        assert narrowed["meta"]["filters"]["entity"] == entity
+        assert narrowed["meta"]["total"] == len(narrowed["items"])
+        assert {row["entity"] for row in narrowed["items"]} <= {entity}
+        assert sum(narrowed["meta"]["counts_by_tier"].values()) == narrowed["meta"]["total"]
+        assert len(narrowed["items"]) == sum(row["entity"] == entity for row in all_rows)
+        officer = next((row["case"]["officer_uid"] for row in narrowed["items"]
+                        if row["case"]["officer_uid"]), None)
+        if officer:
+            both = _today(client, entity=entity, officer=officer)
+            assert all(row["entity"] == entity and row["case"]["officer_uid"] == officer
+                       for row in both["items"])
+            assert both["meta"]["daily_summary"]["*"]["not_yet"] <= narrowed["meta"]["total"]
+
+
+def test_unknown_entity_is_refused_before_building_queue(client):
+    response = client.get("/v1/today", params={"entity": "SPC"})
+    assert response.status_code == 422
+    assert response.json()["errors"][0]["pointer"] == "/entity"
 
 
 # --- feedback round 2, TASK-108: the unassigned desk (ADDITIONS ONLY) ---------------

@@ -32,7 +32,7 @@ def _me(session):
 def _signed_in(session, config):
     if config.session_policy == "tab":
         from .. import tab_sessions
-        session = dict(session, session_policy="tab")
+        session = tab_sessions.with_expiry(dict(session, session_policy="tab"))
         token = tab_sessions.issue(session)
         response = JSONResponse(dict(_me(session), session_token=token))
         response.headers["cache-control"] = "no-store"
@@ -58,8 +58,14 @@ def password_login(body: dict = Body(default={})):
     config = auth.current_config()
     if not config.on:
         raise auth.auth_off()
+    if not config.test_accounts:
+        # No password identity exists in this mode. Paying PBKDF2 on arbitrary
+        # names would only expose a CPU exhaustion endpoint.
+        raise auth.login_failed()
     username = str((body or {}).get("username") or "").strip()
     password = str((body or {}).get("password") or "")
+    if len(username) > 128 or len(password) > 1024:
+        raise auth.login_failed()
     if auth.is_locked(username):
         raise auth.login_locked()
     account = config.test_accounts.get(username)

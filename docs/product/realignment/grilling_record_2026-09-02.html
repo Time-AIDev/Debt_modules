@@ -1,0 +1,114 @@
+<h1>Volt Debt Collection — Grilling Session Record, 2026-09-02 — the realignment</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>Every question asked in the 2026-09-02 realignment grilling, every option offered with its cost, and the decision taken</td></tr>
+<tr><td>Version</td><td>1.0. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Status</td><td>Decided. Applied by the spec realignment and the in-place prototype rebuild that this session authorised.</td></tr>
+<tr><td>What this is</td><td>Seven numbered decisions, C1 to C7, taken in two rounds. Round 1 settled how the prototype is rebuilt, which specification set is updated, what the PEAK draft-only rule covers, and whether pre-installation work is in scope. Round 2 settled the fixture data, the live-system posture and the stop rule for the blind UAT loop.</td></tr>
+<tr><td>Why it exists</td><td>On 1 September 2026 the Debt team lead was interviewed for 1 hour 47 minutes while screen-sharing the New Order Master sheet, LINE OA Manager, the PEAK invoice page and the weekly report email. That interview, the team SOP, the Executive Brief v2.0 and the FigJam board "Debt to PEAK — Process Handoff by Scenario" are now the primary sources, in that order. The prototype and the document set were built before any of them existed. A decision is only useful later if the alternatives are visible.</td></tr>
+<tr><td>Read with</td><td>Interview and SOP Findings 2026-09-01 · Grilling Session Record 2026-08-30 (R1–R16) · Requirements Amendment v2.6</td></tr>
+</table>
+
+<blockquote><strong>Correction notice, 2026-09-09.</strong> This record was written when the
+late-fee rate was 0.3 %/day with 14 days' grace and CF1/OD-31 were still open. Rulings 87
+and 88 decided both — see <code>docs/design/round-6/00-ledger.md</code> rulings 87–88.
+Section 6 below records these as items raised for the business and left open <em>as of this
+2026-09-02 session</em>; that is preserved as the historical record of what this meeting
+left undecided, not as a claim about today's status.</blockquote>
+
+<h2>0. Plain language first</h2>
+<p><strong>Prototype</strong> — the running Debt web application at ~/volt-debt-prototype, fixtures only, no database. <strong>Spec set</strong> — the Google Docs in the Drive folder Debt_Time (PRD, amendments, data model, API, integrations, runbooks) plus the eight-part FullSpec in the folder "4 Credit and Collection spec + summary". <strong>PEAK</strong> — the accounting system. A PEAK <strong>draft</strong> is a document PEAK holds but has not yet approved into the books; only a person inside PEAK approves it. <strong>Odoo</strong> — the ERP that holds orders, installation dates and helpdesk tickets. <strong>UAT</strong> — user acceptance testing; here it is run blind by agents who play a first-time Debt officer and may not read the source code. <strong>P1 / P2 / P3</strong> — finding severities: P1 wrong money or a blocked daily task; P2 an officer cannot complete a step without help; P3 polish.</p>
+
+<h2>1. Context</h2>
+<p>The session was run against five inputs, in this priority: (1) the interview transcript and video of 2026-09-01; (2) the Debt team SOP — the docx "SOP – Collection and Debt Follow-up", four flowcharts (Sales/EPC/AR invoice, payment and overdue, PTP/service/no-contact/manager review, credit and risk/NPL/recovery/closure) and the seventeen-step "Debt Collection Workflow" narrative; (3) the Executive Brief v2.0 of 29 August; (4) the FigJam board of twenty-four scenarios; (5) the New Order Master sheet as the reference for real data. The older full specification (55-page PDF and FullSpec v3.9) was read for features worth keeping and wins nothing in a conflict.</p>
+<p>Three facts from those inputs framed every question. First, the sheet is "the view management wants, not a view for working" — the team lead's words. Second, the SOP's minimum record is that every case answers status, last contact, what the customer said, PTP, issue, owner and next action, and "no case without Next Action". Third, the FigJam board has no PEAK draft state and never names Odoo; the draft-only boundary Arina requires is a new rule, not a quotation.</p>
+
+<h2>2. Round one — shape of the work</h2>
+
+<h3>C1 — How the prototype is rebuilt</h3>
+<p><strong>Question.</strong> The current prototype has eighteen screens, about sixty endpoints and 415 passing checks, but its screens follow the specification's scenarios, not the team's daily loop. Its money engines and the Odoo and PEAK adapters are sound. How is it rebuilt?</p>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>New project, port the engines (recommended)</td><td>Cleanest information architecture; the old prototype stays as evidence. Costs a second repository and a second deployment path.</td><td>No</td></tr>
+<tr><td>Rebuild in place</td><td>More coupling to old decisions; the frontend is deleted and the backend reshaped inside the same history.</td><td>Yes</td></tr>
+<tr><td>Pure from scratch, reuse nothing</td><td>Loses 259 backend tests that already encode the money rules.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Rebuild in place in ~/volt-debt-prototype. Keep money/, collections/contact.py, entities.py, errors.py, integrations/, session.py and the verify scripts. Replace every screen and the seed. Routes that serve no step of the team's journey stay behind a legacy tag until the last UAT round, then go.</p>
+
+<h3>C2 — Which specification set is updated</h3>
+<p><strong>Question.</strong> Debt_Time holds PRD v2.1 with Amendment v2.5, Workflow Alignment v2.0, Integration Alignment v2.2 and PEAK Integration v1.1. FullSpec v3.9 lives in a different folder. Which is updated?</p>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>Debt_Time set as change-specs (recommended)</td><td>FullSpec v3.9, the document the Executive Brief cites, would stay silent on the interview.</td><td>No</td></tr>
+<tr><td>Debt_Time set plus FullSpec v4.0</td><td>Roughly doubles the document work.</td><td>Yes</td></tr>
+<tr><td>One new consolidated spec</td><td>Breaks every existing requirement reference.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Both. In Debt_Time: Interview and SOP Findings 2026-09-01 (new), Requirements Amendment v2.6, Collection Workflow Alignment v3.0, Integration Alignment v2.3, Odoo Integration v1.2, PEAK Integration v1.2, Data Model v2.3 delta, API Surface v2.3 delta, Case Register v1.4, Test Cases SCN v1.1. Superseded versions move to 13 History. In the other folder: FullSpec v4.0 Parts 1–8 with Annex G, v3.9 moved to its History.</p>
+
+<h3>C3 — What "PEAK draft only" covers</h3>
+<p><strong>Question.</strong> The FigJam board lists twenty-three ledger-touching outcomes. Today AR matches receipts in PEAK by hand from LINE slips. Which of those outcomes does Debt create in PEAK, and in what state?</p>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>All twenty-three outcomes as drafts, AR approves in PEAK (recommended)</td><td>Debt must hold an idempotency key per document and read approval state back; the slip-confirmation step becomes a Debt act with consequences.</td><td>Yes</td></tr>
+<tr><td>Drafts for invoices and credit notes only; receipts stay AR's</td><td>Keeps the double keying the team complained about for every payment.</td><td>No</td></tr>
+<tr><td>No PEAK writes; a posting-intent queue for AR</td><td>Zero API risk, but the sheet's manual loop survives.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Every document Debt originates — invoice, due-date amendment, credit note, receipt from a confirmed slip, partial receipt, withholding-tax receivable, restructure void and journal, settlement receipt, buyback movements, uninstall-fee invoice, cancellation documents, write-off — is created in PEAK in draft state, with the idempotency key stored before the call. AR approves inside PEAK. Debt reads the approved state back and never posts, approves, edits or deletes a PEAK record. PEAK bills per create, so a draft is created once.</p>
+
+<h3>C4 — Pre-installation scope</h3>
+<p><strong>Question.</strong> Eight of the team's seventeen daily steps happen before collection starts, and the team runs two release gates by hand — down payment received, EPC confirmed the date. The PRD and the Executive Brief call this out of scope pending the Owner. Does it enter the prototype?</p>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>Yes, an Invoice Pipeline screen with the two gates (recommended)</td><td>Pre-decides an Owner item; the gates are already operated by hand, so the question is only who operates them.</td><td>Yes</td></tr>
+<tr><td>Read-only view only</td><td>Shows the work without removing any of it.</td><td>No</td></tr>
+<tr><td>No, keep the PRD boundary</td><td>Half the team's day stays outside the system.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> In scope. Odoo installation dates feed a three-day look-ahead; a PEAK draft invoice is created only when both gates pass; a reschedule after issue forces the invoice owner to choose stand, amend the due date, or cancel and reissue. Invoice ownership (AR or Collection) remains the Owner's open item; the screen works for either.</p>
+
+<h2>3. Round two — data, systems and the stop rule</h2>
+
+<h3>C5 — Fixture data</h3>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>Real IDs, amounts and notes; mask phone, email and ID number (recommended)</td><td>Real customer names are visible inside the Debt team's own tool; the masking rule from the first importer is kept.</td><td>Yes</td></tr>
+<tr><td>Real structure, synthetic names</td><td>Weaker UAT — officers do not recognise the customers.</td><td>No</td></tr>
+<tr><td>Fully synthetic</td><td>No migration realism.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Fixtures come from the Master Sheet export: real VOLT IDs, amounts, statuses, month cells, PTP values and notes. Phone, email and identity numbers are masked. The sheet's quirks — two date formats, MapLog strings with pipes inside the Comment cell, "Link Sent" written into a month cell — become migration test cases.</p>
+
+<h3>C6 — Live systems</h3>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>Odoo live read-only plus PEAK UAT drafts, fixtures as fallback (recommended)</td><td>Two code paths to keep honest; every row must say where it came from.</td><td>Yes</td></tr>
+<tr><td>Fixtures only, adapters stubbed</td><td>The draft contract would be proven only against a stub.</td><td>No</td></tr>
+<tr><td>Live only</td><td>UAT and tests would depend on Odoo and PEAK availability.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Every screen works with no credentials. When backend/.env is present, Odoo orders, installation dates and helpdesk tickets are read live (never written) and PEAK UAT receives real draft documents. Credential names appear in code and documents; values appear nowhere.</p>
+
+<h3>C7 — The UAT stop rule</h3>
+<table>
+<tr><th>Option</th><th>What was said against it</th><th>Chosen</th></tr>
+<tr><td>Stop when a full round finds no P1 or P2 and at most three P3 (recommended)</td><td>Needs a severity definition everyone accepts.</td><td>Yes</td></tr>
+<tr><td>Fixed three rounds</td><td>Stops on a calendar, not on evidence.</td><td>No</td></tr>
+<tr><td>Zero findings of any severity</td><td>Could run indefinitely on taste.</td><td>No</td></tr>
+</table>
+<p><strong>Decision.</strong> Blind rounds run until a full round returns no P1, no P2 and at most three P3. Every round's findings, verdicts and fixes are recorded in this folder and in the vault.</p>
+
+<h2>4. The seven decisions in one table</h2>
+<table>
+<tr><th>No.</th><th>Decision</th><th>Status</th></tr>
+<tr><td>C1</td><td>Rebuild in place; engines, adapters and verify scripts kept; screens and seed replaced</td><td>Stands</td></tr>
+<tr><td>C2</td><td>Debt_Time change-specs plus FullSpec v4.0; superseded versions to History</td><td>Stands</td></tr>
+<tr><td>C3</td><td>All twenty-three PEAK outcomes created as drafts; AR approves in PEAK; Debt never posts</td><td>Stands</td></tr>
+<tr><td>C4</td><td>Pre-installation in scope as an Invoice Pipeline with the two release gates</td><td>Stands</td></tr>
+<tr><td>C5</td><td>Fixtures from the Master Sheet, real identities, contact data masked</td><td>Stands</td></tr>
+<tr><td>C6</td><td>Odoo live read-only, PEAK UAT drafts, fixtures as fallback</td><td>Stands</td></tr>
+<tr><td>C7</td><td>UAT stops at a clean round: no P1, no P2, at most three P3</td><td>Stands</td></tr>
+</table>
+
+<h2>5. What these decisions cost in work already done</h2>
+<p>R3 of 30 August (full re-architecture around the twelve deck scenarios) is superseded by C1: the backend is reshaped again, this time around the team's daily loop, and the scenario catalogue becomes a cross-reference rather than the skeleton. R15 (PEAK full write in UAT, real QR invoices) is narrowed by C3 to draft creation only. R7 (code-first, no Figma) stands, with the design system now generated by the ui-ux-pro-max skill. R9–R12 (hero card, guided queue, tiered priority, tel and LINE actions) stand and are absorbed into the Today screen. Every screen brief in docs/archive/briefs/screens-v2 becomes a superseded record. The four-part Implementation Plan MVP v1.0 keeps its phases but its task list no longer matches the code.</p>
+
+<h2>6. Items raised for the business, not decided here</h2>
+<p>These came out of the interview and stay open with their owners in Case Register v1.4: the late-fee rate (0.3 or 0.1 percent per day) and grace (0, 11 or 14 days) — Legal is re-reading the agreement; the order a short payment is applied — Accounting; the NPL policy value (90 days, 60 days, or two missed instalments with no contact) — Owner; the restructure entry gate (the Brief says 40 percent, the interview mentioned 25 percent) — Owner; who signs the termination letter — Legal; whether AR or Collection owns the invoice — Owner; the LINE Official Account retention plan — Owner; the power cut-off approver — Owner.</p>

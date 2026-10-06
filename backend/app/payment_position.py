@@ -122,6 +122,9 @@ def _last_money_in(receipts):
 
 def build(customer, jstate, business_date):
     invoices = _mine(customer, jstate.invoices)
+    from . import invoice_reviews
+    annotated = invoice_reviews.project(customer, jstate, invoices, business_date=business_date)
+    invoices = [inv for inv in annotated if inv["is_due"] and inv["collection_included"]]
     receipts = _mine(customer, jstate.receipts)
     last_in = _last_money_in(receipts)
     peak = (getattr(customer, "sheet", {}) or {}).get("peak") or {}
@@ -137,7 +140,7 @@ def build(customer, jstate, business_date):
             as_of = last_in["on"]
         note = NOTE_RECEIPT_TH.get(source, NOTE_RECEIPT_TH["SLIP"]) % as_of
         note_en = NOTE_RECEIPT_EN.get(source, NOTE_RECEIPT_EN["SLIP"]) % as_of
-    elif any(i.get("source") == "PEAK_REPORT" for i in invoices) and peak.get("report_as_of"):
+    elif any(i.get("source") == "PEAK_REPORT" for i in annotated) and peak.get("report_as_of"):
         source, as_of = "PEAK_REPORT", peak["report_as_of"]
         note = NOTE_RECEIPT_TH["PEAK_REPORT"] % as_of
         note_en = NOTE_RECEIPT_EN["PEAK_REPORT"] % as_of
@@ -160,7 +163,7 @@ def build(customer, jstate, business_date):
             k, service_deferrals.raw_lines(k)) if getattr(line, "service_deferral", None)
             and line.due_date >= business_date]
         adjustment = {
-            "peak_outstanding": _money(sum((service_deferrals.outstanding(i) for i in invoices
+            "peak_outstanding": _money(sum((service_deferrals.outstanding(i) for i in annotated
                                              if i.get("source") == "PEAK_REPORT"), Decimal("0"))),
             "collection_overdue": _money(main._customer_aggregate(customer)[0]),
             "deferred_amount": _money(sum((max(line.outstanding_amount, Decimal("0"))
@@ -171,6 +174,7 @@ def build(customer, jstate, business_date):
         }
     return {
         **adjustment,
+        **invoice_reviews.totals(annotated),
         "paid_count": sum(1 for i in invoices if i["state"] in SETTLED_STATES),
         "open_count": sum(1 for i in invoices if i["state"] in OPEN_STATES),
         "total_count": len(invoices),

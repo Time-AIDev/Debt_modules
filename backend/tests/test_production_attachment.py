@@ -1,3 +1,4 @@
+import hashlib
 from sqlalchemy import text
 from app import db, migrate, task_objects
 from app.attachments import store
@@ -16,7 +17,7 @@ def test_clean_production_file_lives_in_gcs_not_database(monkeypatch, pg_url, pg
         return name
     monkeypatch.setattr(task_objects, "put", put)
     monkeypatch.setattr(task_objects, "get", lambda name, bucket_env: objects[name])
-    row = store.put({"sha256": "abc", "kind": "PDF", "content_type": "application/pdf", "size": 4,
+    row = store.put({"sha256": hashlib.sha256(b"file").hexdigest(), "kind": "PDF", "content_type": "application/pdf", "size": 4,
                      "filename": "file.pdf"}, b"file", "owner", {"state": "CLEAN", "by": "clamd"})
     try:
         record = pg_conn.execute(text("select bytes,object_name from records.attachment where uid=:u"), {"u": row["uid"]}).first()

@@ -1,0 +1,91 @@
+<h1>Volt Debt — Collection Workflow Alignment v3.0</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>Collection Workflow Alignment v3.0 — the Debt team's own SOP and seventeen-step workflow as the journey, and its mapping to the rebuilt screens. Supersedes v2.0 Parts 1 and 2 (moved to 13 History). The deck v20.0 scenario catalogue of v2.0 Part 1 stands as a cross-reference and is not restated.</td></tr>
+<tr><td>Version</td><td>3.0. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Sources</td><td>SOP – Collection and Debt Follow-up (10 sections) · four flowcharts · Debt Collection Workflow (17 steps) · Interview 2026-09-01 · Grilling Session Record 2026-09-02</td></tr>
+<tr><td>Read with</td><td>Requirements Amendment v2.6 · Interview and SOP Findings 2026-09-01</td></tr>
+</table>
+
+<h2>0. Plain language first</h2>
+<p><strong>The journey</strong> — the order in which work reaches an officer and leaves them. <strong>Lane</strong> — who does a step: Sales and EPC, AR, Collection, CS and O&amp;M, Manager, Credit and Risk, Legal. <strong>Gate</strong> — a rule that must be true before a step can happen. <strong>Tier</strong> — the position of a case on the Today list and why. <strong>Screen</strong> — one page of the rebuilt prototype. The eleven screens are named in Thai first because the team works in Thai.</p>
+
+<h2>1. The authority ladder</h2>
+<table>
+<tr><th>Rank</th><th>Document</th><th>Authority</th></tr>
+<tr><td>1</td><td>Interview 2026-09-01 and Interview and SOP Findings 2026-09-01</td><td>Fact about current practice and the team's stated needs</td></tr>
+<tr><td>2</td><td>Team SOP: docx, four flowcharts, seventeen-step workflow</td><td>The process the team follows and owns</td></tr>
+<tr><td>3</td><td>Requirements Amendment v2.6 and Grilling Session Record 2026-09-02</td><td>What the system must do, for what it names</td></tr>
+<tr><td>4</td><td>Executive Brief v2.0 and FigJam board</td><td>Money rules with worked numbers; the PEAK outcome table</td></tr>
+<tr><td>5</td><td>Requirements Amendment v2.5 and v2.4, Grilling Records of 30 and 26 August</td><td>For what they name and nothing above touches</td></tr>
+<tr><td>6</td><td>PRD v2.1, Data Model v2.1 plus deltas, API Surface, Integration and Runbook alignments</td><td>Everything not named above</td></tr>
+<tr><td>7</td><td>FullSpec v4.0 and the 55-page scenario catalogue</td><td>Reference; features worth keeping; never wins a conflict</td></tr>
+</table>
+
+<h2>2. The journey, step by step</h2>
+<table>
+<tr><th>Step</th><th>Lane</th><th>What happens</th><th>Gate or rule</th><th>Screen</th></tr>
+<tr><td>1 Check the installation plan</td><td>Collection reads Odoo</td><td>Orders installing in the next three days appear with contract type and the amount due</td><td>pipeline_lookahead_days</td><td>ใบแจ้งหนี้ก่อนติดตั้ง Invoice pipeline</td></tr>
+<tr><td>2 Prepare the invoice data</td><td>Collection, AR</td><td>Amount, due date, customer, contract and company shown as one set; anything missing blocks release</td><td>Gate 1 down payment received; gate 2 EPC confirmed date</td><td>Invoice pipeline</td></tr>
+<tr><td>3 Issue the invoice</td><td>Invoice owner (AR or Collection, open)</td><td>Release stamps the entity; a PEAK draft invoice is created; AR approves in PEAK</td><td>REQ-INV-003, REQ-ACC-030</td><td>Invoice pipeline; เงินเข้าและ PEAK Payments and PEAK drafts</td></tr>
+<tr><td>4 Deliver the invoice</td><td>Collection</td><td>Link sent by LINE or email; channel, time and sender recorded; the reply, if any</td><td>REQ-INV-004</td><td>Invoice pipeline; ลูกค้า Customer case</td></tr>
+<tr><td>5 Check on installation day</td><td>Collection reads Odoo</td><td>Installed, postponed or cancelled; a postponement after issue forces stand, amend or cancel-and-reissue</td><td>REQ-INV-005; FigJam S02</td><td>Invoice pipeline</td></tr>
+<tr><td>6 Receipt and matching</td><td>AR in PEAK; Collection confirms slips</td><td>A confirmed slip creates a draft receipt; AR approves; the case reads the approved state</td><td>REQ-ACC-034; OD-02 still refuses component allocation</td><td>Payments and PEAK drafts</td></tr>
+<tr><td>7 Monthly invoices</td><td>Collection</td><td>The month's instalments already exist in PEAK; delivery is recorded per month</td><td>REQ-INV-004</td><td>Customer case month grid</td></tr>
+<tr><td>8 Remind before and on the due date</td><td>Collection</td><td>D-3 and D0 reminders from templates; these are notifications, not counted contacts</td><td>Executive Brief stage 3</td><td>วันนี้ Today (reminder batch); Customer case</td></tr>
+<tr><td>9 Build the arrears list</td><td>System</td><td>At 02:30 and on demand, per officer, grouped by customer, in tiers</td><td>REQ-COL-071</td><td>Today; สมุดงาน Work book</td></tr>
+<tr><td>10 Contact and record</td><td>Collection</td><td>Call or LINE from the card; log channel, result, what was said; set the next action</td><td>REQ-COL-072, REQ-COL-070; the Act's daily slot</td><td>Today; บันทึกการติดต่อ Contact drawer</td></tr>
+<tr><td>11 Record and track PTP</td><td>Collection; system</td><td>Date and amount on the case; broken by the system on the date; renegotiate twice, the third escalates</td><td>REQ-COL-073; FigJam S10</td><td>Contact drawer; Today tier 1 and 3</td></tr>
+<tr><td>12 Service complaint</td><td>Collection raises; CS, O&amp;M, EPC fix</td><td>Issue with ticket link, team and deadline; fee and chargeable clock freeze; closure returns to the officer</td><td>REQ-COL-076; v2.4 fee-state table</td><td>Contact drawer; Customer case holds</td></tr>
+<tr><td>13 Cannot be reached</td><td>Collection</td><td>Attempts logged with channel and time; other channels and times; Sales or field asked; review after repeated failure</td><td>REQ-COL-072; FigJam S12</td><td>Contact drawer; Today</td></tr>
+<tr><td>14 Manager review</td><td>Officer asks; Supervisor or Manager answers</td><td>A request with reason and question; the answer with decision and comment returns to the officer</td><td>REQ-COL-074</td><td>รอตรวจ Review queue; Today tier 6</td></tr>
+<tr><td>15 Arrangement or restructure</td><td>Manager proposes; approvals per matrix</td><td>An arrangement leaves the schedule alone; a restructure needs the 40 percent gate and the four figures, then a PEAK draft void and journal</td><td>REQ-RST-001; FigJam S14, S15; REQ-ACC-030</td><td>NPL และการเรียกคืน Recovery</td></tr>
+<tr><td>16 NPL, legal and recovery</td><td>Manager sets NPL type; Legal, Ops, SCM execute</td><td>Type 1 to 3; repossession stages; legal timeline with dates; uninstall fee invoice as a PEAK draft</td><td>REQ-COL-075, REQ-RCV-001..003 amended</td><td>Recovery</td></tr>
+<tr><td>17 Report</td><td>Lead</td><td>The weekly report in Jo's shape, generated; officer indicators</td><td>REQ-KPI-020, 021</td><td>รายงาน Reports</td></tr>
+<tr><td>Power restriction (SOP section 8 practice)</td><td>Officer requests; approver approves; O&amp;M executes</td><td>Governed act with reason visible to O&amp;M; restoration on payment</td><td>REQ-MOD-040</td><td>Customer case; Review queue</td></tr>
+<tr><td>Migration (before day one)</td><td>Lead with the importer</td><td>The sheet's working tabs imported, reconciled to its own pivots; the Order-Done gap list</td><td>REQ-INT-030..032</td><td>แหล่งข้อมูล Data sources and migration</td></tr>
+</table>
+
+<h2>3. The Today list, tier by tier</h2>
+<table>
+<tr><th>Tier</th><th>Who is here</th><th>Why first</th><th>The sheet equivalent</th></tr>
+<tr><td>1</td><td>PTP due today</td><td>The team's first filter every morning</td><td>PTP Date = today</td></tr>
+<tr><td>2</td><td>Next action due today or overdue</td><td>The callback the customer asked for, or the internal rule "call again in three days"</td><td>Did not exist; read from comments</td></tr>
+<tr><td>3</td><td>Broken PTP not yet renegotiated</td><td>A promise missed is the strongest signal</td><td>PTP Date in the past and no payment</td></tr>
+<tr><td>4</td><td>Two or more instalments missed, no open PTP</td><td>The team's second filter: keep them from sliding to NPL</td><td>Bucket under 60 days and above</td></tr>
+<tr><td>5</td><td>DPD 1 to 3, no contact yet</td><td>SOP D+1 to D+3</td><td>Payment Status Late, no comment</td></tr>
+<tr><td>6</td><td>Answers and closures waiting</td><td>A review answered, a ticket closed, a PEAK draft rejected</td><td>Did not exist</td></tr>
+<tr><td>7</td><td>Everyone else, arrears descending</td><td>Routine</td><td>The rest of the tab</td></tr>
+</table>
+
+<h2>4. The eleven screens</h2>
+<table>
+<tr><th>No.</th><th>Screen</th><th>Purpose</th><th>Replaces</th></tr>
+<tr><td>1</td><td>วันนี้ Today</td><td>The tiered list with counts, one tap to call, LINE or log</td><td>The two filters</td></tr>
+<tr><td>2</td><td>ลูกค้า Customer case</td><td>Header, arrears large and outstanding small, DPD and bucket, payment status and DC status, open PTP, next action, holds, the month grid exactly as the sheet shows it, invoices and receipts with their PEAK draft state, the contact log, quick actions</td><td>The row, the Comment cell, LINE history</td></tr>
+<tr><td>3</td><td>บันทึกการติดต่อ Contact drawer</td><td>Channel, result, PTP, next action, note; the Act's cost stated on the option; 90 second retraction</td><td>The MapLog string</td></tr>
+<tr><td>4</td><td>สมุดงาน Work book</td><td>The whole book as a table with the sheet's columns, filters, saved views, group by customer, export</td><td>Done-Collection and Done-Cash</td></tr>
+<tr><td>5</td><td>รอตรวจ Review queue</td><td>Requests, escalations, NPL type, restructure and power cut-off approvals; the answer returns to the officer</td><td>The conversation across the desk</td></tr>
+<tr><td>6</td><td>ใบแจ้งหนี้ก่อนติดตั้ง Invoice pipeline</td><td>Three-day look-ahead, the two gates, draft invoice, delivery, installation-day check, reschedule</td><td>Operation Master look-ups</td></tr>
+<tr><td>7</td><td>เงินเข้าและ PEAK Payments and PEAK drafts</td><td>Slip confirmed to draft receipt; the draft queue with its states; unmatched money; credit notes</td><td>Keying amounts into month cells</td></tr>
+<tr><td>8</td><td>NPL และการเรียกคืน Recovery</td><td>NPL types, restructure gate and figures, repossession stages, legal timeline</td><td>NPL tabs and trackers</td></tr>
+<tr><td>9</td><td>รายงาน Reports</td><td>The weekly report, bucket flow, officer indicators</td><td>The weekly email, Loan Report pivots</td></tr>
+<tr><td>10</td><td>ตั้งค่า Settings</td><td>Buckets, NPL policy, late-fee rate (decided 2026-09-09, ruling 87; was indicative), reminder schedule, dictionaries, assignment</td><td>Formulas nobody can read</td></tr>
+<tr><td>11</td><td>แหล่งข้อมูล Data sources and migration</td><td>Odoo and PEAK status; the sheet import with reconciliation and the gap list</td><td>The Order-Done flip</td></tr>
+</table>
+
+<h2>5. Where the Act bites in this journey</h2>
+<p>Unchanged law (Amendment v2.4): one counting contact per customer per day across every channel; stating the amount is what makes an answered call count; an inconvenient-time call does not count and may be retried; inbound never counts; the slot is at stake for 90 seconds unless an amount is stated; the count locks at customer level so a substitute cannot re-contact; a Manager may override with a logged reason. Reminders before the due date are notifications, not contacts. The contact drawer states the cost on the option. The daily-slot law now runs on the contact log of REQ-COL-072, which is the only record; LINE is a channel.</p>
+
+<h2>6. What is open</h2>
+<table>
+<tr><th>Item</th><th>Owner</th><th>State</th></tr>
+<tr><td>invoice_owner_role — AR or Collection creates and cancels invoices</td><td>Owner</td><td>OPEN — Collection meanwhile, as today</td></tr>
+<tr><td>OD-04 extended — the collection NPL policy value</td><td>Owner, Whan</td><td>OPEN — 60 days or 2 missed with no contact seeded as defaults</td></tr>
+<tr><td>CF1 and OD-31 — late-fee rate and grace</td><td>Legal, Win, Accounting</td><td><strong>DECIDED 2026-09-09, rulings 87–88</strong> — rate 0.03 percent per day, no grace; invoicing on. Was: OPEN — indicative figures; invoicing off</td></tr>
+<tr><td>OD-02 — allocation order</td><td>Accounting</td><td>OPEN — the engine refuses</td></tr>
+<tr><td>Restructure entry gate 40 or 25 percent</td><td>Owner</td><td>OPEN — 40 configured</td></tr>
+<tr><td>Who signs the termination letter</td><td>Legal</td><td>OPEN</td></tr>
+<tr><td>SVC-37, cash-only resale of refurbished assets</td><td>Jo</td><td>OPEN as before</td></tr>
+</table>

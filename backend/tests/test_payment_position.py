@@ -60,6 +60,11 @@ def _customer_with(jstate, invoices, receipts=()):
     for amount, due, state, peak_number in invoices:
         inv = journey.make_invoice(jstate, contract_uid, "SPV", "INSTALMENT", amount, due, state)
         inv["peak_number"] = peak_number
+    # Author an explicit calendar for this focused position test.
+    from app.money.models import Instalment
+    from decimal import Decimal
+    customer.contracts[0].instalments = [Instalment(due_date=row[1], category='REGULAR',
+        principal_amount=Decimal(row[0]), interest_amount=Decimal('0')) for row in invoices]
     for amount, on, source, ref in receipts:
         rcp = journey.make_receipt(jstate, contract_uid, "SPV", amount, on)
         rcp["source"], rcp["ref"] = source, ref
@@ -97,7 +102,7 @@ def test_the_newest_receipt_moves_the_source_and_the_as_of(jstate):
 
 def test_a_peak_customer_with_no_receipt_is_as_of_the_report(jstate):
     from tests.test_peak_book import _with_peak, LATE
-    customer, state = _with_peak([LATE])
+    customer, state = _with_peak([dict(LATE, cycle=None)])
     block = payment_position.build(customer, state, datetime.date(2026, 9, 21))
     assert block["source"] == "PEAK_REPORT" and block["as_of"] == "2026-09-14" and block["open_count"] == 1
 

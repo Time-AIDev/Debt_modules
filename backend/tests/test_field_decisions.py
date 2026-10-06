@@ -161,6 +161,8 @@ def test_the_conflict_routes_decide_retire_and_serve_the_page(db_env):
     assert (stored["peak_value"], stored["odoo_value"]) == ("Worarut Sangtong", "สมชาย ธรรมดี")
     from tests.test_peak_book import _sheet_customer
     _sheet_customer(conn, no)
+    # This fixture writes a landing directly, outside refresh.after_landing.
+    book_source.forget_reads()
     served = next(c for c in book_source._from_landing(conn)["customers"] if c["customer_no"] == no)
     assert served["display_name"] == "Worarut Sangtong" and served["field_sources"] == {"customer_name": "PEAK"}
     conn.commit()

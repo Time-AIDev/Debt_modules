@@ -1,0 +1,358 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ER Diagram — Volt Debt (PostgreSQL)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono&display=swap" rel="stylesheet" />
+<style>
+  :root { --ink-900:#050505; --ink-700:#374151; --ink-500:#6b7280; --line:#e5e7eb; --brand:#f2b705; --brand-050:#fff7dc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 22px 80px; background: #f3f4f6; color: var(--ink-900);
+         font: 400 14px/21px "IBM Plex Sans Thai", -apple-system, sans-serif; }
+  .wrap { max-width: 1240px; margin: 0 auto; }
+  header.page { margin-bottom: 18px; }
+  header.page h1 { margin: 0 0 4px; font-size: 20px; }
+  header.page p { margin: 0; color: var(--ink-500); font-size: 12.5px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 8px; margin: 16px 0; }
+  .card h2 { margin: 0 0 2px; font-size: 15px; }
+  .card .note { margin: 0 0 12px; color: var(--ink-500); font-size: 12px; }
+  .mermaid { text-align: center; overflow-x: auto; padding: 4px 0 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 12px; color: var(--ink-700); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: #fff; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { border-bottom: 1px solid var(--line); text-align: left; padding: 8px 10px; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 600; }
+  code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  .foot { color: var(--ink-500); font-size: 11.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>ER Diagram — Volt Debt</h1>
+    <p>PostgreSQL schema จาก <code>backend/app/schema.sql</code> · 4 schemas: <code>landing</code> (ข้อมูลนำเข้า) · <code>records</code> (ความจำของผลิตภัณฑ์) · <code>app</code> (state ต่อ session) · <code>audit</code> (append-only)</p>
+    <div class="legend">
+      <span class="chip"><span class="dot" style="background:#f2b705"></span>landing — เขียนโดย import run, อ่านโดย book_source</span>
+      <span class="chip"><span class="dot" style="background:#1d4ed8"></span>records — durable, ไม่ถูกล้างตอน deploy</span>
+      <span class="chip"><span class="dot" style="background:#6b7280"></span>app — ต่อ session, หายตอน deploy</span>
+      <span class="chip"><span class="dot" style="background:#b91c1c"></span>audit — append-only (trigger ห้าม UPDATE / DELETE / TRUNCATE)</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>1 · ภาพรวม: ความสัมพันธ์ข้าม schema</h2>
+    <p class="note">เส้นทึบ = foreign key จริง · เส้นประ = ความสัมพันธ์เชิงตรรกะ (ไม่มี FK — ตั้งใจ เพื่อให้ landing เป็นสำเนาที่ลบทิ้ง/นำเข้าใหม่ได้)</p>
+    <pre class="mermaid">
+flowchart TB
+  subgraph LANDING["landing — ข้อมูลนำเข้า (run-scoped)"]
+    IR["import_run<br/>1 run = 1 การนำเข้า"]
+    CU["customer<br/>PK (volt_id, data_source)"]
+    OR["order<br/>PK (volt_id, data_source)"]
+    CB["customer_block<br/>PK (volt_id, block, data_source)"]
+    IU["import_unmapped<br/>PK (run, volt, field, value)"]
+    PI["peak_invoice<br/>PK (run, doc_no)"]
+  end
+  subgraph RECORDS["records — ความจำของผลิตภัณฑ์"]
+    IL["identity_link<br/>1 active link / contact_code"]
+    CC["customer_contact<br/>1 active เบอร์ / customer"]
+    AT["attachment<br/>bytes ใน DB"]
+    UA["user_account<br/>allow-list + display name"]
+    NO["notice<br/>ปฏิทินส่วนตัว"]
+  end
+  subgraph APP["app — state ต่อ session (หายตอน deploy)"]
+    SS["session_state<br/>PK (session_id, key)"]
+    DE["data_epoch<br/>ตัวนับ import epoch"]
+  end
+  subgraph AUDIT["audit — append-only"]
+    AE["entry<br/>hash chain ต่อเนื่อง"]
+  end
+
+  IR --> CU
+  IR --> OR
+  IR --> CB
+  IR --> IU
+  IR --> PI
+  IL -.->|"contact_code / customer_no"| PI
+  CC -.->|"customer_uid"| CU
+  NO -.->|"customer_uid"| CU
+  AT -.->|"attached_to = contact:uid / note:uid"| NO
+  AE -.->|"subject_type + subject_uid"| CU
+  AE -.->|"subject_type + subject_uid"| CC
+  DE -.->|"run_id"| IR
+  SS -.->|"cases / invoice_pipeline / journey / orders …"| CU
+
+  classDef landing fill:#fff7dc,stroke:#f2b705,color:#111827;
+  classDef records fill:#dbeafe,stroke:#1d4ed8,color:#111827;
+  classDef app fill:#f3f4f6,stroke:#6b7280,color:#111827;
+  classDef audit fill:#fee2e2,stroke:#b91c1c,color:#111827;
+  class CU,OR,CB,IU,PI,IR landing;
+  class IL,CC,AT,UA,NO records;
+  class SS,DE app;
+  class AE audit;
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>2 · landing schema — ข้อมูลนำเข้า (ER)</h2>
+    <p class="note">ทุกตารางผูกกับ <code>import_run.id</code> · <code>peak_invoice</code> เพิ่งรับ <code>SHEET | ODOO | PEAK</code> · <code>customer.data_source</code> อยู่ใน PK เพื่อให้แถว SHEET กับ ODOO ของ volt_id เดียวกันอยู่ร่วมกันได้</p>
+    <pre class="mermaid">
+erDiagram
+  IMPORT_RUN {
+    bigint id PK
+    text source_system "SHEET / ODOO / PEAK"
+    text spreadsheet_id
+    timestamptz started_at
+    timestamptz finished_at
+    text status "RUNNING / OK / FAILED"
+    jsonb row_counts
+    boolean reconciled
+    jsonb truncated_blocks
+    jsonb meta "door, mode, pivots, applied, ledger, proposals"
+    text note
+  }
+  CUSTOMER {
+    text volt_id PK
+    text data_source PK "SHEET / ODOO"
+    text customer_no
+    text name_roman
+    text name_th
+    text epc
+    text product
+    text sales_lead
+    text phone_masked
+    text phone_e164 "reveal เท่านั้น (audited)"
+    text email_masked
+    jsonb source_refs
+    bigint import_run_id FK
+  }
+  ORDER {
+    text volt_id PK
+    text data_source PK
+    integer no
+    text crm_id
+    text order_type
+    text order_status
+    text loan_status
+    date submit_date
+    date contract_signed_date
+    date epc_start_date
+    date epc_end_date
+    numeric amount_total
+    jsonb source_ref
+    jsonb extra "13 ฟิลด์ที่เหลือของชีต"
+    bigint import_run_id FK
+  }
+  CUSTOMER_BLOCK {
+    text volt_id PK
+    text block PK "leasing / tracking / cash / cash_invoices / asset / contact_log"
+    text data_source PK
+    jsonb payload
+    bigint import_run_id FK
+  }
+  IMPORT_UNMAPPED {
+    bigint import_run_id PK
+    text volt_id PK
+    text field PK
+    text value PK
+  }
+  PEAK_INVOICE {
+    bigint import_run_id PK
+    text doc_no PK
+    text doc_kind
+    date issued_on
+    date due_on
+    text contact_code
+    text customer_name
+    text status "PAID / OVERDUE / AWAITING / DRAFT"
+    integer cycle_n
+    integer cycle_of
+    numeric amount_total
+    numeric amount_due
+    jsonb lines
+    text verdict "EXACT / CANDIDATE / UNMATCHED / REJECTED"
+    text rule
+    text customer_no
+    jsonb candidates
+    text ladder_verdict
+    text ladder_customer_no
+  }
+
+  IMPORT_RUN ||--o{ CUSTOMER : "import_run_id"
+  IMPORT_RUN ||--o{ ORDER : "import_run_id"
+  IMPORT_RUN ||--o{ CUSTOMER_BLOCK : "import_run_id"
+  IMPORT_RUN ||--o{ IMPORT_UNMAPPED : "import_run_id"
+  IMPORT_RUN ||--o{ PEAK_INVOICE : "import_run_id"
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>3 · records schema — ความจำของผลิตภัณฑ์ (ER)</h2>
+    <p class="note">ไม่มี FK ข้ามไป landing (ตั้งใจ: landing นำเข้าใหม่ได้โดยไม่พังประวัติ) · <code>customer_uid</code> คือ uid ของลูกค้าในสมุดงาน · <code>attachment.attached_to</code> ชี้ contact log uid (อยู่ใน <code>app.session_state</code>) หรือ <code>notice.uid</code> — ไม่ใช่ FK เช่นกัน</p>
+    <pre class="mermaid">
+erDiagram
+  IDENTITY_LINK {
+    bigint uid PK
+    text contact_code "รหัสผู้ติดต่อ PEAK"
+    text customer_no
+    text contract_uid
+    text rule
+    text confirmed_by
+    timestamptz confirmed_at
+    text reason
+    timestamptz retired_at
+    text retired_by
+  }
+  CUSTOMER_CONTACT {
+    bigint uid PK
+    text customer_uid "uniq เฉพาะ active"
+    text phone_e164 "บังคับรูป +66…"
+    text kind "MOBILE / LANDLINE"
+    text set_by
+    timestamptz set_at
+    text reason
+    boolean active
+  }
+  ATTACHMENT {
+    text uid PK
+    text sha256
+    text kind "PNG / SVG / CSV / XLSX / DOCX / PDF"
+    text content_type
+    int size
+    text filename
+    text uploaded_by
+    timestamptz uploaded_at
+    text scan_state "CLEAN / RULES_ONLY"
+    text attached_to "contact log uid / notice uid"
+    timestamptz deleted_at
+    bytea bytes
+  }
+  USER_ACCOUNT {
+    bigint id PK
+    text kind "GOOGLE / TEST"
+    text email "uniq เมื่อมี"
+    text username "uniq เมื่อมี"
+    text role "OFFICER…OPS"
+    text officer
+    text display_name
+    text invited_by
+    timestamptz disabled_at
+  }
+  NOTICE {
+    text uid PK
+    text owner
+    text title
+    date on_date
+    time at_time
+    text customer_uid
+    text note_text
+    boolean done
+    timestamptz deleted_at
+  }
+
+  NOTICE ||--o{ ATTACHMENT : "attached_to (note:uid)"
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>4 · audit + app schema (ER)</h2>
+    <p class="note"><code>audit.entry</code> เป็น hash chain: <code>prev_hash</code> ชี้แถวก่อนหน้า และ DB trigger ห้าม UPDATE / DELETE / TRUNCATE · <code>app.*</code> หายตอน deploy ได้โดยตั้งใจ</p>
+    <pre class="mermaid">
+erDiagram
+  AUDIT_ENTRY {
+    bigint seq PK
+    timestamptz at
+    date business_date
+    text actor_claimed
+    text actor_source "HEADER / BODY / NONE / SESSION / TEST_ACCOUNT"
+    text actor_role "OFFICER…OPS (R13)"
+    text session_id
+    text request_id
+    text verb
+    text route_template
+    text act "เช่น PHONE_SET, PHONE_REVEALED, CASE_VIEWED"
+    text subject_type
+    text subject_uid
+    jsonb detail "ไม่เก็บเลขเบอร์"
+    text outcome "OK / REFUSED"
+    int status
+    text error_code
+    text prev_hash
+    text hash
+  }
+  SESSION_STATE {
+    text session_id PK
+    text key PK "domain store key"
+    bytea payload "pickle-v1"
+    text codec
+    text code_version
+    timestamptz updated_at
+  }
+  DATA_EPOCH {
+    bigint id PK
+    text kind "crm-lead / peak / odoo / upload / boot"
+    bigint run_id "อ้าง landing.import_run.id (logical)"
+    timestamptz at
+  }
+  AUDIT_ENTRY ||--o| AUDIT_ENTRY : "prev_hash → hash"
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>5 · app.session_state — domain store ข้างใน (logical)</h2>
+    <p class="note">1 แถว = 1 store ต่อ 1 session; <code>flush_current()</code> เขียนกลับเมื่อ state ขยับเท่านั้น · คีย์ทั้งหมดมาจาก <code>Store(factory, key=…)</code></p>
+    <table>
+      <thead><tr><th>key</th><th>เก็บอะไร</th><th>เจ้าของโค้ด</th></tr></thead>
+      <tbody>
+        <tr><td><code>cases.state</code></td><td>เคสลูกค้า + events + เงื่อนไขก่อนติดตั้ง</td><td><code>app/cases.py</code></td></tr>
+        <tr><td><code>invoice_pipeline.state</code></td><td>การ์ด invoice / gate / หลักฐาน</td><td><code>app/invoice_pipeline.py</code></td></tr>
+        <tr><td><code>journey.state</code></td><td>ประวัติ PTP, การติดต่อ, overlay ของออเดอร์</td><td><code>app/journey.py</code></td></tr>
+        <tr><td><code>collections.contact.log</code></td><td>สล็อตการติดต่อรายวัน</td><td><code>app/collections/contact.py</code></td></tr>
+        <tr><td><code>orders.added</code> / <code>orders.removed</code> / <code>orders.odoo</code></td><td>ออเดอร์ที่เพิ่ม/ลบ + snapshot Odoo</td><td><code>app/orders.py</code></td></tr>
+        <tr><td><code>config.settings</code></td><td>ค่าตั้งระบบ (business date ฯลฯ)</td><td><code>app/config.py</code></td></tr>
+        <tr><td><code>criteria.default</code></td><td>เกณฑ์คัดกรองเริ่มต้น</td><td><code>app/criteria.py</code></td></tr>
+        <tr><td><code>dictionaries.state</code></td><td>พจนานุกรมรหัส (แก้ได้)</td><td><code>app/dictionaries.py</code></td></tr>
+        <tr><td><code>imports.state</code></td><td>run ของ manual upload (staged)</td><td><code>app/imports.py</code></td></tr>
+        <tr><td><code>main.board_columns</code></td><td>คอลัมน์บอร์ด Pipeline</td><td><code>app/main.py</code></td></tr>
+        <tr><td><code>peak_documents.state</code></td><td>ประวัติเอกสาร PEAK + สถานะยกเลิก</td><td><code>app/peak_documents.py</code></td></tr>
+        <tr><td><code>reports.snapshots</code> / <code>reports.editions</code></td><td>snapshot รายงาน + ฉบับที่แก้</td><td><code>app/reports.py</code></td></tr>
+        <tr><td><code>money.band_sets.registry</code></td><td>ชุดช่วงอายุหนี้ (band)</td><td><code>app/money/band_sets.py</code></td></tr>
+        <tr><td><code>workbook_exports.log</code></td><td>ประวัติ export</td><td><code>app/workbook_exports.py</code></td></tr>
+        <tr><td><code>import.seen_epoch</code></td><td>epoch ที่ session นี้ seed ล่าสุด (heal gate)</td><td><code>app/import_sync.py</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card">
+    <h2>6 · กติกาที่ schema บังคับเอง (ไม่พึ่งวินัยโค้ด)</h2>
+    <table>
+      <thead><tr><th>กติกา</th><th>กลไก</th><th>ที่มา</th></tr></thead>
+      <tbody>
+        <tr><td>audit.entry เปลี่ยน/ลบไม่ได้</td><td>trigger <code>entry_no_change</code> (BEFORE UPDATE OR DELETE)</td><td><code>schema.sql:197-206</code></td></tr>
+        <tr><td>audit.entry ห้าม TRUNCATE</td><td>trigger <code>entry_no_truncate</code> (statement-level)</td><td><code>schema.sql:215-224</code></td></tr>
+        <tr><td>1 เบอร์ที่ใช้ได้ต่อลูกค้า</td><td>unique partial index <code>customer_contact_active_idx … WHERE active</code></td><td><code>schema.sql:364-365</code></td></tr>
+        <tr><td>1 identity link ที่ยังไม่ปลดต่อ contact code</td><td>unique partial index <code>identity_link_active_idx</code></td><td><code>schema.sql:293-294</code></td></tr>
+        <tr><td>เบอร์ที่คนกรอกต้องเป็น +66 และ active ⇒ มีเบอร์</td><td>CHECK <code>phone_e164 ~ '^\+66[0-9]{8,9}$'</code> + <code>NOT active OR phone_e164 IS NOT NULL</code></td><td><code>schema.sql:356-362</code></td></tr>
+        <tr><td>SHEET กับ ODOO ของ volt_id เดียวกันอยู่ร่วมกันได้</td><td><code>data_source</code> อยู่ใน PK ของ customer / order / customer_block</td><td><code>schema.sql:32-47</code></td></tr>
+        <tr><td>แถว Odoo ไม่ปนกับ leasing/tracking ของชีต</td><td><code>customer_block</code> เขียนเฉพาะทาง SHEET</td><td><code>schema.sql:67-78</code></td></tr>
+        <tr><td>user_account: GOOGLE ใช้ email, TEST ใช้ username</td><td>CHECK <code>user_account_key_check</code> + unique partial indexes</td><td><code>schema.sql:340-346</code></td></tr>
+        <tr><td>รัน import ใหม่ได้โดยไม่พัง FK</td><td>ทุกตาราง landing อ้าง run ใหม่; records ไม่มี FK ไป landing</td><td>ทั้งไฟล์</td></tr>
+      </tbody>
+    </table>
+    <p class="foot">เทสต์ในชุดนี้ truncate เฉพาะ schema <code>landing</code> + <code>app</code> — <code>records</code> และ <code>audit</code> อยู่นอกขอบเขตนั้นโดยตั้งใจ (ดูเหตุผลใน <code>schema.sql:140-151</code>)</p>
+  </section>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'
+  mermaid.initialize({ startOnLoad: true, theme: 'base', themeVariables: {
+    fontFamily: 'IBM Plex Sans Thai, sans-serif', fontSize: '12px',
+    primaryColor: '#fff7dc', primaryBorderColor: '#f2b705', primaryTextColor: '#111827',
+    lineColor: '#9ca3af',
+  }})
+</script>
+</body>
+</html>

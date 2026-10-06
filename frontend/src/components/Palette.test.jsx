@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { fireEvent, screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useLocation } from 'react-router-dom'
 import { renderScreen } from '../test-utils.jsx'
@@ -34,6 +34,30 @@ beforeEach(() => {
 })
 
 describe('the customer command palette', () => {
+  it('shows payment totals on each customer card before opening its complete invoice list', async () => {
+    api.customerSearch.mockResolvedValue({ items: [CUSTOMER], meta: { total: 1, limit: 6 } })
+    api.customerInvoiceStatuses.mockImplementation((_uid, params) => Promise.resolve({
+      items: Array.from({ length: params?.include_all ? 25 : 5 }, (_, i) => ({
+        uid: `inv-${i}`, reference: `IV-${i + 1}`, state: 'SENT', amount: '100.00', outstanding: '100.00',
+      })),
+      summary: { paid: '1250.50', outstanding: '2500.00' },
+      meta: { total: 25, has_more: !params?.include_all, remaining: 20 },
+    }))
+    const user = userEvent.setup()
+    renderScreen(<Palette open onClose={() => {}} />)
+    await user.type(screen.getByRole('textbox'), 'ป')
+
+    const row = await screen.findByRole('button', { name: /^ลูกค้า ปัทมวรรณ/ })
+    expect(await within(row).findByText('จ่ายแล้ว ฿1,250.50')).toBeInTheDocument()
+    expect(within(row).getByText('ค้าง ฿2,500.00')).toBeInTheDocument()
+    expect(screen.queryByText('IV-25')).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'ดูสถานะใบแจ้งหนี้ของ ปัทมวรรณ สุขเจริญ' }))
+    const region = await screen.findByRole('region', { name: 'ดูสถานะใบแจ้งหนี้ของ ปัทมวรรณ สุขเจริญ' })
+    expect(within(region).getByText('IV-25')).toBeInTheDocument()
+    expect(within(region).getAllByRole('listitem')).toHaveLength(25)
+    expect(screen.queryByText('อีก 20 รายการ')).not.toBeInTheDocument()
+  })
+
   it('searches after one character and keeps a masked-field match visible', async () => {
     api.customerSearch.mockResolvedValue({ items: [CUSTOMER], meta: { total: 1, limit: 6 } })
     const user = userEvent.setup()

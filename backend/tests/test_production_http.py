@@ -60,3 +60,37 @@ def test_production_assignment_cannot_be_bypassed_by_headers_or_body(production,
                         json={"customer_uid": "own-case", "by": "nantapol", "role": "OWNER", "text": "unsafe"})
     assert response.status_code == 403, response.text
     assert response.json()["code"] == "assignment_required"
+
+
+def test_shared_saved_criteria_round_trip(production):
+    api,headers=production
+    actor=headers("owner@volt.co.th","OWNER","owner")
+    response=api.put("/api/v1/criteria/default",json={"population":"all_orders","targets":{"at_risk_30":7}},headers=actor)
+    assert response.status_code==200,response.text
+    saved=api.get("/api/v1/criteria/default",headers=actor)
+    assert saved.status_code==200,saved.text
+    assert saved.json()["default"]["targets"]=={"at_risk_30":7}
+
+
+def test_idempotency_distinguishes_upload_semantic_headers(production):
+    api,headers=production
+    actor=headers("owner@volt.co.th","OWNER","owner")
+    actor.update({"Idempotency-Key":"semantic-upload-test","X-Volt-Upload":"first-upload"})
+    first=api.put("/api/v1/criteria/default",json={"population":"all_orders"},headers=actor)
+    assert first.status_code==200,first.text
+    actor["X-Volt-Upload"]="second-upload"
+    second=api.put("/api/v1/criteria/default",json={"population":"all_orders"},headers=actor)
+    assert second.status_code==409,second.text
+    assert second.json()["code"]=="idempotency_conflict"
+
+
+def test_shared_existing_record_write_requires_version_when_policy_enabled(production,monkeypatch):
+    api,headers=production
+    monkeypatch.setenv("REQUIRE_STATE_VERSION","true")
+    actor=headers("owner@volt.co.th","OWNER","owner")
+    missing=api.put("/api/v1/criteria/default",json={"population":"all_orders"},headers=actor)
+    assert missing.status_code==428,missing.text
+    read=api.get("/api/v1/criteria/default",headers=actor)
+    actor["If-Match"]=read.headers["x-volt-state-version"]
+    saved=api.put("/api/v1/criteria/default",json={"population":"all_orders"},headers=actor)
+    assert saved.status_code==200,saved.text

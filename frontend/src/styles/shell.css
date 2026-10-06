@@ -523,12 +523,20 @@
 .palette__row--on { background: var(--volt-hover); }
 .palette__label { flex: 1; text-align: left; color: var(--volt-ink); font-size: 14px; }
 .palette__meta { font-size: 11.5px; color: var(--ink-500); }
+.palette__result .palette__row { height: auto; min-height: 44px; flex-wrap: wrap; padding-block: 8px; }
+.palette__result .palette__label { min-width: 120px; overflow-wrap: anywhere; }
+.palette__balances { display: flex; flex-wrap: wrap; gap: 4px 8px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.palette__balance { padding: 2px 6px; border-radius: 4px; white-space: nowrap; }
+.palette__balance--paid { color: var(--volt-ink); background: var(--volt-green-tint); border-inline-start: 3px solid var(--volt-green); }
+.palette__balance--outstanding { color: var(--volt-red-text); background: var(--volt-red-tint); border-inline-start: 3px solid var(--volt-red); }
 .palette__result { display: grid; grid-template-columns: minmax(0, 1fr) 44px; align-items: center; border-radius: 8px; }
 .palette__invoiceButton { width: 44px; height: 44px; border: 0; border-radius: 8px; background: transparent; color: var(--ink-500); font: 700 16px/1 var(--font-sans); cursor: pointer; }
 .palette__invoiceButton:hover, .palette__invoiceButton:focus-visible { outline: 2px solid var(--volt-yellow); outline-offset: -3px; color: var(--volt-ink); background: var(--volt-hover); }
 .palette__invoicePopover, .palette__invoiceState { grid-column: 1 / -1; margin: 2px 8px 8px; padding: 10px; border: 1px solid var(--volt-line); border-radius: 8px; background: var(--surface-0); box-shadow: var(--volt-shadow); color: var(--volt-ink); }
 .palette__invoiceState { font-size: 12px; color: var(--volt-ink-2); }
 .palette__invoiceState--error { color: var(--volt-red); }
+.palette__invoicePopover { max-height: min(320px, 36vh); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.palette__invoicePopover:focus-visible { outline: 2px solid var(--volt-yellow); outline-offset: -2px; }
 .palette__invoiceList { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .palette__invoiceList li { display: flex; justify-content: space-between; gap: 16px; font-size: 12px; }
 .palette__invoiceList li > span { display: grid; gap: 2px; }

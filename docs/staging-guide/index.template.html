@@ -1,0 +1,647 @@
+<!doctype html>
+<!--
+  TEMPLATE — never deployed as-is and never carries a password.
+  scripts/build_staging_guide.py fills the {{…_PW}} slots from the vault note
+  (staging/01 - Tester accounts และรหัสผ่าน.md) and writes build/staging-guide/,
+  which is what `netlify deploy --dir build/staging-guide` publishes. The passwords
+  stay out of git, and the vault stays the single source of truth for them.
+  Reviewer note: the generated artefact is what to check, not this file.
+-->
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex, nofollow" />
+<title>Volt Debt — UAT Guidebook</title>
+<style>
+  :root{
+    --bg:#f7f5f0; --card:#fff; --ink:#191713; --dim:#6b665d; --line:#e6e2d8;
+    --brand:#f2b705; --brand-ink:#7a5b00; --accent:#1c4f8b;
+    --ok:#17692f; --okbg:#e8f4ea; --warn:#8a5a08; --warnbg:#fdf3e0; --bad:#a6231f; --badbg:#fbeceb;
+    --code:#2b2924; --codebg:#f0ede6; --radius:14px;
+    --shadow:0 1px 2px rgba(25,23,19,.05), 0 8px 24px rgba(25,23,19,.04);
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#141310; --card:#1d1c18; --ink:#f0ede6; --dim:#a6a196; --line:#33302a;
+      --brand:#e5b45f; --brand-ink:#ffdf9e; --accent:#8ab4f8;
+      --ok:#7fd694; --okbg:#16301d; --warn:#e5b45f; --warnbg:#332714; --bad:#f0918c; --badbg:#331a19;
+      --code:#e8e4da; --codebg:#232019;
+      --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 30px rgba(0,0,0,.35);
+    }
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--ink);
+       font:400 15.5px/1.65 "IBM Plex Sans Thai",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;}
+  a{color:var(--accent)}
+  code{font-family:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.86em;
+       background:var(--codebg);color:var(--code);padding:.12em .4em;border-radius:6px}
+  header.top{position:sticky;top:0;z-index:20;background:color-mix(in srgb, var(--bg) 88%, transparent);
+       backdrop-filter:blur(10px);border-bottom:1px solid var(--line)}
+  .top__in{max-width:1060px;margin:0 auto;padding:10px 20px;display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+  .logo{width:30px;height:30px;border-radius:9px;background:var(--brand);color:#191713;font-weight:800;
+        display:grid;place-items:center;font-size:13px;letter-spacing:.5px}
+  .top__title{font-weight:700;font-size:15px}
+  nav.top__nav{display:flex;gap:4px;flex-wrap:wrap;margin-left:auto}
+  nav.top__nav a{font-size:12.5px;color:var(--dim);text-decoration:none;padding:5px 9px;border-radius:999px}
+  nav.top__nav a:hover{background:var(--card);color:var(--ink)}
+  main{max-width:1060px;margin:0 auto;padding:26px 20px 90px}
+  section{margin:0 0 26px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);
+        box-shadow:var(--shadow);padding:22px 22px 18px}
+  h1{font-size:26px;line-height:1.3;margin:0 0 6px}
+  h2{font-size:19px;margin:0 0 4px}
+  h3{font-size:15.5px;margin:22px 0 8px}
+  .sub{color:var(--dim);font-size:13.5px;margin:0}
+  .hero{display:flex;gap:26px;align-items:center;flex-wrap:wrap}
+  .hero__text{flex:1 1 380px;min-width:280px}
+  .hero__side{flex:0 1 320px;min-width:260px}
+  .btn{display:inline-flex;align-items:center;gap:8px;border:1px solid var(--line);background:var(--card);
+       color:var(--ink);text-decoration:none;border-radius:10px;padding:10px 16px;font-weight:600;font-size:14px}
+  .btn--primary{background:var(--brand);border-color:var(--brand);color:#191713}
+  .btn:hover{transform:translateY(-1px)}
+  .url{font-family:"IBM Plex Mono",monospace;font-size:12.5px;word-break:break-all;color:var(--dim)}
+  .pill{display:inline-flex;align-items:center;gap:6px;font-size:12px;border:1px solid var(--line);
+        border-radius:999px;padding:3px 10px;color:var(--dim);background:var(--card)}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--ok)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th,td{text-align:left;vertical-align:top;padding:9px 10px;border-bottom:1px solid var(--line)}
+  th{font-size:12px;letter-spacing:.02em;text-transform:uppercase;color:var(--dim)}
+  tr:last-child td{border-bottom:0}
+  .note{font-size:13px;color:var(--dim)}
+  .tag{font-size:11.5px;border-radius:999px;padding:2px 9px;border:1px solid var(--line);color:var(--dim)}
+  .tag--ok{background:var(--okbg);color:var(--ok);border-color:transparent}
+  .tag--warn{background:var(--warnbg);color:var(--warn);border-color:transparent}
+  .tag--bad{background:var(--badbg);color:var(--bad);border-color:transparent}
+  .tag--role{background:var(--codebg);color:var(--brand-ink);border-color:transparent;
+        font-family:"IBM Plex Mono",ui-monospace,monospace}
+  footer.foot{color:var(--dim);font-size:12.5px;text-align:center;margin-top:34px}
+  code.pw{user-select:all;font-size:.9em;white-space:nowrap}
+
+  /* ---- process checklist ---- */
+  .progress{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0 0}
+  .progress__bar{flex:1 1 200px;height:8px;background:var(--codebg);border-radius:999px;overflow:hidden}
+  .progress__fill{display:block;height:100%;width:0;background:var(--brand);border-radius:999px;transition:width .25s}
+  .btn--link{background:none;border:0;padding:4px 2px;color:var(--accent);font-size:13px;font-weight:600;cursor:pointer}
+  .btn--link:hover{text-decoration:underline;transform:none}
+  .phase{margin-top:20px}
+  .phase h3{margin:0 0 2px;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+  .phase__why{font-size:13px;color:var(--dim);margin:2px 0 4px}
+  .step{display:flex;gap:12px;border-top:1px dashed var(--line);padding:12px 0 10px}
+  .phase .step:first-of-type{border-top:0;padding-top:4px}
+  .step__tick{flex:0 0 auto;width:18px;height:18px;margin:4px 0 0;accent-color:var(--brand);cursor:pointer}
+  .step__main{flex:1 1 auto;min-width:0}
+  .step__head{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;cursor:pointer}
+  .step__no{font-family:"IBM Plex Mono",ui-monospace,monospace;font-weight:700;font-size:12px;
+        background:var(--codebg);color:var(--brand-ink);padding:2px 8px;border-radius:8px}
+  .step__title{font-weight:700;font-size:15px}
+  .step__where{font-size:13.5px;margin:3px 0 0}
+  .step__where b{color:var(--dim);font-weight:600;font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;margin-right:4px}
+  .step__body{display:grid;grid-template-columns:1fr;gap:8px;margin-top:7px}
+  @media(min-width:860px){.step__body{grid-template-columns:1.05fr 1fr}}
+  .step__do{font-size:14px}
+  .step__do b{display:block;color:var(--dim);font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;margin-bottom:2px}
+  .see{border-left:3px solid var(--ok);background:var(--okbg);border-radius:0 10px 10px 0;padding:7px 12px;font-size:14px}
+  .see b{display:block;color:var(--ok);font-size:11.5px;letter-spacing:.03em;text-transform:uppercase;margin-bottom:2px}
+  .warnbox{border-left:3px solid var(--warn);background:var(--warnbg);border-radius:0 10px 10px 0;padding:7px 12px;margin:7px 0 0;font-size:13.5px}
+  .warnbox b{color:var(--warn)}
+  .step__tick:checked ~ .step__main .step__title{text-decoration:line-through;opacity:.55}
+  .step__tick:checked ~ .step__main .step__where,.step__tick:checked ~ .step__main .step__body{opacity:.5}
+  @media print{header.top,nav.top__nav,.no-print{display:none}body{background:#fff}}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="top__in">
+    <span class="logo">VD</span>
+    <span class="top__title">Volt Debt · UAT Guidebook</span>
+    <nav class="top__nav">
+      <a href="#accounts">บัญชี</a>
+      <a href="#process">กระบวนการ</a>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <section class="card hero">
+    <div class="hero__text">
+      <span class="pill"><span class="dot"></span> Staging พร้อมทดสอบ · อัปเดต 21 ก.ย. 2026</span>
+      <h1>ทดสอบระบบเก็บหนี้ Volt Debt</h1>
+      <p class="sub">ไกด์นี้ให้ทดสอบตาม<strong>กระบวนการเก็บหนี้จริง (SOP 17 ขั้น)</strong> ทีละขั้น — ใช้เวลาราว 45–60 นาที
+        ทุกขั้นบอกว่า <strong>ไปหน้าไหน · ใครทำ · ทำอะไร · ต้องเห็นอะไร</strong></p>
+      <p style="margin:18px 0 6px">
+        <a class="btn btn--primary" href="https://volt-debt-uat-dfrcuwwkja-as.a.run.app" target="_blank" rel="noopener">เปิด staging ↗</a>
+        <a class="btn" href="#process">เริ่มทดสอบตามกระบวนการ</a>
+      </p>
+      <p class="url">https://volt-debt-uat-dfrcuwwkja-as.a.run.app</p>
+    </div>
+    <div class="hero__side">
+      <table>
+        <tr><th>เข้าได้ด้วย</th><td>Google (@volt.co.th ที่อนุญาต) หรือบัญชีทดสอบ</td></tr>
+        <tr><th>รหัสผ่าน</th><td>อยู่ในตารางบัญชีด้านล่าง (แยกตามบทบาท)</td></tr>
+        <tr><th>ข้อมูล</th><td>ชุด UAT จริง · เบอร์ถูกปิด · ห้ามคัดลอกออกนอกทีม</td></tr>
+        <tr><th>ข้อมูล PEAK</th><td>ใช้รายงาน 14 ก.ย. 2026 แล้ว (7,638 ใบ) — พร้อมทดสอบทุกขั้น</td></tr>
+        <tr><th>ซิงก์ข้อมูล</th><td>อัตโนมัติทุก 15 นาที (Odoo crm.lead)</td></tr>
+      </table>
+    </div>
+  </section>
+
+  <section class="card" id="accounts">
+    <h2>บัญชีทดสอบและรหัสผ่าน</h2>
+    <p class="sub">แยกตามบทบาท — ส่งต่อเฉพาะรหัสของบทบาทที่คนนั้นใช้</p>
+    <table>
+      <thead><tr><th>บัญชี</th><th>รหัสผ่าน</th><th>บทบาท</th><th>ทดสอบขั้นไหน</th></tr></thead>
+      <tbody>
+        <tr><td><code>officer</code></td><td><code class="pw">{{OFFICER_PW}}</code></td><td>เจ้าหน้าที่</td><td>งานทวงถามรายวัน, บันทึกการติดต่อ, PTP, เปิดเบอร์, การ์ดก่อนติดตั้ง</td></tr>
+        <tr><td><code>supervisor</code></td><td><code class="pw">{{SUPERVISOR_PW}}</code></td><td>หัวหน้าทีม</td><td>ทุกอย่างของเจ้าหน้าที่ + มอบหมายงานให้ทีม</td></tr>
+        <tr><td><code>manager</code></td><td><code class="pw">{{MANAGER_PW}}</code></td><td>ผู้จัดการ</td><td>ปล่อยใบแจ้งหนี้ · ยุติสัญญา · รอตรวจ · สั่งนำเข้า/ซิงก์ข้อมูล · ตั้งเป้า</td></tr>
+        <tr><td><code>owner</code></td><td><code class="pw">{{OWNER_PW}}</code></td><td>เจ้าของ</td><td>ทุกอย่าง + อนุมัติตัดจำหน่าย (write-off) · กำหนดประเภท NPL · ล็อตยึดคืน</td></tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:10px"><span class="tag tag--bad">ห้ามแชร์ลิงก์นี้</span>
+      หน้านี้มีรหัสผ่านสำหรับ tester — ส่งให้เฉพาะคนที่ทดสอบ และห้ามโพสต์/แชร์ภาพหน้านี้ออกนอกทีม
+      ถ้ามีคนออกจากรอบแล้ว แจ้งทีมเพื่อหมุนรหัสได้ทันที</p>
+  </section>
+
+  <section class="card" id="process">
+    <h2>เช็กลิสต์เดินตามกระบวนการเก็บหนี้ (SOP 17 ขั้น)</h2>
+    <p class="sub">ทุกขั้นบอก <strong>หน้า · บทบาท · ทำ · ต้องเห็น</strong> — ติ๊กช่องหน้าข้อเมื่อทดสอบผ่าน
+      ระบบจำไว้ในเบราว์เซอร์นี้ (ไม่ส่งไปที่ไหน) แล้วแจ้งทีมเฉพาะข้อที่ไม่ผ่าน</p>
+    <div class="legend">
+      <span class="tag tag--role">officer</span>
+      <span class="tag tag--role">supervisor</span>
+      <span class="tag tag--role">manager</span>
+      <span class="tag tag--role">owner</span>
+      <span class="tag">= บทบาทขั้นต่ำที่ทำขั้นนั้นได้</span>
+    </div>
+    <div class="progress no-print">
+      <span class="tag">ทำแล้ว <strong id="p-done">0/0</strong></span>
+      <span class="progress__bar"><span class="progress__fill" id="p-fill"></span></span>
+      <button class="btn btn--link" type="button" id="p-reset">ล้างเครื่องหมายทั้งหมด</button>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 0 · เตรียมตัวก่อนเริ่ม <span class="tag">ไม่ใช่ขั้น SOP</span> <span class="tag phasecount">0/0</span></h3>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-0-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-0-1"><span class="step__no">0.1</span><span class="step__title">เข้าใช้งานครั้งแรก</span><span class="tag tag--role">ทุกบทบาท</span></label>
+        <p class="step__where"><b>หน้า</b> ลิงก์ staging ด้านบน</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เข้าด้วย <strong>Google</strong> (ถ้าอีเมลอยู่ในรายการที่อนุญาต) หรือ <strong>บัญชีทดสอบ</strong> ตามบทบาทที่ได้รับ</div>
+          <div class="see"><b>ต้องเห็น</b> หน้า <strong>วันนี้</strong> พร้อมชื่อเจ้าหน้าที่ของบัญชีนั้นที่มุมขวา</div>
+        </div>
+        <p class="note">ครั้งแรกหลังไม่มีคนใช้นาน อาจรอ 5–15 วินาที (ระบบสตาร์ทใหม่) — ถ้านานกว่านั้นจดเวลาไว้</p>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-0-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-0-2"><span class="step__no">0.2</span><span class="step__title">สำรวจเมนูทั้งระบบ</span><span class="tag tag--role">ทุกบทบาท</span></label>
+        <p class="step__where"><b>หน้า</b> เมนูซ้าย/บน ทั้ง 12 เมนู — วันนี้ · ภาพรวม · ลูกค้า/สมุดงาน · รอตรวจ · ใบแจ้งหนี้ก่อนติดตั้ง · เงินเข้าและ PEAK · NPL และการเรียกคืน · รายงาน · ปฏิทิน · แหล่งข้อมูล · บันทึกการใช้งาน · ตั้งค่า</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เปิดไล่ทีละเมนู · ลองสลับธีมสว่าง/มืดที่ตั้งค่า · ย่อหน้าต่างให้แคบเหมือนจอมือถือ</div>
+          <div class="see"><b>ต้องเห็น</b> ทุกหน้าเปิดได้ไม่ค้าง — บนจอแคบตารางเลื่อนแนวนอนได้ แต่ปุ่ม/ฟอร์มยังกดได้</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-0-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-0-3"><span class="step__no">0.3</span><span class="step__title">หาเคสที่จะใช้ทดสอบ</span><span class="tag tag--role">ทุกบทบาท</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ลูกค้า/สมุดงาน</strong> หรือคิวใน <strong>วันนี้</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ค้นด้วยชื่อลูกค้า/เลขลูกค้า แล้วกดเปิดเข้า <strong>เคส</strong> — ใช้เคสเดิมต่อในทุกช่วงถัดไป</div>
+          <div class="see"><b>ต้องเห็น</b> หัวเคสมีชื่อลูกค้า สถานะการชำระ และเบอร์โทรแบบปิด</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 1 · ก่อนติดตั้ง → ออกใบแจ้งหนี้ <span class="tag">SOP 1–4</span> <span class="tag phasecount">0/0</span></h3>
+    <p class="phase__why">ของต้องมี: การ์ดงานติดตั้งตั้งต้น 3 เงื่อนไข (สัญญา · เงินดาวน์ · บริษัทที่ออกเอกสาร)</p>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-1"><span class="step__no">1.1</span><span class="step__title">ดูคิวงานก่อนติดตั้ง</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ใบแจ้งหนี้ก่อนติดตั้ง</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ดูการ์ดงานแต่ละใบ — วันติดตั้ง และด่าน 3 เงื่อนไขว่าครบหรือยัง</div>
+          <div class="see"><b>ต้องเห็น</b> การ์ดบอกว่าด่านไหนผ่าน/ไม่ผ่าน และยังกดปล่อยใบแจ้งหนี้ไม่ได้ถ้าเงื่อนไขไม่ครบ</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-2"><span class="step__no">1.2</span><span class="step__title">แนบหลักฐานตามเงื่อนไข</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> การ์ด <strong>เงื่อนไขก่อนติดตั้งบนเคสนี้</strong> (ในหน้าเคส)</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> แนบหลักฐานทีละเงื่อนไข — <em>สัญญาลงนามครบถ้วน</em> · <em>เงินดาวน์เข้าครบตามสัญญา</em> · <em>ระบุบริษัทที่ออกเอกสารได้</em></div>
+          <div class="see"><b>ต้องเห็น</b> เงื่อนไขที่แนบแล้วขึ้นว่าผ่าน พร้อมชื่อผู้แนบและเวลา</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-3"><span class="step__no">1.3</span><span class="step__title">ถอดหลักฐานแล้วแนบใหม่</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> การ์ดเงื่อนไขก่อนติดตั้ง</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ถอดหลักฐานชิ้นหนึ่งออก แล้วแนบใหม่ — ลองเคสที่เงื่อนไขยังไม่ครบด้วย</div>
+          <div class="see"><b>ต้องเห็น</b> ด่านกลับเป็น "ยังไม่ผ่าน" และเมื่อพยายามปล่อยงาน ระบบ<strong>บอกเหตุผลที่ยังปล่อยไม่ได้</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-4" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-4"><span class="step__no">1.4</span><span class="step__title">ปล่อยใบแจ้งหนี้ (release)</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> การ์ดงานใน <strong>ใบแจ้งหนี้ก่อนติดตั้ง</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ปล่อยงานที่เงื่อนไขครบ 1 ใบ (ถ้าใช้บัญชี officer ขั้นนี้ต้องให้ manager ทำ)</div>
+          <div class="see"><b>ต้องเห็น</b> ระบบสร้างใบแจ้งหนี้และ <strong>ร่างส่งเข้า PEAK อัตโนมัติ</strong> (สถานะร่าง) — ไม่ต้องคีย์ซ้ำ</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-5" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-5"><span class="step__no">1.5</span><span class="step__title">ติดตามร่างที่ส่งเข้า PEAK</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>เงินเข้าและ PEAK</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> หารายการที่เพิ่งปล่อย · ถ้ายังไม่ขึ้น กดปุ่มรีเฟรช (ปุ่มส่งซ้ำ/ส่งใหม่เป็นของ manager ขึ้นไป)</div>
+          <div class="see"><b>ต้องเห็น</b> รายการของเราแสดงสถานะร่าง — ในแอปนี้<strong>ไม่มีปุ่มอนุมัติ</strong> เพราะ AR อนุมัติใน PEAK เท่านั้น</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-1-6" />
+      <div class="step__main">
+        <label class="step__head" for="s-1-6"><span class="step__no">1.6</span><span class="step__title">ตรวจรายงาน PEAK ที่ใช้อยู่</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>แหล่งข้อมูล</strong> → แท็บ PEAK</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ดูรายงานล่าสุดที่ "ใช้รายงานนี้กับระบบ" แล้ว (ชุดทดสอบนี้ใช้รายงาน 14 ก.ย. 2026 จำนวน 7,638 ใบ)</div>
+          <div class="see"><b>ต้องเห็น</b> ระบบเทียบลูกค้าให้อัตโนมัติ (จับคู่แล้ว ~6,985 ราย) — tester ไม่ต้องอัปไฟล์เอง</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 2 · งานทวงถามรายวัน <span class="tag">SOP 8–13, 15</span> <span class="tag phasecount">0/0</span></h3>
+    <p class="phase__why">หัวใจของงาน: ติดต่อให้ครบ · บันทึกให้ถูก · มีงานถัดไปเสมอ</p>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-1"><span class="step__no">2.1</span><span class="step__title">ไล่คิว "วันนี้"</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>วันนี้</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ดูการ์ดสรุปความเร่งด่วนทั้ง 7 กลุ่ม ไล่จากบนลงล่าง แล้วกดเข้าเคสจากคิวได้เลย (รายการที่ยังไม่ถึงกำหนดต้องไปอยู่กลุ่มหลัง ๆ ไม่ปนกับงานด่วน)</div>
+          <div class="see"><b>ต้องเห็น</b> แต่ละกลุ่มมีจำนวนงานชัดเจน และคิวของเจ้าหน้าที่แต่ละคนไม่ปนกัน</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-2"><span class="step__no">2.2</span><span class="step__title">บันทึกการติดต่อ</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → บันทึกการติดต่อ</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เลือกช่องทาง (โทร/LINE/จดหมาย) · ผลการคุย · ใส่หมายเหตุสั้น ๆ แล้วบันทึก</div>
+          <div class="see"><b>ต้องเห็น</b> ประวัติการติดต่อต่อท้ายในหน้าเคส พร้อมชื่อเจ้าหน้าที่และเวลา</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-3"><span class="step__no">2.3</span><span class="step__title">กฎ 1 ครั้ง/วัน และถอนภายใน 90 วินาที</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → บันทึกการติดต่อ</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> บันทึกการติดต่อเรื่องหนี้ซ้ำในวันเดียวกัน แล้วลองกดถอนรายการที่เพิ่งบันทึกภายใน 90 วินาที</div>
+          <div class="see"><b>ต้องเห็น</b> ครั้งที่ 2 ถูกนับเป็น "เกินกำหนด" (ไม่นับซ้ำ) · ปุ่มถอนหายไปหลัง 90 วินาที — กติกาคือ 1 ครั้ง/วันนับเฉพาะที่คุยเรื่องหนี้</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-4" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-4"><span class="step__no">2.4</span><span class="step__title">ต้องมีงานถัดไปเสมอ</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → บันทึกการติดต่อ</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ลองบันทึกโดยไม่เลือกงานถัดไป</div>
+          <div class="see"><b>ต้องเห็น</b> ระบบไม่ให้บันทึกจนกว่าจะเลือกวันนัด/งานถัดไป — และงานนั้นไปขึ้นใน <strong>ปฏิทิน</strong> ให้อัตโนมัติ</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-5" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-5"><span class="step__no">2.5</span><span class="step__title">สัญญาการจ่าย (PTP)</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → นัดชำระ</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> สร้างคำสัญญาจ่าย 1 รายการ · ลองเลื่อนนัด · ลองทำเป็นผิดนัด</div>
+          <div class="see"><b>ต้องเห็น</b> สถานะเปลี่ยนตามที่ทำ (รอจ่าย/เลื่อน/ผิดนัด) และยอดที่ค้างแสดงถูกต้อง</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-6" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-6"><span class="step__no">2.6</span><span class="step__title">ปรับโครงสร้างหนี้ (ครั้งที่ 3 ต้องให้ผู้จัดการ)</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ทำรายการปรับโครงสร้างครั้งที่ 1–2 ให้ผ่าน แล้วลองทำครั้งที่ 3</div>
+          <div class="see"><b>ต้องเห็น</b> ครั้งแรก ๆ ทำได้เอง · ครั้งที่ 3 ระบบกันไว้และส่งเข้า <strong>รอตรวจ</strong> ให้ผู้จัดการ (ตามกติกา SOP 15)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-7" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-7"><span class="step__no">2.7</span><span class="step__title">ติดต่อไม่ได้</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → บันทึกการติดต่อ</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> บันทึก "ติดต่อไม่ได้" หลายครั้งตามจริง (ใส่ช่องทางที่ลองแล้ว)</div>
+          <div class="see"><b>ต้องเห็น</b> ประวัตินับจำนวนครั้งให้ และเคสถูกส่งต่อเข้าเส้น <strong>NPL และการเรียกคืน</strong> เพื่อพิจารณาได้</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-2-8" />
+      <div class="step__main">
+        <label class="step__head" for="s-2-8"><span class="step__no">2.8</span><span class="step__title">แจ้งปัญหาหน้างาน (service complaint)</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เปิดตั๋วปัญหา 1 ใบ — ผูกเคส · หน่วยงานที่รับผิดชอบ · กำหนดเสร็จ</div>
+          <div class="see"><b>ต้องเห็น</b> ระหว่างรอผล <strong>นาฬิกาค่าปรับหยุด</strong> (ยอดไม่เดินขึ้น) และปิดตั๋วแล้วเดินต่อได้</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 3 · ปฏิทิน &amp; รอตรวจ <span class="tag">SOP 14</span> <span class="tag phasecount">0/0</span></h3>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-3-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-3-1"><span class="step__no">3.1</span><span class="step__title">ปฏิทิน 4 หน่วย</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ปฏิทิน</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> สลับหน่วย <strong>วัน / สัปดาห์ / เดือน / ปี</strong> · กด ◀ ▶ เลื่อนช่วง · กด "วันนี้" · ลองเลือกวันที่ในช่อง</div>
+          <div class="see"><b>ต้องเห็น</b> โหมดปีมีสรุป 12 เดือน และกดเดือนแล้วเจาะเข้าไปดูงานของเดือนนั้นได้</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-3-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-3-2"><span class="step__no">3.2</span><span class="step__title">เลื่อนวันงานถัดไป</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ปฏิทิน</strong> (ลาก/แก้รายการงาน)</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เลื่อนงานหนึ่งรายการ แล้วลองบันทึกโดยไม่ใส่เหตุผล</div>
+          <div class="see"><b>ต้องเห็น</b> ระบบบังคับให้กรอกเหตุผลก่อนเลื่อน — และในหน้าเคสเห็นว่าวันนัดเปลี่ยนตาม</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-3-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-3-3"><span class="step__no">3.3</span><span class="step__title">บันทึกส่วนตัว</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ปฏิทิน</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เพิ่มบันทึกของตัวเอง 1 รายการ แล้วลบออก</div>
+          <div class="see"><b>ต้องเห็น</b> บันทึกขึ้นเฉพาะบัญชีที่สร้าง ไม่ไปรบกวนคิวของคนอื่น</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-3-4" />
+      <div class="step__main">
+        <label class="step__head" for="s-3-4"><span class="step__no">3.4</span><span class="step__title">ตอบรายการรอตรวจ (ผู้จัดการ)</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>รอตรวจ</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เปิดคำขอที่ค้างอยู่ (จากขั้น 2.6) · ตอบอนุมัติ/ไม่อนุมัติพร้อมเหตุผล · กำหนดประเภท NPL ถูกร้องขอ</div>
+          <div class="see"><b>ต้องเห็น</b> คำขอหายจากคิว/ขึ้นสถานะตอบแล้ว พร้อมเวลา SLA ที่ใช้ไป — ฝั่งเจ้าหน้าที่เห็นผลในเคสทันที</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 4 · เงินเข้า &amp; เบอร์โทร <span class="tag">SOP 5–7</span> <span class="tag phasecount">0/0</span></h3>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-4-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-4-1"><span class="step__no">4.1</span><span class="step__title">เบอร์โทรลูกค้า (เปิด · คัดลอก · โทร)</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หัวเคส</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> กด <strong>เปิดเบอร์</strong> → กด <strong>คัดลอก</strong> แล้วลองวาง · กด <strong>โทร</strong></div>
+          <div class="see"><b>ต้องเห็น</b> เปิดแล้วเห็นเบอร์เต็ม · คัดลอกวางได้ · ปุ่มโทรกลายเป็นลิงก์โทรออก (บนมือถือกดโทรได้จริง)</div>
+        </div>
+        <div class="warnbox"><b>ทุกครั้งที่เปิดเบอร์ถูกบันทึก</b>ในหน้า "บันทึกการใช้งาน" (PHONE_REVEALED) — เปิดเท่าที่จำเป็นต่องาน</div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-4-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-4-2"><span class="step__no">4.2</span><span class="step__title">ใบแจ้งหนี้บนเคส</span><span class="tag tag--role">officer</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → แท็บใบแจ้งหนี้</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ดูรายการใบแจ้งหนี้/ใบเสร็จของลูกค้ารายนี้ · กดจับคู่เอง (manual match) 1 รายการถ้ามีให้จับ</div>
+          <div class="see"><b>ต้องเห็น</b> รายการที่จับคู่แล้วขึ้นสถานะตรงกัน (ไม่ได้ขึ้นซ้ำกันสองที่)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-4-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-4-3"><span class="step__no">4.3</span><span class="step__title">ปรับสถานะการชำระ + เหตุผล</span><span class="tag tag--role">supervisor</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ปรับสถานะการชำระของลูกค้า 1 ราย พร้อมใส่เหตุผล</div>
+          <div class="see"><b>ต้องเห็น</b> สถานะใหม่สะท้อนไปที่กลุ่มความเร่งด่วนในหน้า <strong>วันนี้</strong> — เคสที่<strong>ยังมียอดค้างต้องไม่ถูกนับเป็น "ปิด"</strong></div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-4-4" />
+      <div class="step__main">
+        <label class="step__head" for="s-4-4"><span class="step__no">4.4</span><span class="step__title">ติดตามรอบของ PEAK</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>เงินเข้าและ PEAK</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> กดรีเฟรชรายการที่ส่งไปแล้ว · ดูว่ารายการได้ผลลัพธ์จากฝั่ง AR หรือยัง</div>
+          <div class="see"><b>ต้องเห็น</b> สถานะไล่ตามจริง — รอ AR → อนุมัติแล้วใน PEAK / ถูกตีกลับ (มีเหตุผล) — และเมื่อตีกลับ ระบบให้ส่งใหม่ได้</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 5 · NPL &amp; เรียกคืนทรัพย์ → ยุติสัญญา <span class="tag">SOP 16</span> <span class="tag phasecount">0/0</span></h3>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-5-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-5-1"><span class="step__no">5.1</span><span class="step__title">เปิดแนวทางจัดการหนี้เสีย</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>NPL และการเรียกคืน</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เปิดเคส NPL 1 ราย แล้วเลือกแนวทาง (ดำเนินคดีตามกฎหมาย / ยึดคืนทรัพย์ / รื้อถอนระบบ)</div>
+          <div class="see"><b>ต้องเห็น</b> เคสย้ายเข้าบอร์ดตามแนวทางที่เลือก พร้อมประวัติว่าใครเปิดและเมื่อไร</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-5-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-5-2"><span class="step__no">5.2</span><span class="step__title">บอร์ดเรียกคืน: นับ → ตั้งราคา → ขาย</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>NPL และการเรียกคืน</strong> → บอร์ด</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ย้ายการ์ดอย่างน้อย 1 ครั้ง (ต้องใส่เหตุผล) · ดูรายการทรัพย์ที่ยึดคืน (นับแล้ว/ตั้งราคา/ขายแล้ว)</div>
+          <div class="see"><b>ต้องเห็น</b> ทุกการย้ายมีเหตุผลกำกับ และยอดที่บันทึกไว้ตรงกับสถานะทรัพย์</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-5-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-5-3"><span class="step__no">5.3</span><span class="step__title">ตัดจำหน่าย (write-off) — เจ้าของเท่านั้น</span><span class="tag tag--role">owner</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>NPL และการเรียกคืน</strong> → บันทึกการตัดจำหน่าย</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> บันทึกตัดจำหน่าย 1 รายการ (ถ้าใช้บัญชีอื่น ขั้นนี้ต้องถูกปฏิเสธ)</div>
+          <div class="see"><b>ต้องเห็น</b> บัญชีอื่นทำไม่ได้ (ขึ้นว่าไม่มีสิทธิ์) · บัญชีเจ้าของทำได้และมีร่องรอยในบันทึกการใช้งาน</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-5-4" />
+      <div class="step__main">
+        <label class="step__head" for="s-5-4"><span class="step__no">5.4</span><span class="step__title">ยุติสัญญา vs ปิดสัญญา</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> หน้าเคส → ยุติสัญญา</p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ลองกดยุติสัญญาเคสที่<strong>ยังมียอดค้าง</strong> → ต้องถูกปฏิเสธพร้อมยอดปิดสัญญา · แล้วทำใหม่โดยเลือกสาเหตุ (ผิดสัญญา / ลูกค้าขอยุติ) + เหตุผล</div>
+          <div class="see"><b>ต้องเห็น</b> ปุ่มยืนยันกดได้เฉพาะเมื่อเลือกสาเหตุ+เหตุผลครบ · ลูกค้าที่<strong>จ่ายครบ</strong>ต้องขึ้น "ปิด" ไม่ใช่ "ยุติ" · การยุติถูกบันทึก (CONTRACT_TERMINATED) และขึ้นในหน้าเคสพร้อมสาเหตุ</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+    <div class="phase">
+    <h3>ช่วง 6 · ปิดรอบ: ภาพรวม &amp; หลักฐานการทดสอบ <span class="tag">SOP 17</span> <span class="tag phasecount">0/0</span></h3>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-6-1" />
+      <div class="step__main">
+        <label class="step__head" for="s-6-1"><span class="step__no">6.1</span><span class="step__title">ภาพรวมยอดเก็บ</span><span class="tag tag--role">manager</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>ภาพรวม</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ดูเป้ายอดเก็บ ผลงานเทียบเป้า และภาพรวมหนี้เสีย</div>
+          <div class="see"><b>ต้องเห็น</b> ตัวเลขสอดคล้องกับที่เพิ่งทำ (เช่น เคสที่เพิ่งปิด/ยุติถูกนับถูกกลุ่ม)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-6-2" />
+      <div class="step__main">
+        <label class="step__head" for="s-6-2"><span class="step__no">6.2</span><span class="step__title">รายงานรายสัปดาห์</span><span class="tag tag--role">supervisor</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>รายงาน</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> เลือกช่วงวันที่ · ดูรายงานแยกตามเจ้าหน้าที่</div>
+          <div class="see"><b>ต้องเห็น</b> ข้อมูลตรงกับที่บันทึกไว้จริงในหน้าเคส (จำนวนการติดต่อ/นัดชำระ/ยอดเก็บ)</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="step">
+      <input class="step__tick" type="checkbox" id="s-6-3" />
+      <div class="step__main">
+        <label class="step__head" for="s-6-3"><span class="step__no">6.3</span><span class="step__title">หลักฐานการทดสอบของตัวเอง</span><span class="tag tag--role">ทุกบทบาท</span></label>
+        <p class="step__where"><b>หน้า</b> <strong>บันทึกการใช้งาน</strong></p>
+        <div class="step__body">
+          <div class="step__do"><b>ทำ</b> ค้นหารายการที่ตัวเองเพิ่งทำในการทดสอบนี้</div>
+          <div class="see"><b>ต้องเห็น</b> เห็นของตัวเองครบ — เปิดเคส (CASE_VIEWED) · เปิดเบอร์ (PHONE_REVEALED) · ปล่อยใบแจ้งหนี้ (INVOICE_RELEASED) · ยุติสัญญา (CONTRACT_TERMINATED) · ใช้รายงาน PEAK (PEAK_REPORT_APPLIED)</div>
+        </div>
+      </div>
+    </div>
+    </div>
+
+  </section>
+
+  <footer class="foot">
+    Volt Debt · UAT staging guidebook · ปรับปรุงล่าสุด 21 ก.ย. 2026 (revision <code>volt-debt-uat-00027-q45</code>)<br />
+    หน้านี้มีรหัสผ่านบัญชีทดสอบ — ห้ามแชร์ออกนอกทีม · ไม่มีข้อมูลลูกค้าบนหน้านี้<br />
+    หน้านี้: <strong>https://volt-debt-uat-guide.netlify.app</strong>
+  </footer>
+</main>
+<script>
+  (function () {
+    var KEY = 'volt-guide-checklist-v1';
+    var ticks = Array.prototype.slice.call(document.querySelectorAll('.step__tick'));
+    var done = document.getElementById('p-done');
+    var fill = document.getElementById('p-fill');
+    var saved = {};
+    try { saved = JSON.parse(localStorage.getItem(KEY) || '{}') || {}; } catch (e) { saved = {}; }
+    function update() {
+      var n = ticks.filter(function (t) { return t.checked; }).length;
+      if (done) done.textContent = n + '/' + ticks.length;
+      if (fill) fill.style.width = (ticks.length ? (n / ticks.length * 100) : 0) + '%';
+      Array.prototype.forEach.call(document.querySelectorAll('.phase'), function (p) {
+        var ts = p.querySelectorAll('.step__tick');
+        var d = 0;
+        Array.prototype.forEach.call(ts, function (t) { if (t.checked) d++; });
+        var c = p.querySelector('.phasecount');
+        if (c) c.textContent = d + '/' + ts.length;
+      });
+    }
+    function save() {
+      var o = {};
+      ticks.forEach(function (t) { if (t.checked) o[t.id] = 1; });
+      try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) {}
+      update();
+    }
+    ticks.forEach(function (t) {
+      if (saved[t.id]) t.checked = true;
+      t.addEventListener('change', save);
+    });
+    var reset = document.getElementById('p-reset');
+    if (reset) reset.addEventListener('click', function () {
+      ticks.forEach(function (t) { t.checked = false; });
+      save();
+    });
+    update();
+  })();
+</script>
+</body>
+</html>

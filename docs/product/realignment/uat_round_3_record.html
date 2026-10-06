@@ -1,0 +1,52 @@
+<h1>Volt Debt — Blind UAT Round 3 Record (2026-09-03)</h1>
+<p>Project: Volt Debt Collection App realignment (decisions C1-C7). Build judged: the round-2 build, business date 23/10/2026. Repo records: docs/uat/round-3.md, docs/uat/round-3/judge.md, and the three tester reports in the same folder.</p>
+
+<blockquote><strong>Correction notice, 2026-09-09.</strong> This record was written when the
+late-fee rate was 0.3 %/day with 14 days' grace and CF1 was still open. Rulings 87 and 88
+decided both — see <code>docs/design/round-6/00-ledger.md</code> rulings 87–88. The CF1
+mentions below are glossary terminology from this 2026-09-03 round and are preserved
+unchanged as that record; they do not state today's status.</blockquote>
+
+<h2>0. How to read this record</h2>
+<p>A blind UAT round is run by testers who have never seen the app, playing the Debt team from the SOP and the seventeen-step workflow only. Every claim is re-run by an independent judge before it counts. Severity: P1 = wrong money on screen or a daily task that cannot be done; P2 = a step the tester could not finish unaided or finished wrongly because the screen misled them; P3 = polish. The stop rule (decision C7) is a full round with no P1, no P2 and at most three P3. Codes such as J3-01 are the judge's finding ids. CF1, OD-02 and OQ-44 are open business items in the Case Register. PEAK is the accounting system, which the app only ever writes drafts into.</p>
+
+<h2>1. Verdict</h2>
+<table>
+<tr><th>Severity</th><th>Confirmed</th><th>What they were</th></tr>
+<tr><td>P1</td><td>1</td><td>the slip form pre-filled the customer's whole arrears against one invoice</td></tr>
+<tr><td>P2</td><td>11</td><td>the cut-off lifecycle, the month labelling, tier counts, the allocation hold, the cash-book ranking and six more</td></tr>
+<tr><td>P3</td><td>23</td><td>wording, clocks, disabled controls and form details across every screen</td></tr>
+<tr><td>By design</td><td>11</td><td>rules the app is following, each cited in the judge's table</td></tr>
+<tr><td>Environment</td><td>2</td><td>simulator numbering; an empty reminder batch on this business date</td></tr>
+<tr><td>Not reproduced</td><td>2</td><td>the third renegotiation does announce itself; the snapshot list does refresh</td></tr>
+<tr><td>Regression of a round-2 fix</td><td>3</td><td>the power lifecycle, the reminder offsets, the contact-lock clock</td></tr>
+</table>
+<p>Not clean. Round 4 is required.</p>
+
+<h2>2. What mattered most (the judge's plain words)</h2>
+<ol>
+<li>The one screen where the team keys money offered the wrong number. Confirming a slip named one invoice and pre-filled the customer's whole arrears, so 32,070 stood against a 16,035 invoice. An officer taking the default books a receipt for twice what the customer paid, and it reaches Accounting as a draft.</li>
+<li>The cut-off was a road with no end. The request reached the manager's queue, where the manager could neither approve nor reject but could close it; the owner approved; and then no role in the app could record that the power was cut or restored. The case showed a raw English state with no button at all.</li>
+<li>The app disagreed with itself in front of the customer. One month read overdue in the invoice table and paid in the grid below it. An invoice thirteen days past due read as sent while its amount sat inside the arrears. A receipt read approved in the queue and draft on the case. A tier chip counted a case whose section was empty.</li>
+</ol>
+
+<h2>3. The structural lesson, and what changes because of it</h2>
+<p>Two of the three regressions exist because a round-2 backend fix shipped without the screen that reads it. The power lifecycle and the reminder offsets were both correct in the interface behind the screen and wrong in front of the officer. From round 4 the front end is rebuilt from the same commit as the interface before any tester sees it, and the judge is asked to confirm that a screen actually exposes every behaviour it verifies. This is now a standing rule for the project, not a one-off correction.</p>
+
+<h2>4. What the judge confirms is solid</h2>
+<p>The money at the top of the case is right and says what it is: arrears are the instalments actually overdue, cash arrears are the invoice's own outstanding, and the penalty sits beside them and never inside. Every figure the judge recomputed from the invoices matched. The settings screen can no longer take the process down. The promise chain holds end to end, through three renegotiations, an escalation the officer is told about, and a fourth attempt refused without moving the open promise. The ticket freezes the clock, states the rule it is following, demands a closing note and hands the case back to the officer. The NPL flow is the model the rest should copy. The weekly report states the unit of every ratio and reconciles its two populations in one sentence. The two release gates hold and name the missing one. And nothing anywhere in the app approves a PEAK document.</p>
+
+<h2>5. Fixes applied after the verdict</h2>
+<p>Two fixes were applied by the lead before the verdict landed, both defects the round-2 batch had introduced: the slip form now offers the invoice's own outstanding, and the reminder heading reads three days before the due date rather than three days after, preferring the label the interface already sends.</p>
+<p>The backend batch closed eleven larger items and a dozen smaller ones, taking its tests from 355 to 376. The sheet's own month cells are now the single axis for a lease contract, so the late cells say which months are unpaid and each invoice is stamped with its sheet cell, while the link the sheet recorded became a fact beside the invoice rather than its state. An invoice past its due date reads overdue even when a link went out. The morning list's chips are a true partition. A book with no monthly schedule counts one missed month per thirty days late, so a large long-overdue cash contract outranks a small three-day arrear and the cash officer gets a first call. A cut-off request is decided rather than answered, and the lifecycle after approval exists with the roles that may execute and restore. A confirmed receipt no longer marks a case paid while arrears stand. The case reads each document's accounting state from the store on every load, so it cannot disagree with the queue. A postponed row stays in the list with a note. Band sets say plainly that they cannot be edited and can be re-activated. The officer report counts inside its stated period. One business clock replaced the wall-clock stamps.</p>
+<p>The frontend batch closed nine larger items and thirteen smaller ones, taking its tests from 229 to 256. The power lifecycle is on screen with Thai states and buttons, the cut-off card offers only approve or reject and only to the approver, a month cell can no longer read as both paid and outstanding, the allocation hold sits under the arrears, a postponed row keeps its card, every routine row says why it is routine, and the simulation marker now rides on every screen that shows an accounting number.</p>
+<p>Three limits were reported honestly rather than papered over. Two closed contracts carry late cells with nothing due and unpaid, so no invoice is invented for them and the contract records why. The late, today and upcoming counts stay over the rows shown so they still reconcile with the list, while only the out-of-window count is book-wide. And no endpoint moves a band boundary, so the screen has only the branch that says the set cannot be edited.</p>
+
+<h2>6. Verification</h2>
+<table>
+<tr><th>Suite</th><th>Result</th></tr>
+<tr><td>Backend</td><td>376 passed</td></tr>
+<tr><td>Frontend</td><td>256 passed</td></tr>
+<tr><td>Black-box rules</td><td>29 of 29</td></tr>
+</table>
+<p>The verification script printed EVERYTHING PASSED, and the judge's acceptance tests were re-run by hand against the built tree. Following the structural lesson above, the front end was rebuilt and both servers restarted from the same tree before round 4, with the simulator on from the first minute. The bundle the round-4 testers are served is the one built from that commit. Round 4 is running now.

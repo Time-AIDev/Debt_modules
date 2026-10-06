@@ -45,24 +45,15 @@ describe('TerminateDrawer', () => {
     expect(await screen.findByRole('status')).toHaveTextContent('ยุติสัญญาแล้ว')
   })
 
-  it('renders a closed-balance refusal as the payoff figure and the blocking contracts', async () => {
-    const user = userEvent.setup()
-    api.terminateCustomerContract.mockRejectedValue({ problem: {
-      code: 'balance_not_closed', title: 'The remaining balance must be closed before terminating',
-      message_th: 'ต้องปิดยอดคงเหลือก่อนยุติสัญญา — ชำระให้ครบ หรือให้ OWNER ตัดจำหน่าย',
-      extensions: { payoff_amount: '612400.00', blocking: [{ contract_uid: 'ct-1', outstanding: '612400.00' }] },
-    } })
-    renderScreen(<TerminateDrawer open onClose={() => {}} customerUid="c-1" onDone={() => {}} />)
+  it('explains that a known outstanding balance remains after termination', () => {
+    renderScreen(<TerminateDrawer open onClose={() => {}} customerUid="c-1" outstanding="612400.00" />)
+    expect(screen.getByText(/ยอดคงเหลือ ฿612,400\.00 จะยังคงอยู่/)).toBeInTheDocument()
+    expect(screen.getByText(/ไม่ใช่การชำระเงินหรือตัดจำหน่าย/)).toBeInTheDocument()
+  })
 
-    await user.selectOptions(screen.getByLabelText(/สาเหตุการยุติ/), 'CUSTOMER_REQUEST')
-    await user.type(screen.getByLabelText(/เหตุผล/), 'ลูกค้าขอยกเลิก')
-    await user.click(screen.getByRole('button', { name: 'ยืนยันยุติสัญญา' }))
-
-    expect(await screen.findByText('ต้องปิดยอดคงเหลือก่อนยุติสัญญา — ชำระให้ครบ หรือให้ OWNER ตัดจำหน่าย')).toBeInTheDocument()
-    // the served decimals are printed as money (they arrive raw)
-    expect(screen.getAllByText(/612,400\.00/)).toHaveLength(2)
-    expect(screen.getByText('ct-1')).toBeInTheDocument()
-    // The drawer stays open: the act is not done, only refused.
-    expect(screen.getByRole('button', { name: 'ยืนยันยุติสัญญา' })).toBeInTheDocument()
+  it('does not present an unknown balance as zero', () => {
+    renderScreen(<TerminateDrawer open onClose={() => {}} customerUid="c-1" outstanding={null} />)
+    expect(screen.getByText(/ยอดคงเหลือยังไม่ทราบ/)).toBeInTheDocument()
+    expect(screen.queryByText(/฿0\.00/)).toBeNull()
   })
 })

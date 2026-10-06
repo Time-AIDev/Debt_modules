@@ -351,3 +351,17 @@
 @container (max-width: 600px) {
   .case__facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
+
+.case__identityText { user-select: text; overflow-wrap: anywhere; }
+
+.case__unverifiedPaid { display: inline-block; margin-left: 8px; color: var(--volt-yellow); font-size: 12px; line-height: 16px; font-weight: 600; }
+.cyclegrid__tooltipAnchor { position: relative; display: inline-flex; }
+.cyclegrid__tooltipAnchor button { font: inherit; cursor: pointer; }
+.cyclegrid__tooltipAnchor button:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.cyclegrid__tooltip { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; width: max-content; max-width: min(320px, 80vw); padding: 10px; border-radius: 6px; background: #172b3a; color: #fff; font-size: 12px; line-height: 1.5; box-shadow: 0 3px 12px #0003; }
+.monthgrid__cell--rejected { color: #596570; background: #eef0f2; border: 1px dashed #88939e; text-decoration: line-through; }
+@media (max-width: 600px) {
+  .monthgrid, .cyclegrid__deposits { position: relative; }
+  .cyclegrid__tooltipAnchor { position: static; }
+  .cyclegrid__tooltip { top: calc(100% + 6px); left: 0; right: 0; width: auto; max-width: 100%; overflow-wrap: anywhere; }
+}

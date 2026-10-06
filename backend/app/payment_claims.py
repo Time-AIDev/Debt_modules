@@ -57,6 +57,12 @@ def _money(value, pointer="/amount"):
             detail="amount must be a decimal number greater than zero",
             message_th="ยอดรับชำระไม่ถูกต้อง กรุณาระบุจำนวนที่มากกว่าศูนย์",
             error_id="DEBT-PAY-0422", errors=[{"pointer": pointer, "code": "invalid"}])
+    if not amount.is_finite():
+        raise errors.Problem(
+            code="payment_claim_amount_invalid", status=422, title="Invalid payment amount",
+            detail="amount must be a finite decimal number greater than zero",
+            message_th="ยอดรับชำระไม่ถูกต้อง กรุณาระบุจำนวนที่มากกว่าศูนย์",
+            error_id="DEBT-PAY-0422", errors=[{"pointer": pointer, "code": "invalid"}])
     if amount <= ZERO:
         raise errors.Problem(
             code="payment_claim_amount_invalid", status=422, title="Invalid payment amount",
@@ -150,7 +156,16 @@ def _identity_of(row):
             or row.get("contact_code"))
 
 
-def reconcile_receipts(invoices, receipt_observations):
+def _receipt_observation_key(receipt):
+    # Applying an old export later must not resurrect a receipt cancelled in a
+    # newer source observation. Application timestamps describe operator actions,
+    # not the chronology of PEAK's accounting facts.
+    return (str(receipt.get("exported_at") or receipt.get("observed_at")
+                or receipt.get("report_as_of") or ""),
+            int(receipt.get("run_id") or receipt.get("source_run_id") or 0))
+
+
+def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_cancellations=True):
     """Pure amount-led reconciliation across every receipt observation.
 
     The latest observation of a receipt number wins, making repeated exports
@@ -159,22 +174,90 @@ def reconcile_receipts(invoices, receipt_observations):
     identity agree. Excess then rolls to the customer's other invoices FIFO and
     finally becomes customer credit.
     """
-    latest = {}
+    latest, previous_paid = {}, {}
     for index, raw in enumerate(receipt_observations):
         receipt = dict(raw)
         doc_no = str(receipt.get("doc_no") or "").strip()
         if not doc_no:
             continue
-        key = (str(receipt.get("observed_at") or receipt.get("exported_at") or ""),
-               int(receipt.get("run_id") or receipt.get("source_run_id") or 0), index)
+        key = (*_receipt_observation_key(receipt), index)
         if doc_no not in latest or key > latest[doc_no][0]:
             latest[doc_no] = (key, receipt)
+        if str(receipt.get("status") or "").upper() == "PAID":
+            if doc_no not in previous_paid or key > previous_paid[doc_no][0]:
+                previous_paid[doc_no] = (key, receipt)
 
     invoice_rows = {str(_doc_no(inv)): dict(inv) for inv in invoices}
-    remaining = {doc: _outstanding(inv) for doc, inv in invoice_rows.items()}
+    customer_invoice_rows = {}
+    for inv in invoice_rows.values():
+        customer_invoice_rows.setdefault(str(_identity_of(inv)), []).append(inv)
+    # A dated invoice balance already includes historical receipts. Reconstruct
+    # those receipt allocations against the face amount for provenance, then cap
+    # new cash at the balance captured by the snapshot. Starting historical cash
+    # at snapshot outstanding would subtract it twice and manufacture credit.
+    face = {doc: max(_outstanding(inv), Decimal(str(inv.get("amount")
+                or inv.get("amount_due") or _outstanding(inv))))
+            for doc, inv in invoice_rows.items()}
+    remaining = {doc: face[doc] if inv.get("snapshot_as_of") else _outstanding(inv)
+                 for doc, inv in invoice_rows.items()}
+    snapshot_balance = {doc: _outstanding(inv) for doc, inv in invoice_rows.items()}
     received = {doc: ZERO for doc in invoice_rows}
     after_snapshot = {doc: ZERO for doc in invoice_rows}
     allocations, exceptions, credit_by_customer = [], [], {}
+
+    # A cancellation observed after the snapshot can reverse a payment that the
+    # snapshot included. Without dated source evidence keep the snapshot intact.
+    reversing = {}
+    for _, receipt in (latest.values() if _recover_snapshot_cancellations else ()):
+        if str(receipt.get("status") or "").upper() != "CANCELLED":
+            continue
+        ref = str(receipt.get("invoice_ref") or "").strip()
+        inv = invoice_rows.get(ref)
+        if not inv or not inv.get("snapshot_as_of"):
+            continue
+        cutoff = str(inv["snapshot_as_of"])[:10]
+        observed = _receipt_observation_key(receipt)[0][:10]
+        if observed <= cutoff:
+            continue
+        if not _identity_of(receipt) or str(_identity_of(receipt)) != str(_identity_of(inv)):
+            continue
+        try:
+            _money(receipt.get("paid_amount"), pointer="/paid_amount")
+        except errors.Problem:
+            prior = previous_paid.get(receipt["doc_no"], (None, {}))[1]
+            receipt["paid_amount"] = receipt.get("previous_paid_amount") or prior.get("paid_amount")
+            try:
+                _money(receipt.get("paid_amount"), pointer="/paid_amount")
+            except errors.Problem:
+                exceptions.append({"receipt_doc_no": receipt["doc_no"],
+                                   "reason": "CANCELLATION_EVIDENCE_MISSING", "invoice_ref": ref})
+                continue
+        if not receipt.get("paid_on"):
+            prior = previous_paid.get(receipt["doc_no"], (None, {}))[1]
+            receipt["paid_on"] = receipt.get("previous_paid_on") or prior.get("paid_on")
+        paid_on = str(receipt.get("paid_on") or "")[:10]
+        if not paid_on:
+            exceptions.append({"receipt_doc_no": receipt["doc_no"],
+                               "reason": "CANCELLATION_EVIDENCE_MISSING", "invoice_ref": ref})
+            continue
+        if paid_on > cutoff:
+            continue
+        reversing[receipt["doc_no"]] = receipt
+    if reversing:
+        # Recover the former reference/FIFO distribution, including cash that
+        # spilled to a second invoice. Reversing only the named invoice would
+        # leave the second invoice paid after its source receipt was cancelled.
+        hypothetical = reconcile_receipts(list(invoice_rows.values()), [
+            dict(receipt, status="PAID") if receipt["doc_no"] in reversing else receipt
+            for _, receipt in latest.values()], _recover_snapshot_cancellations=False)
+        for allocation in hypothetical["allocations"]:
+            receipt = reversing.get(allocation["receipt_doc_no"])
+            doc = allocation["invoice_doc_no"]
+            if not receipt or not doc or not invoice_rows[doc].get("snapshot_as_of"):
+                continue
+            cutoff = str(invoice_rows[doc]["snapshot_as_of"])[:10]
+            if str(receipt["paid_on"])[:10] <= cutoff < _receipt_observation_key(receipt)[0][:10]:
+                snapshot_balance[doc] = min(face[doc], snapshot_balance[doc] + Decimal(allocation["amount"]))
 
     active = [value[1] for value in latest.values()
               if str(value[1].get("status") or "").upper() not in ("DRAFT", "CANCELLED")]
@@ -205,38 +288,48 @@ def reconcile_receipts(invoices, receipt_observations):
             exceptions.append({"receipt_doc_no": receipt.get("doc_no"),
                                "reason": "AMOUNT_INVALID", "invoice_ref": ref})
             continue
-        customer_invoices = [inv for inv in invoice_rows.values()
-                             if str(_identity_of(inv)) == str(invoice_customer)]
+        try:
+            receipt["paid_on"] = _iso_date(receipt.get("paid_on"))
+        except errors.Problem:
+            exceptions.append({"receipt_doc_no": receipt.get("doc_no"),
+                               "reason": "PAID_DATE_INVALID", "invoice_ref": ref})
+            continue
+        if not invoice.get("snapshot_as_of") and face[ref] != _outstanding(invoice):
+            exceptions.append({"receipt_doc_no": receipt.get("doc_no"),
+                               "reason": "SNAPSHOT_DATE_MISSING", "invoice_ref": ref})
+            continue
+        customer_invoices = customer_invoice_rows[str(invoice_customer)]
         ordered = sorted(customer_invoices, key=lambda inv: (
             0 if _doc_no(inv) == ref else 1,
             str(inv.get("collection_due_date") or inv.get("due_date") or inv.get("due_on") or "9999-12-31"),
             str(inv.get("issued_on") or "9999-12-31"), str(_doc_no(inv))))
         left = amount
-        if invoice.get("service_adjusted"):
-            # Reconstruct this receipt's named invoice from its face amount. The
-            # latest PEAK balance may already include the historical receipt; its
-            # zero balance must not make M3 cash spill into a deferred M1.
-            remaining[ref] = max(remaining[ref], Decimal(str(invoice["amount"])) - received[ref])
+        allocation_order = 0
         for inv in ordered:
             if left <= ZERO:
                 break
             doc = str(_doc_no(inv))
+            cutoff = inv.get("snapshot_as_of")
+            is_new = bool(cutoff and str(receipt.get("paid_on") or "")[:10] > str(cutoff)[:10])
+            if is_new:
+                remaining[doc] = min(remaining[doc],
+                                     max(ZERO, snapshot_balance[doc] - after_snapshot[doc]))
             take = min(left, remaining[doc])
             if take <= ZERO:
                 continue
             before = remaining[doc]
             remaining[doc] -= take
             received[doc] += take
-            cutoff = inv.get("snapshot_as_of")
-            if inv.get("service_adjusted") and cutoff and str(receipt.get("paid_on") or "")[:10] > str(cutoff)[:10]:
+            if is_new:
                 after_snapshot[doc] += take
             left -= take
+            allocation_order += 1
             allocations.append({
                 "receipt_doc_no": receipt["doc_no"], "invoice_doc_no": doc,
                 "customer_uid": invoice.get("customer_uid") or receipt.get("customer_uid"),
                 "customer_no": invoice.get("customer_no") or receipt.get("customer_no"),
                 "amount": _fmt(take), "before": _fmt(before), "after": _fmt(remaining[doc]),
-                "order": len([a for a in allocations if a["receipt_doc_no"] == receipt["doc_no"]]) + 1,
+                "order": allocation_order,
                 "source_run_id": receipt.get("run_id") or receipt.get("source_run_id"),
             })
         if left > ZERO:
@@ -247,20 +340,18 @@ def reconcile_receipts(invoices, receipt_observations):
                 "customer_uid": invoice.get("customer_uid") or receipt.get("customer_uid"),
                 "customer_no": invoice.get("customer_no") or receipt.get("customer_no"),
                 "amount": _fmt(left), "before": "0.00", "after": _fmt(left),
-                "order": len([a for a in allocations if a["receipt_doc_no"] == receipt["doc_no"]]) + 1,
+                "order": allocation_order + 1,
                 "source_run_id": receipt.get("run_id") or receipt.get("source_run_id"),
             })
 
     reconciled_invoices = {}
     for doc, inv in invoice_rows.items():
         left = remaining[doc]
-        if inv.get("service_adjusted"):
-            total = Decimal(str(inv["amount"]))
-            snapshot_paid = total - _outstanding(inv)
-            left = max(ZERO, total - max(received[doc], snapshot_paid + after_snapshot[doc]))
-        state = "PAID" if left == ZERO else ("PARTIALLY_PAID" if received[doc] > ZERO
+        if inv.get("snapshot_as_of"):
+            left = min(left, max(ZERO, snapshot_balance[doc] - after_snapshot[doc]))
+        paid = face[doc] - left if inv.get("snapshot_as_of") else received[doc]
+        state = "PAID" if left == ZERO else ("PARTIALLY_PAID" if paid > ZERO
                                                 else inv.get("state") or inv.get("status") or "OVERDUE")
-        paid = Decimal(str(inv["amount"])) - left if inv.get("service_adjusted") else received[doc]
         reconciled_invoices[doc] = dict(inv, confirmed_paid=_fmt(paid),
                                         confirmed_outstanding=_fmt(left), state=state, status=state)
     return {
@@ -621,9 +712,15 @@ def decorate(customer_uid, case, invoices):
     annotated = []
     confirmed = ZERO
     for inv in invoices:
+        if inv.get("payment_evidence") == "UNCONFIRMED" or inv.get("liability_verified") is False:
+            annotated.append(dict(inv, confirmed_paid=inv.get("verified_payment"), confirmed_outstanding=None,
+                                  projected_outstanding=None, pending_amount="0.00",
+                                  review_amount=_fmt(_outstanding(inv)), payment_allocations=[], receipt_references=[]))
+            continue
         before = _outstanding(inv)
         pending = min(before, pending_by.get(_doc_no(inv), ZERO))
-        confirmed += before
+        if inv.get("is_due", True) and inv.get("collection_included", True):
+            confirmed += before
         amount = Decimal(str(inv.get("amount") or inv.get("amount_due") or "0"))
         confirmed_paid = max(ZERO, amount - before)
         if before == ZERO:
@@ -644,7 +741,8 @@ def decorate(customer_uid, case, invoices):
                                                     "after_amount": _fmt(row["after_amount"])}
                                                    for row in invoice_allocations],
                               receipt_references=[row["receipt_doc_no"] for row in invoice_allocations]))
-    pending_amount = sum((Decimal(str(r["amount"])) for r in active), ZERO)
+    pending_amount = sum((Decimal(str(r["pending_amount"])) for r in annotated
+                          if r.get("is_due", True) and r.get("collection_included", True)), ZERO)
     pending_credit = sum((Decimal(str(r.get("credit_amount") or "0")) for r in active), ZERO)
     case_view = dict(case)
     base = case.get("payment_status_confirmed") or case.get("payment_status_system") or case.get("payment_status")
@@ -803,16 +901,19 @@ def send_reminder(customer_uid, month, by, channel=None):
     return _existing_reminder(customer_uid, month), False
 
 
-def reconcile_applied(conn, run_id):
+def reconcile_applied(conn, run_id, reason="report_apply"):
     """Rebuild confirmed allocation truth from all applied receipt observations.
 
-    It runs inside the receipt-apply transaction. Rebuilding (instead of adding a
+    It runs inside the invoice/receipt/link change transaction. Rebuilding (instead of adding a
     delta) is what makes re-uploads idempotent and a later CANCELLED observation a
     reversible event.
     """
     global _VERSION
     from sqlalchemy import text
     from . import journey, service_deferrals
+    from .pipelines import peak_writer
+
+    conn.execute(text("select pg_advisory_xact_lock(:key)"), {"key": 0x504159524543})
 
     invoice_run = conn.execute(text(
         "select id from landing.import_run where source_system='PEAK' and status='OK' "
@@ -820,18 +921,32 @@ def reconcile_applied(conn, run_id):
     )).scalar()
     invoice_rows = []
     if invoice_run:
-        invoice_rows = conn.execute(text(
-            "select doc_no, issued_on, due_on, amount_due, amount_awaiting, "
-            "coalesce(customer_no, ladder_customer_no) as customer_no "
-            "from landing.peak_invoice where import_run_id=:r and "
-            "coalesce(customer_no, ladder_customer_no) is not null"), {"r": invoice_run}).mappings().all()
+        invoice_rows = peak_writer._linked_rows(conn, invoice_run, (
+            "doc_no", "issued_on", "due_on", "amount_due", "amount_awaiting", "customer_no",
+            "ladder_verdict", "ladder_customer_no", "ladder_rule", "verdict", "rule"),
+            "and p.status not in ('DRAFT','CANCELLED')")
 
     receipt_rows = conn.execute(text(
         "select distinct on (p.doc_no) p.doc_no, p.invoice_ref, p.status, p.paid_on, p.paid_amount, "
-        "p.customer_no, p.invoice_doc_no, p.verdict, r.id as run_id, r.meta->>'exported_at' as exported_at "
+        "p.customer_no, p.invoice_doc_no, p.verdict, p.rule, p.contact_code, "
+        "l.customer_no as linked_no, r.id as run_id, r.meta->>'exported_at' as exported_at, "
+        "r.meta->>'report_as_of' as report_as_of, "
+        "previous.paid_amount as previous_paid_amount, previous.paid_on as previous_paid_on, "
+        "previous.import_run_id as previous_paid_run_id "
         "from landing.peak_receipt p join landing.import_run r on r.id=p.import_run_id "
+        "left join records.identity_link l on l.retired_at is null and l.source='PEAK_LINK' "
+        "and l.contact_code=upper(regexp_replace(coalesce(p.contact_code,''),'[[:space:]]+','','g')) "
+        "left join lateral (select old.paid_amount,old.paid_on,old.import_run_id "
+        "from landing.peak_receipt old join landing.import_run old_run on old_run.id=old.import_run_id "
+        "where p.status='CANCELLED' and old.doc_no=p.doc_no and old.status='PAID' and old.paid_amount>0 "
+        "and old_run.source_system='PEAK_RECEIPT' and old_run.status='OK' and old_run.meta ? 'applied' "
+        "and coalesce(nullif(old_run.meta->>'exported_at',''),nullif(old_run.meta->>'report_as_of',''),'') "
+        "<=coalesce(nullif(r.meta->>'exported_at',''),nullif(r.meta->>'report_as_of',''),'') "
+        "order by coalesce(nullif(old_run.meta->>'exported_at',''), "
+        "nullif(old_run.meta->>'report_as_of',''),'') desc,old_run.id desc limit 1) previous on true "
         "where r.source_system='PEAK_RECEIPT' and r.status='OK' and r.meta ? 'applied' "
-        "order by p.doc_no, cast(r.meta->'applied'->>'at' as timestamptz) desc nulls last, r.id desc"
+        "order by p.doc_no, coalesce(nullif(r.meta->>'exported_at',''), "
+        "nullif(r.meta->>'report_as_of',''),'') desc, r.id desc"
     )).mappings().all()
 
     uid_by_no = {str(customer.customer_no): customer.uid for customer in journey.book_customers()
@@ -843,7 +958,10 @@ def reconcile_applied(conn, run_id):
     invoice_as_of = conn.execute(text("select meta->>'report_as_of' from landing.import_run where id=:r"),
                                  {"r": invoice_run}).scalar() if invoice_run else None
     for row in invoice_rows:
-        no = str(row["customer_no"])
+        served_no, _ = peak_writer._serves(row)
+        if not served_no:
+            continue
+        no = str(served_no)
         invoices.append({
             "uid": "inv-pk-" + row["doc_no"], "doc_no": row["doc_no"],
             "customer_no": no, "customer_uid": uid_by_no.get(no),
@@ -858,7 +976,9 @@ def reconcile_applied(conn, run_id):
         })
     receipts = []
     for row in receipt_rows:
-        no = str(row["customer_no"]) if row["customer_no"] is not None else None
+        served_no, _ = peak_writer._serves(dict(row, ladder_verdict=None,
+                                               ladder_customer_no=None, ladder_rule=None))
+        no = str(served_no) if served_no is not None else None
         receipts.append({
             "doc_no": row["doc_no"], "invoice_ref": row["invoice_doc_no"] or row["invoice_ref"],
             # Financial status only gates Draft/Cancelled/unknown. Strict matching
@@ -868,6 +988,10 @@ def reconcile_applied(conn, run_id):
             "paid_amount": row["paid_amount"], "customer_no": no,
             "customer_uid": uid_by_no.get(no), "run_id": row["run_id"],
             "exported_at": row["exported_at"],
+            "report_as_of": row["report_as_of"],
+            "previous_paid_amount": row["previous_paid_amount"],
+            "previous_paid_on": str(row["previous_paid_on"]) if row["previous_paid_on"] else None,
+            "previous_paid_run_id": row["previous_paid_run_id"],
         })
     result = reconcile_receipts(invoices, receipts)
 
@@ -898,7 +1022,8 @@ def reconcile_applied(conn, run_id):
                 "detail": json.dumps(exception, ensure_ascii=False, default=str),
             })
 
-    # Keep prior allocation rows as reversal evidence; only the current rebuild is active.
+    # This table is the current query projection. Immutable complete versions below
+    # preserve every previous allocation and claim match before a later rebuild.
     conn.execute(text("update records.payment_allocation set active=false where active"))
     for allocation in result["allocations"]:
         key = allocation["invoice_doc_no"] or "CREDIT"
@@ -921,7 +1046,7 @@ def reconcile_applied(conn, run_id):
 
     # Re-resolve claims from current receipt truth. This also reverses claims whose
     # receipt was later cancelled without deleting the historical allocation row.
-    conn.execute(text("delete from records.payment_claim_receipt"))
+    conn.execute(text("update records.payment_claim_receipt set active=false where active"))
     conn.execute(text(
         "update records.payment_claim set state='PENDING', confirmed_amount=0, resolution_run_id=null, "
         "resolved_at=null, resolution_note=null where state <> 'CANCELLED'"))
@@ -939,18 +1064,38 @@ def reconcile_applied(conn, run_id):
             "select distinct c.* from records.payment_claim c "
             "left join records.payment_claim_target t on t.claim_uid=c.uid "
             "where c.customer_uid=:uid and c.state in ('PENDING','PARTIALLY_CONFIRMED') "
-            "and (t.invoice_doc_no = any(:docs) or c.reference = any(:docs)) "
-            "order by c.created_at, c.uid"), {"uid": customer_uid, "docs": list(invoice_docs) or ["-"]}).mappings().all()
-        available = sum((Decimal(a["amount"]) for a in allocations), ZERO)
+            "and c.paid_on=cast(:paid_on as date) "
+            "and (t.invoice_doc_no = any(:docs) or c.reference = any(:docs) "
+            "or (c.reference=:reference and c.credit_amount>0)) "
+            "order by c.created_at, c.uid"), {"uid": customer_uid, "paid_on": receipt.get("paid_on"),
+                                              "reference": receipt.get("invoice_ref"),
+                                              "docs": list(invoice_docs) or ["-"]}).mappings().all()
+        available_by_doc = {}
+        for allocation in allocations:
+            doc = allocation["invoice_doc_no"] or "CREDIT"
+            available_by_doc[doc] = available_by_doc.get(doc, ZERO) + Decimal(allocation["amount"])
         for claim in claims:
-            if available <= ZERO:
+            if sum(available_by_doc.values(), ZERO) <= ZERO:
                 break
             claim_remaining = max(
                 ZERO, Decimal(claim["amount"]) - Decimal(claim["confirmed_amount"]))
-            matched = min(available, claim_remaining)
+            targets = conn.execute(text(
+                "select invoice_doc_no from records.payment_claim_target where claim_uid=:claim "
+                "order by allocation_order"), {"claim": claim["uid"]}).scalars().all()
+            eligible_docs = list(dict.fromkeys(targets or ([claim["reference"]] if claim["reference"] else [])))
+            if Decimal(claim["credit_amount"]) > ZERO and claim["reference"] == receipt.get("invoice_ref"):
+                eligible_docs.append("CREDIT")
+            eligible = sum((available_by_doc.get(doc, ZERO) for doc in eligible_docs), ZERO)
+            matched = min(eligible, claim_remaining)
             if matched <= ZERO:
                 continue
-            available -= matched
+            to_consume = matched
+            for doc in eligible_docs:
+                consumed = min(to_consume, available_by_doc.get(doc, ZERO))
+                available_by_doc[doc] = available_by_doc.get(doc, ZERO) - consumed
+                to_consume -= consumed
+                if to_consume <= ZERO:
+                    break
             confirmed_amount = Decimal(claim["confirmed_amount"]) + matched
             state = ("CONFIRMED" if confirmed_amount >= Decimal(claim["amount"])
                      else "PARTIALLY_CONFIRMED")
@@ -960,8 +1105,10 @@ def reconcile_applied(conn, run_id):
                 {"state": state, "amount": confirmed_amount, "run": run_id,
                  "note": "matched receipt %s" % receipt_doc, "uid": claim["uid"]})
             conn.execute(text(
-                "insert into records.payment_claim_receipt (claim_uid,receipt_doc_no,amount,source_run_id) "
-                "values (:claim,:receipt,:amount,:run)"),
+                "insert into records.payment_claim_receipt (claim_uid,receipt_doc_no,amount,source_run_id,active) "
+                "values (:claim,:receipt,:amount,:run,true) "
+                "on conflict (claim_uid,receipt_doc_no) do update set amount=excluded.amount, "
+                "source_run_id=excluded.source_run_id, active=true, matched_at=now()"),
                 {"claim": claim["uid"], "receipt": receipt_doc, "amount": matched,
                  "run": receipt.get("run_id") or run_id})
 
@@ -973,25 +1120,75 @@ def reconcile_applied(conn, run_id):
     confirmed = int(final_claim_counts["confirmed"] or 0)
     partially = int(final_claim_counts["partial"] or 0)
 
-    applied = conn.execute(text("select meta from landing.import_run where id=:r"), {"r": run_id}).scalar() or {}
-    covers_from, covers_to = applied.get("covers_from"), applied.get("covers_to")
     needs_review = 0
-    if covers_from and covers_to:
+    # Rebuilding after an invoice/link/deferral change must retain the receipt
+    # coverage evidence used to resolve unmatched claims on the last receipt apply.
+    coverage_runs = conn.execute(text(
+        "select id,meta from landing.import_run where source_system='PEAK_RECEIPT' "
+        "and status='OK' and meta ? 'applied' order by id")).mappings().all()
+    for covered in coverage_runs:
+        applied = covered["meta"] or {}
+        covers_from, covers_to = applied.get("covers_from"), applied.get("covers_to")
+        if not covers_from or not covers_to:
+            continue
         changed = conn.execute(text(
             "update records.payment_claim set state='NEEDS_REVIEW', resolved_at=now(), "
             "resolution_run_id=:run, resolution_note='receipt coverage passed without a strict match' "
             "where state='PENDING' and paid_on between cast(:start as date) and cast(:finish as date)"),
             {"run": run_id, "start": covers_from, "finish": covers_to})
-        needs_review = changed.rowcount or 0
+        needs_review += changed.rowcount or 0
     allocated = sum((Decimal(a["amount"]) for a in result["allocations"] if a["invoice_doc_no"]), ZERO)
     credit = sum((Decimal(value) for value in result["credit_by_customer"].values()), ZERO)
-    _VERSION += 1
-    return {
+    summary = {
         "claims_confirmed": confirmed, "claims_partially_confirmed": partially,
         "claims_needs_review": needs_review, "allocated_to_invoices": _fmt(allocated),
         "customer_credit": _fmt(credit), "exceptions": len(result["exceptions"]),
         "receipts_active": result["active_receipts"],
     }
+    claims_after = [dict(row) for row in conn.execute(text(
+        "select uid,customer_uid,amount,paid_on,reference,state,confirmed_amount,credit_amount, "
+        "resolution_run_id,resolved_at,resolution_note from records.payment_claim order by uid"
+    )).mappings().all()]
+    claim_matches = [dict(row) for row in conn.execute(text(
+        "select claim_uid,receipt_doc_no,amount,source_run_id from records.payment_claim_receipt "
+        "where active order by claim_uid,receipt_doc_no")).mappings().all()]
+    input_payload = {"invoice_run_id": invoice_run, "snapshot_as_of": invoice_as_of,
+                     "invoices": invoices, "receipts": receipts}
+    output_payload = dict(result, claims=claims_after, claim_receipts=claim_matches, summary=summary)
+    reconciliation_id = conn.execute(text(
+        "insert into records.payment_reconciliation_version "
+        "(trigger_run_id,reason,invoice_run_id,snapshot_as_of,inputs,outputs) "
+        "values (:run,:reason,:invoice_run,cast(:as_of as date),cast(:inputs as jsonb),cast(:outputs as jsonb)) "
+        "returning sequence"), {"run": run_id, "reason": reason, "invoice_run": invoice_run,
+                                "as_of": invoice_as_of,
+                                "inputs": json.dumps(input_payload, ensure_ascii=False, default=str),
+                                "outputs": json.dumps(output_payload, ensure_ascii=False, default=str)}).scalar()
+    _VERSION += 1
+    return dict(summary, reconciliation_version=reconciliation_id)
+
+
+def reconcile_current(reason, conn=None):
+    """Rebuild for a non-import change, sharing the enclosing production write unit.
+
+    No startup rebuild: historical money changes require an explicit reviewed
+    command. The local no-database prototype keeps its existing in-memory behavior.
+    """
+    if not db.configured():
+        return None
+    from contextlib import nullcontext
+    from sqlalchemy import text
+    own_connection = conn is None
+    conn = db.connect() if own_connection else conn
+    try:
+        with nullcontext() if conn.in_transaction() else conn.begin():
+            exists = conn.execute(text(
+                "select id from landing.import_run where source_system in ('PEAK','PEAK_RECEIPT') "
+                "and status='OK' and meta ? 'applied' order by id desc limit 1")).scalar()
+            if exists:
+                return reconcile_applied(conn, exists, reason=reason)
+    finally:
+        if own_connection:
+            conn.close()
 
 
 def version():

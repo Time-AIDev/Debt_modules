@@ -154,7 +154,7 @@ def grid_cells(months, kind):
     return [i + 1 for i, m in enumerate(months) if m and m.get("kind") == kind]
 
 
-def _lease_contract(uid, customer_uid, row, as_of):
+def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     """A leasing row -> ContractFixture, or None with a reason."""
     pmt = _d(row.get("pmt_inc_vat"))
     months = row.get("months") or []
@@ -164,8 +164,8 @@ def _lease_contract(uid, customer_uid, row, as_of):
         if pmt is not None:
             pmt_note = "most frequent paid month cell %s (%d of %d paid cells); sheet PMT column empty" % (pmt, hits, paid_n)
     term = row.get("term_original") or (len(months) if len(months) > 30 else None) or DEFAULT_TERM
-    first_due = _date(row.get("first_payment_date"))
-    first_due_note = "sheet First Payment Date"
+    first_due = _date(confirmation["first_due"]) if confirmation else _date(row.get("first_payment_date"))
+    first_due_note = "verified contract schedule" if confirmation else "sheet First Payment Date"
     if first_due is None:
         signed = _date(row.get("contract_signed"))
         if signed:
@@ -228,6 +228,9 @@ def _lease_contract(uid, customer_uid, row, as_of):
     }
     # The sheet row travels with the contract so a customer with two contracts keeps
     # two grids, two PMTs and two notes (N2-03).
+    fixture.requires_schedule_confirmation = True
+    fixture.schedule_confirmation = confirmation
+    fixture.calendar_months = row.get("calendar_months") or []
     fixture.pmt = pmt
     fixture.sheet_row = row
     fixture.month_cells = months
@@ -329,6 +332,8 @@ def build(as_of: date = None):
     if data is None:
         return [], {"imported": 0, "reason": "fixtures_sheet.json absent"}
     as_of = as_of or _sheet_day(data.get("source") or {}) or settings.business_date
+    from . import schedule_confirmation
+    confirmations = schedule_confirmation.active()
     customers, skipped = [], []
     for i, rec in enumerate(data["customers"]):
         product = rec["product"]
@@ -351,7 +356,13 @@ def build(as_of: date = None):
         if product == "LEASE":
             row = lease_row or _tracking_as_lease(rec.get("tracking"))
             if row:
-                k, reason = _lease_contract("K-%s-L" % no, cust_uid, row, as_of)
+                contract_uid = "K-%s-L" % no
+                confirmation = confirmations.get(contract_uid)
+                if confirmation and confirmation["customer_uid"] != cust_uid:
+                    confirmation = None
+                k, reason = _lease_contract(contract_uid, cust_uid, row, as_of, confirmation)
+                if k and not k.calendar_months:
+                    k.calendar_months = (rec.get("tracking") or {}).get("months") or []
                 if k:
                     contracts.append(k)
             else:
@@ -404,6 +415,9 @@ def build(as_of: date = None):
         # The Odoo lead this row is, when the crm.lead merge recorded one. The sheet's
         # own crm_id is the Freshworks deal id and must never become a crm.lead link.
         fixture.odoo_lead_id = rec.get("odoo_lead_id")
+        fixture.odoo_lead_name = rec.get("odoo_lead_name") or (
+            (rec.get("order") or {}).get("odoo_lead_name")
+            if (rec.get("order") or {}).get("data_source") == "ODOO" else None)
         # Q7 / TASK-209: provenance for any field a person decided (empty otherwise).
         fixture.field_sources = rec.get("field_sources") or {}
         fixture.field_notes_th = rec.get("field_notes_th") or {}

@@ -177,8 +177,8 @@ def _process_import(raw, filename, officer, role, install, confirm_retire, run_u
             runs.progress(run_uid, phase="parsing", processed=0, phase_total=None)
         run, payload = imports_domain.parse_upload(
             raw, filename, officer, role, True,
-            on_progress=(lambda processed, total: runs.progress(
-                run_uid, phase="parsing", processed=processed, phase_total=total)) if run_uid else None,
+            on_progress=(lambda processed, phase_total: runs.progress(
+                run_uid, phase="parsing", processed=processed, phase_total=phase_total)) if run_uid else None,
             checkpoint=(lambda: runs.checkpoint(run_uid)) if run_uid else None)
         parsed_run_uid = (run.get("run") or {}).get("uid")
         if db.configured():

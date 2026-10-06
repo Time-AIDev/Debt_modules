@@ -20,6 +20,24 @@ const DATA = {
 
 beforeEach(() => vi.clearAllMocks())
 
+it('opens the existing form with the invoice contract and cycle selected', async () => {
+  const { InvoiceDeferral } = await import('./ServiceDeferrals.jsx')
+  const user = userEvent.setup()
+  renderScreen(<InvoiceDeferral data={DATA} invoice={{ uid: 'iv1', contract_uid: 'k1',
+    contract_cycle: 1, deferral_eligible: true }} />)
+  await user.click(screen.getByRole('button', { name: 'เลื่อนงวดเพราะปัญหาบริการ' }))
+  expect(screen.getByLabelText('สัญญา')).toHaveValue('k1')
+  expect(screen.getByRole('checkbox', { name: /งวด 1/ })).toBeChecked()
+})
+
+it('shows the server refusal reason on a disabled row action', async () => {
+  const { InvoiceDeferral } = await import('./ServiceDeferrals.jsx')
+  renderScreen(<InvoiceDeferral data={DATA} invoice={{ deferral_eligible: false,
+    deferral_reason: 'รอยืนยันรับเงิน' }} />)
+  expect(screen.getByRole('button', { name: 'เลื่อนงวดเพราะปัญหาบริการ' })).toBeDisabled()
+  expect(screen.getByText('รอยืนยันรับเงิน')).toBeInTheDocument()
+})
+
 it('offers preview before confirm, with service evidence and no required receipt', async () => {
   const { ServiceDeferrals } = await import('./ServiceDeferrals.jsx')
   const user = userEvent.setup()

@@ -1,4 +1,4 @@
-"""Transactional intent; Cloud Tasks delivery happens after the request commits."""
+"""Transactional intent; PostgreSQL/Cloud Tasks delivery follows request commit."""
 import base64
 import hashlib
 import json
@@ -10,11 +10,25 @@ SAFE_HEADERS = {"content-type", "x-volt-filename", "x-volt-role", "x-volt-office
 
 
 def enqueue(uid, path, raw, query, headers, actor):
-    object_name = task_objects.put("jobs/%s/body" % uid, raw)
-    payload = {"path": path, "query": query.decode("ascii"), "object_name": object_name,
-               "sha256": hashlib.sha256(raw).hexdigest(), "actor": actor,
-               "headers": {k.lower(): v for k, v in headers.items() if k.lower() in SAFE_HEADERS}}
     with db.connect() as conn, conn.begin():
+        conn.execute(text("select pg_advisory_xact_lock(hashtext('jobs:quota'))"))
+        quota = conn.execute(text(
+            "select coalesce(sum(coalesce((payload->>'size')::bigint,104857600)),0) as total, "
+            "coalesce(sum(coalesce((payload->>'size')::bigint,104857600)) "
+            "filter(where payload->'actor'->>'sub'=:s),0) as owned "
+            "from app.task_outbox where finished_at is null "
+            "or dead_lettered_at > now()-:days * interval '1 day'"
+        ), {"s": actor.get("sub"), "days": max(1, int(env("DEAD_LETTER_RETENTION_DAYS", "7")))}).one()
+        if (quota.owned + len(raw) > int(env("JOB_OWNER_MAX_BYTES", str(200 * 1024 * 1024))) or
+                quota.total + len(raw) > int(env("JOB_TOTAL_MAX_BYTES", str(1024 * 1024 * 1024)))):
+            from .errors import Problem
+            raise Problem("job_storage_quota", 429, "Job queue storage is full",
+                          "Wait for queued jobs to finish before submitting more files.",
+                          "พื้นที่คิวงานเต็ม กรุณารอให้งานเดิมเสร็จก่อนส่งไฟล์เพิ่มเติม", "DEBT-JOB-429", retryable=True)
+        object_name = task_objects.put("jobs/%s/body" % uid, raw)
+        payload = {"path": path, "query": query.decode("ascii"), "object_name": object_name, "size": len(raw),
+                   "sha256": hashlib.sha256(raw).hexdigest(), "actor": actor,
+                   "headers": {k.lower(): v for k, v in headers.items() if k.lower() in SAFE_HEADERS}}
         conn.execute(text("insert into app.task_outbox(uid,payload) values(:u,cast(:p as jsonb))"),
                      {"u": uid, "p": json.dumps(payload)})
 

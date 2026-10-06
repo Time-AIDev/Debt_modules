@@ -72,7 +72,9 @@ def test_j3_02_03_the_sheet_cells_are_the_one_month_axis(client):
         paid_cells = {c["index"] for c in body["month_grid"] if c.get("kind") == "PAID"}
         assert not paid_cells & {i["month_index"] for i in body["invoices"]}
         # the not-yet-due instalment sits on the LINK_SENT cell and carries the link
-        nxt = [i for i in body["invoices"] if i["month_index"] == link[0]]
+        assert not any(i["month_index"] == link[0] for i in body["invoices"])
+        nxt = [i for i in journey.for_current().invoices.values()
+               if i["contract_uid"] == contract["uid"] and i["month_index"] == link[0]]
         assert len(nxt) == 1 and nxt[0]["due_date"] > str(BD) and nxt[0]["link_sent"] is True
         # "link sent" is a fact beside the state, never the state
         for inv in body["invoices"]:
@@ -130,7 +132,10 @@ def test_j3_05_a_cash_book_is_ranked_and_every_routine_row_says_why(client):
 
 # --- 4. J3-06 — a cut-off request is decided, not answered ---------------------------
 
-def _request_cutoff(client, state):
+def _request_cutoff(client, state, evidence_for_power):
+    for case in state.cases.values():
+        if case["product"] == "LEASE" and case["power_state"] == "ON" and not case["review_uid"]:
+            evidence_for_power(case["customer_uid"])
     def _ok(case):
         customer = journey.customer_by_uid(case["customer_uid"])
         if customer is None:
@@ -146,8 +151,8 @@ def _request_cutoff(client, state):
     return uid, state.cases[uid]
 
 
-def test_j3_06_a_cutoff_review_takes_only_approve_or_reject_from_the_approver(client, state):
-    uid, case = _request_cutoff(client, state)
+def test_j3_06_a_cutoff_review_takes_only_approve_or_reject_from_the_approver(client, state, evidence_for_power):
+    uid, case = _request_cutoff(client, state, evidence_for_power)
     review_uid = case["review_uid"]
     # the card offers only the two decisions, and only to the approver named by OQ-44
     as_manager = next(r for r in client.get("/v1/reviews", headers=MANAGER).json()["reviews"] if r["uid"] == review_uid)
@@ -177,13 +182,13 @@ def test_j3_06_a_cutoff_review_takes_only_approve_or_reject_from_the_approver(cl
 
 # --- 5. J3-07 — the cut-off can be executed and restored after approval --------------
 
-def test_j3_07_every_power_state_has_a_thai_label_and_the_lifecycle_exists(client, state):
+def test_j3_07_every_power_state_has_a_thai_label_and_the_lifecycle_exists(client, state, evidence_for_power):
     # every value in POWER_STATES has a Thai label, served by the API
     served = {row["code"]: row["label_th"] for row in client.get("/v1/config", headers=MANAGER).json()["power_states"]}
     assert set(served) == set(cases_domain.POWER_STATES)
     assert all(_thai(v) for v in served.values())
 
-    uid, case = _request_cutoff(client, state)
+    uid, case = _request_cutoff(client, state, evidence_for_power)
     detail = _detail(client, uid)["case"]
     assert detail["power_next_act"]["act"] == "approve" and detail["power_next_act"]["roles"] == ["OWNER"]
     client.post("/v1/reviews/%s:answer" % case["review_uid"], json={"decision": "POWER_CUTOFF_APPROVE"}, headers=OWNER)
@@ -214,7 +219,8 @@ def test_j3_08_a_confirmed_receipt_does_not_make_the_case_read_paid(client, stat
     assert r.status_code in (200, 201)
     case = state.cases[SARAYUT]
     after = _detail(client, SARAYUT)
-    assert Decimal(after["work_item"]["aggregate_overdue"]) > 0
+    assert Decimal(after["work_item"]["aggregate_overdue"]) == 0
+    assert after["work_item"]["money_position"]["review_required"] is True
     assert case["dc_status"] != "PAID"
     assert case["allocation_hold"] is True
     assert case["allocation_hold_note_th"] == "ยอดค้างยังไม่เปลี่ยน — รอบัญชีตัดสินลำดับการจัดสรร"
@@ -340,7 +346,7 @@ def test_j3_16_a_seeded_next_action_says_why_it_does_not_raise_the_tier(client):
 def test_j3_17_the_days_gap_names_the_snapshot_date_and_the_grace(client):
     block = _detail(client, JIDAPA)["sheet_reconciliation"]
     assert block["sheet_snapshot_date"] == "2026-09-02" and block["business_date"] == str(BD)
-    assert block["sheet_days_late"] == 54 and block["app_oldest_dpd"] == 13
+    assert block["sheet_days_late"] == 54 and block["app_oldest_dpd"] is None
     assert block["late_payment_grace_days"] == settings.late_payment_grace_days == 0
     assert "02/09/2026" in block["note_th"] and "23/10/2026" in block["note_th"]
     assert "ระยะผ่อนผัน 0 วัน" in block["note_th"] and "OD-31" not in block["note_th"]

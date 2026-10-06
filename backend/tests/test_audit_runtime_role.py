@@ -21,6 +21,7 @@ def test_the_runtime_grants_are_enough_to_append_to_the_chain(pg_url, pg_conn, m
     # Kept afterwards: dropping it needs DROP OWNED in every database it was granted in.
     pg_conn.execute(text('DO $$ BEGIN CREATE ROLE "%s" LOGIN; EXCEPTION WHEN '
                          'duplicate_object OR unique_violation THEN NULL; END $$' % ROLE))
+    pg_conn.execute(text('ALTER ROLE "volt_audit_runtime_test" LOGIN PASSWORD \'audit-runtime-test-only\''))
     migrate.grant_runtime(pg_conn, ROLE)
     held = [p for p in ("SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE")
             if pg_conn.execute(text("select has_table_privilege(:r, 'audit.entry', :p)"),
@@ -28,7 +29,7 @@ def test_the_runtime_grants_are_enough_to_append_to_the_chain(pg_url, pg_conn, m
     assert held == ["SELECT", "INSERT"], "the role must be as narrow as staging's, and own nothing"
     pg_conn.commit()
 
-    monkeypatch.setenv("DATABASE_URL", make_url(pg_url).set(username=ROLE, password=None)
+    monkeypatch.setenv("DATABASE_URL", make_url(pg_url).set(username=ROLE, password="audit-runtime-test-only")
                        .render_as_string(hide_password=False))
     db.reset()
     try:

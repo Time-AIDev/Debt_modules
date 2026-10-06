@@ -43,6 +43,12 @@
 .today__noteLink { white-space: nowrap; color: var(--volt-ink-2); text-decoration: underline; text-decoration-color: var(--volt-line-btn); text-underline-offset: 2px; }
 .today__noteLink:hover { color: var(--volt-ink); text-decoration-color: currentColor; }
 .today__selection { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; padding: 8px 12px; border-bottom: 1px solid var(--volt-line); background: var(--volt-blue-tint); font-size: 13px; }
+.today__filters { display: flex; gap: 8px; min-width: 0; width: 100%; }
+.today__filters .field { min-width: 0; height: 32px; padding: 0 8px; font-size: 13px; }
+.today__filters .field:first-child { flex: 2 1 0; }
+.today__filters .field:last-child { flex: 1 1 0; }
+.today__boardFilters { max-width: 400px; margin-bottom: 10px; }
+@media (max-width: 380px) { .today__filters { flex-wrap: wrap; } .today__filters .field { flex: 1 1 100%; } }
 .today__selection strong { flex: 1 1 auto; }
 
 .today--board .board { height: calc(100vh - 190px - var(--today-stale, 0px)); min-height: 420px; }

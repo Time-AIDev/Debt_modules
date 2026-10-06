@@ -2,6 +2,7 @@
 from dataclasses import replace
 from datetime import date
 from decimal import Decimal
+import hashlib
 
 import pytest
 from fastapi.testclient import TestClient
@@ -262,7 +263,7 @@ def test_note_with_optional_case_attachment_is_accepted(scenario):
     from app.attachments import store as attachments
     client, contract, state, body = scenario
     attachment = attachments.put({"filename": "service.pdf", "content_type": "application/pdf",
-                                  "sha256": "test", "kind": "PDF", "size": 12}, b"%PDF service",
+                                  "sha256": hashlib.sha256(b"%PDF service").hexdigest(), "kind": "PDF", "size": 12}, b"%PDF service",
                                  "debt-user", {"state": "CLEAN", "by": "test"})
     attachments.attach(attachment["uid"], "case:" + contract.customer_uid)
     response = preview(client, contract, {**body, "evidence_uid": attachment["uid"]})

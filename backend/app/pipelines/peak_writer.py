@@ -617,7 +617,8 @@ def _overlay_receipts(conn, out, invoice_as_of):
         "from (select distinct on (pr.doc_no) pr.* from landing.peak_receipt pr "
         "join landing.import_run ir on ir.id=pr.import_run_id "
         "where ir.status='OK' and ir.source_system=:source and ir.meta ? 'applied' "
-        "order by pr.doc_no, cast(ir.meta->'applied'->>'at' as timestamptz) desc nulls last, ir.id desc) p "
+        "order by pr.doc_no, coalesce(nullif(ir.meta->>'exported_at',''), "
+        "nullif(ir.meta->>'report_as_of',''),'') desc, ir.id desc) p "
         "left join records.identity_link l "
         "on l.retired_at is null and l.source = 'PEAK_LINK' and l.contact_code = %s "
         "where p.status = 'PAID' order by p.paid_on, p.doc_no" % (_NORM % "p.contact_code")),
@@ -637,6 +638,15 @@ def _overlay_receipts(conn, out, invoice_as_of):
             "select receipt_doc_no, invoice_doc_no, amount from records.payment_allocation "
             "where active and invoice_doc_no is not null order by receipt_doc_no, allocation_order"
         )).mappings().all()
+    balance_version = None
+    if conn.execute(text("select to_regclass('records.payment_reconciliation_version')")).scalar():
+        balance_version = conn.execute(text(
+            "select invoice_run_id,outputs->'invoices' as balances, "
+            "jsonb_path_query_array(inputs, '$.receipts[*] ? (@.status == \"CANCELLED\").doc_no') as cancelled "
+            "from records.payment_reconciliation_version "
+            "order by sequence desc limit 1")).mappings().first()
+    balances = (balance_version["balances"] or {}) if balance_version else {}
+    cancelled = set(balance_version["cancelled"] or []) if balance_version else set()
     if ledger:
         receipt_by_doc = {row["doc_no"]: row for row in rows}
         allocated_rows = []
@@ -653,18 +663,23 @@ def _overlay_receipts(conn, out, invoice_as_of):
         if ref and r["paid_on"]:
             by_invoice.setdefault(ref, []).append(r)
     used = set()
-    # This read runs during book startup, before app-level fixtures are available.
-    # Identify adjusted customers by their durable invoice references instead.
-    adjusted_docs = set()
-    adjusted_customers = set()
-    if conn.execute(text("select to_regclass('records.service_deferral')")).scalar():
-        for payload in conn.execute(text("select payload from records.service_deferral")).scalars():
-            adjusted_docs.update(m.get("invoice_doc_no") for m in payload.get("moves", []))
-            if payload.get("customer_no"):
-                adjusted_customers.add(str(payload["customer_no"]))
     for customer_no, block in out.items():
-        adjusted = str(customer_no) in adjusted_customers or any(i["doc_no"] in adjusted_docs for i in block["invoices"])
         for inv in block["invoices"]:
+            balance = balances.get(inv["doc_no"])
+            if balance and (block.get("run_id") != balance_version["invoice_run_id"]
+                            or str(balance.get("customer_no")) != str(customer_no)):
+                balance = None
+            if balance:
+                # The immutable reconciliation was written atomically with the
+                # apply/link/deferral command. Use its snapshot-safe balance even
+                # when cancellation leaves no active allocation/receipt to overlay.
+                left = Decimal(balance["confirmed_outstanding"])
+                inv.update(amount_awaiting=balance["confirmed_outstanding"],
+                           paid_amount=balance["confirmed_paid"],
+                           status="PAID" if left == 0 else (
+                               "AWAITING" if inv["status"] == "PAID" else inv["status"]))
+                if inv.get("receipt_no") in cancelled:
+                    inv.update(payment=None, payments=[], receipt_no=None, paid_on=None)
             paid = by_invoice.get(inv["doc_no"])
             if not paid:
                 continue
@@ -677,11 +692,14 @@ def _overlay_receipts(conn, out, invoice_as_of):
             total = sum((Decimal(p["amount"]) for p in payments if p["amount"]), Decimal(0))
             asked = Decimal(inv.get("amount_due") or inv.get("amount_total") or "0")
             left = min(max(Decimal(0), asked - total), Decimal(inv["amount_awaiting"]))
-            if adjusted and invoice_as_of:
+            if invoice_as_of:
                 newer = sum((Decimal(str(r["paid_amount"] or 0)) for r in paid
                              if str(r["paid_on"])[:10] > str(invoice_as_of)[:10]), Decimal(0))
                 left = min(left, max(Decimal(0), Decimal(inv["amount_awaiting"]) - newer))
                 total = asked - left
+            if balance:
+                left = Decimal(balance["confirmed_outstanding"])
+                total = Decimal(balance["confirmed_paid"])
             inv.update({
                 "status": "PAID" if left == 0 else inv["status"],
                 "paid_on": payments[-1]["on"],

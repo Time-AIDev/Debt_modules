@@ -70,11 +70,11 @@ PTP_HISTORY_NOTE_TH = ("ยังไม่มีนัดที่บันท�
 PRODUCTS = ("LEASE", "CASH")
 PTP_HISTORY_NOTE_EN = ("No promise is recorded as kept yet — the sheet records only a promise's amount and date, "
                        "not its outcome, so a promise past its date shows as broken until it is closed from the case page")
-OFFICER_TOTALS_NOTE_EN = ("Each officer's whole list today, regardless of the other filters — "
+OFFICER_TOTALS_NOTE_EN = ("Each officer's whole list today for the selected EPC/SPV, regardless of the other filters — "
                           "the same number that officer sees on their own Today page")
 COUNTS_NOTE_EN = ("The tier chips add up to the total. A row with an answer waiting that sits in a higher tier "
                   "is counted in that tier and named under the Answers waiting chip")
-OFFICER_TOTALS_NOTE_TH = ("จำนวนรายการในลิสต์วันนี้ของเจ้าหน้าที่แต่ละคน ไม่ขึ้นกับตัวกรองอื่น "
+OFFICER_TOTALS_NOTE_TH = ("จำนวนรายการในลิสต์วันนี้ของเจ้าหน้าที่แต่ละคนตาม EPC/SPV ที่เลือก ไม่ขึ้นกับตัวกรองอื่น "
                           "— ตัวเลขเดียวกับที่เจ้าหน้าที่คนนั้นเห็นเมื่อเปิดหน้าวันนี้ของตัวเอง")
 
 
@@ -101,15 +101,17 @@ def known_officers(cs, acting=None):
     return known
 
 
-def officer_totals(cs, known):
+def officer_totals(cs, known, entity=None):
     """B2: the team-workload numbers, served once instead of the screen calling
     /v1/today once per officer (J4-17 / J5-11). Each officer's whole list today —
-    exactly `meta.total` of /v1/today?officer=<uid> with no other filter, because it
+    exactly `meta.total` of /v1/today?officer=<uid>&entity=<entity> with no other filter, because it
     applies build()'s own two gates (a case on a book customer, not CLOSED or
     TERMINATED). Zero for
     an officer with nothing today, so a lead still sees the empty desk."""
     totals = {uid: 0 for uid in known}
     for customer in journey.book_customers():
+        if entity and (customer.contracts[0].entity if customer.contracts else None) != entity:
+            continue
         case = cs.cases.get(customer.uid)
         if case is None or case["payment_status"] in ("CLOSED", "TERMINATED") or not case["officer_uid"]:
             continue
@@ -117,12 +119,14 @@ def officer_totals(cs, known):
     return totals
 
 
-def unassigned_total(cs):
+def unassigned_total(cs, entity=None):
     """F10 / feedback-r2 TASK-108: how many collectable rows carry no officer at
     all — the same two gates officer_totals applies above, counting the complement.
-    Computed over the whole book, never the filtered desk."""
+    Computed over the selected entity's whole book, never the officer-filtered desk."""
     total = 0
     for customer in journey.book_customers():
+        if entity and (customer.contracts[0].entity if customer.contracts else None) != entity:
+            continue
         case = cs.cases.get(customer.uid)
         if case is None or case["payment_status"] in ("CLOSED", "TERMINATED") or case["officer_uid"]:
             continue
@@ -297,7 +301,8 @@ def tier_for(case, item, missed, business_date, waiting, missed_basis=None, cust
     if ptp and cs.ptps[ptp]["promise_date"] == bd:
         return "PTP_DUE_TODAY", "นัดชำระ %s ถึงกำหนดวันนี้" % ptp, "Promise %s is due today" % ptp
     unhandled = _last_broken_unhandled(cs, case) if (case["broken_ptp_count"] > 0 and not ptp) else None
-    if unhandled and Decimal(item["aggregate_overdue"]) > 0:
+    if unhandled and (Decimal(item["aggregate_overdue"]) > 0 or
+                      (item.get("money_position") or {}).get("review_required")):
         # Round-4 J4-03: one date for one event — the day it BROKE, said as such, beside
         # the day it was promised for.
         broke = (unhandled["uid"], unhandled["closed_on"] or unhandled["promise_date"], unhandled["promise_date"])
@@ -361,7 +366,7 @@ def _last_broken_unhandled(cs, case):
 
 
 def build(officer=None, business_date=None, ladder_indicative=None, only_tier=None,
-          payment_status=None, dc_status=None, product=None, q=None, unassigned=False):
+          payment_status=None, dc_status=None, product=None, entity=None, q=None, unassigned=False):
     """Returns {items, meta}. Items carry the journey work item plus the case.
 
     Round-4 F2-CR-1: ladder_indicative narrows to the rung named — filtered here,
@@ -403,6 +408,8 @@ def build(officer=None, business_date=None, ladder_indicative=None, only_tier=No
     for customer in journey.book_customers():
         case = cs.cases.get(customer.uid)
         if case is None:
+            continue
+        if entity and (customer.contracts[0].entity if customer.contracts else None) != entity:
             continue
         if officer and case["officer_uid"] != officer:
             continue
@@ -521,16 +528,16 @@ def build(officer=None, business_date=None, ladder_indicative=None, only_tier=No
                  # Feedback Round 1, WP7 (B2): the filter bar's served numbers and the
                  # filters that actually ran, echoed the way ladder_indicative is above.
                  "tier_counts": tier_counts,
-                 "officer_totals": officer_totals(cs, known_officers(cs)),
+                 "officer_totals": officer_totals(cs, known_officers(cs), entity),
                  "officer_totals_note_th": OFFICER_TOTALS_NOTE_TH,
                  "officer_totals_note_en": OFFICER_TOTALS_NOTE_EN,
                  # Feedback round 2 (TASK-108): the unassigned count over the whole
                  # book. The worked flags and daily summary are added by GET
                  # /v1/today alone (annotate_worked below): build()'s rows are shared
                  # with the workbook, whose key set is pinned (test_round4.py:782).
-                 "unassigned_total": unassigned_total(cs),
+                 "unassigned_total": unassigned_total(cs, entity),
                  "filters": {"officer": officer, "tier": only_tier, "payment_status": payment_status,
-                             "dc_status": dc_status, "product": product, "q": needle}},
+                             "dc_status": dc_status, "product": product, "entity": entity, "q": needle}},
     }
 
 

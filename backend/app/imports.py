@@ -32,6 +32,7 @@ from xml.etree import ElementTree as ET
 from . import book as book_domain
 from . import clock
 from .config import settings
+from .integrations import env
 from .session import Store
 
 # 2026-09-11: raised 5 MB -> 25 MB on request, for the whole-book exports the team
@@ -43,10 +44,74 @@ from .session import Store
 # reader streams each tab now (_sheet_rows), so memory follows the rows KEPT, not the
 # XML size; the inflate ceiling stays as the zip-bomb guard. A body over Cloud Run's
 # 32 MiB request limit arrives in parts (put_part / take_upload below).
+# 2026-10-06: actual inflation capped at 512 MiB; kept data, shared strings,
+# individual cells and processing time also have independent bounds. Styled
+# blank cells still stream and do not consume the kept-data budget.
 MAX_BYTES = 100 * 1024 * 1024
-MAX_ZIP_INFLATE = 1024 * 1024 * 1024  # a zip must not inflate past this before we trust it
+MAX_ZIP_INFLATE = 512 * 1024 * 1024
 CSV_MAX_BYTES = 25 * 1024 * 1024
 MAX_MB = MAX_BYTES // (1024 * 1024)
+XLSX_MAX_COLUMNS = 16384  # Excel's own column limit, checked before list allocation.
+XLSX_MAX_CELL_CHARS = 32767
+XLSX_MAX_XML_TOKEN_BYTES = 1024 * 1024
+
+
+def _xlsx_refused(detail="The workbook exceeds a safe parsing limit."):
+    raise UploadRefused("/file", detail, "ไฟล์ตารางเกินขอบเขตที่ระบบอ่านได้อย่างปลอดภัย กรุณาลดขนาดไฟล์")
+
+
+class _XlsxBudget:
+    """Whole-workbook bounds; blank formatted cells are processed, never retained."""
+    def __init__(self):
+        self.started = time.monotonic()
+        self.seconds = float(env("XLSX_PARSE_MAX_SECONDS", "120"))
+        self.max_processed = int(env("XLSX_MAX_PROCESSED_CELLS", "10000000"))
+        self.max_kept = int(env("XLSX_MAX_KEPT_CELLS", "1000000"))
+        self.max_text = int(env("XLSX_MAX_KEPT_TEXT_BYTES", str(64 * 1024 * 1024)))
+        self.max_shared = int(env("XLSX_MAX_SHARED_STRINGS", "250000"))
+        self.max_shared_bytes = int(env("XLSX_MAX_SHARED_STRING_BYTES", str(16 * 1024 * 1024)))
+        self.processed = self.kept = self.text_bytes = self.shared_bytes = 0
+
+    def check(self):
+        if time.monotonic() - self.started > self.seconds:
+            _xlsx_refused("The workbook exceeded the parsing time limit.")
+
+    def retain(self, width, cells):
+        self.kept += width
+        self.text_bytes += sum(len(value.encode("utf-8")) for value in cells.values())
+        if self.kept > self.max_kept or self.text_bytes > self.max_text:
+            _xlsx_refused()
+        self.check()
+
+
+class _SafeXmlReader:
+    """Reject huge XML text/attribute tokens before ElementTree builds them."""
+    def __init__(self, source, budget=None):
+        self.source, self.budget = source, budget
+        self.token_bytes, self.tail = 0, b""
+
+    def read(self, size=-1):
+        data = self.source.read(min(size, 64 * 1024) if size >= 0 else 64 * 1024)
+        scan = self.tail + data
+        if b"<!DOCTYPE" in scan or b"<!ENTITY" in scan:
+            _xlsx_refused("Workbook XML declarations are not allowed.")
+        self.tail = scan[-16:]
+        pieces = re.split(br"[<>]", data)
+        for index, piece in enumerate(pieces):
+            self.token_bytes = self.token_bytes + len(piece) if index == 0 else len(piece)
+            if self.token_bytes > XLSX_MAX_XML_TOKEN_BYTES:
+                _xlsx_refused("A workbook XML token exceeds the safe limit.")
+        if self.budget:
+            self.budget.check()
+        return data
+
+
+def _small_xml(zf, part, cap=4 * 1024 * 1024):
+    with zf.open(part) as fh:
+        raw = fh.read(cap + 1)
+    if len(raw) > cap or b"<!DOCTYPE" in raw or b"<!ENTITY" in raw:
+        _xlsx_refused("Workbook metadata exceeds a safe parsing limit.")
+    return ET.fromstring(raw)
 
 _XLSX_NS = {
     "m": "http://schemas.openxmlformats.org/spreadsheetml/2006/main",
@@ -281,28 +346,40 @@ def _tag_prefix(tag):
 
 
 def _col_index(ref):
-    """"C7" -> 2 (0-based). Column letters only, 1-26 or multi-letter (AA, AB, ...)."""
+    """"C7" -> 2 (0-based), after checking Excel's complete cell-reference limits."""
+    match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]{0,6})", ref)
+    if not match or int(match[2]) > 1048576:
+        _xlsx_refused("An XLSX cell reference is invalid.")
     n = 0
-    for ch in ref:
-        if ch < "A" or ch > "Z":
-            break
+    for ch in match[1]:
         n = n * 26 + (ord(ch) - ord("A") + 1)
+    if n > XLSX_MAX_COLUMNS:
+        _xlsx_refused("An XLSX column exceeds Excel's column limit.")
     return n - 1
 
 
-def _shared_strings(zf):
+def _shared_strings(zf, budget=None):
     if "xl/sharedStrings.xml" not in zf.namelist():
         return []
     out = []
     with zf.open("xl/sharedStrings.xml") as fh:   # streamed, like _sheet_rows
-        prefix = None
-        for event, si in ET.iterparse(fh, events=("start", "end")):
+        prefix, root = None, None
+        for event, si in ET.iterparse(_SafeXmlReader(fh, budget), events=("start", "end")):
             if prefix is None:
+                root = si
                 prefix = _tag_prefix(si.tag)
                 si_tag, text_tag = prefix + "si", prefix + "t"
             if event == "end" and si.tag == si_tag:
-                out.append("".join(t.text or "" for t in si.iter() if t.tag == text_tag))
+                value = "".join(t.text or "" for t in si.iter() if t.tag == text_tag)
+                if len(value) > XLSX_MAX_CELL_CHARS:
+                    _xlsx_refused("An XLSX cell exceeds Excel's text limit.")
+                out.append(value)
+                if budget:
+                    budget.shared_bytes += len(value.encode("utf-8"))
+                    if len(out) > budget.max_shared or budget.shared_bytes > budget.max_shared_bytes:
+                        _xlsx_refused("The workbook's shared strings exceed the safe memory limit.")
                 si.clear()
+                root.clear()
     return out
 
 
@@ -314,7 +391,7 @@ def _date_style_indices(zf):
     date token (y/m/d)."""
     if "xl/styles.xml" not in zf.namelist():
         return set()
-    root = ET.fromstring(zf.read("xl/styles.xml"))
+    root = _small_xml(zf, "xl/styles.xml")
     custom_date_ids = set()
     for numfmts in root:
         if _local(numfmts.tag) != "numFmts":
@@ -337,7 +414,7 @@ def _date_style_indices(zf):
 
 
 def _workbook_pr_1904(zf):
-    root = ET.fromstring(zf.read("xl/workbook.xml"))
+    root = _small_xml(zf, "xl/workbook.xml")
     for child in root:
         if _local(child.tag) == "workbookPr":
             return (child.get("date1904") or "").strip() in ("1", "true")
@@ -346,10 +423,10 @@ def _workbook_pr_1904(zf):
 
 def _workbook_sheets(zf):
     """[(name, target_part)], in the workbook's own tab order."""
-    wb_root = ET.fromstring(zf.read("xl/workbook.xml"))
+    wb_root = _small_xml(zf, "xl/workbook.xml")
     rels = {}
     if "xl/_rels/workbook.xml.rels" in zf.namelist():
-        rel_root = ET.fromstring(zf.read("xl/_rels/workbook.xml.rels"))
+        rel_root = _small_xml(zf, "xl/_rels/workbook.xml.rels")
         for rel in rel_root:
             rels[rel.get("Id")] = rel.get("Target")
     out = []
@@ -364,6 +441,8 @@ def _workbook_sheets(zf):
                 target = "worksheets/" + target.lstrip("/")
             part = "xl/" + target if not target.startswith("xl/") else target
             out.append((name, part))
+            if len(out) > 128:
+                _xlsx_refused("The workbook has too many worksheets.")
     return out
 
 
@@ -379,7 +458,7 @@ def _serial_to_iso(serial, epoch_1904):
         return None
 
 
-def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None):
+def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None, budget=None):
     """({column index: text}, width) for one `<row>` element."""
     prefix = _tag_prefix(row_el.tag) if tag_prefix is None else tag_prefix
     cell_tag, value_tag, inline_tag, text_tag = (
@@ -389,8 +468,14 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None):
     for c in row_el:
         if c.tag != cell_tag:
             continue
+        if budget:
+            budget.processed += 1
+            if budget.processed > budget.max_processed:
+                _xlsx_refused("The workbook has too many cells to process safely.")
         ref = c.get("r") or ""
         idx = _col_index(ref) if ref else width
+        if idx >= XLSX_MAX_COLUMNS:
+            _xlsx_refused("An XLSX row exceeds Excel's column limit.")
         width = max(width, idx + 1)
         ctype = c.get("t")
         style = int(c.get("s") or 0)
@@ -398,7 +483,9 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None):
         is_el = next((e for e in c if e.tag == inline_tag), None)
         if ctype == "s":
             i = int(v_el.text) if v_el is not None and v_el.text else 0
-            text = shared[i] if i < len(shared) else ""
+            if i < 0 or i >= len(shared):
+                _xlsx_refused("An XLSX shared-string reference is invalid.")
+            text = shared[i]
         elif ctype == "inlineStr":
             text = "".join(t.text or "" for t in (is_el.iter() if is_el is not None else [])
                            if t.tag == text_tag)
@@ -423,11 +510,14 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None):
             text = _serial_to_iso(v_el.text, epoch_1904) or (v_el.text or "")
         else:
             text = v_el.text or ""
-        cells[idx] = "" if text is None else str(text)
+        value = "" if text is None else str(text)
+        if len(value) > XLSX_MAX_CELL_CHARS:
+            _xlsx_refused("An XLSX cell exceeds Excel's text limit.")
+        cells[idx] = value
     return cells, width
 
 
-def _sheet_rows(zf, part, shared, date_styles, epoch_1904):
+def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None):
     """(rows, the 1-based spreadsheet row number of each), cells already cleaned.
 
     Streamed (2026-09-25): ET.fromstring built the whole tab as a tree first, and
@@ -440,7 +530,7 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904):
     sheet_data = None
     with zf.open(part) as fh:
         prefix = None
-        for event, el in ET.iterparse(fh, events=("start", "end")):
+        for event, el in ET.iterparse(_SafeXmlReader(fh, budget), events=("start", "end")):
             tag = el.tag
             if prefix is None:
                 prefix = _tag_prefix(tag)
@@ -452,7 +542,7 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904):
                 continue
             if tag != row_tag or sheet_data is None:
                 continue
-            cells, width = _row_cells(el, shared, date_styles, epoch_1904, prefix)
+            cells, width = _row_cells(el, shared, date_styles, epoch_1904, prefix, budget)
             r = el.get("r") or ""
             el.clear()
             sheet_data.clear()   # drops the rows already read, so the tree never grows
@@ -461,8 +551,10 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904):
             # named the wrong spreadsheet row. Nothing is padded, so one stray value at
             # row 1,048,576 costs one row. No `r` falls back to sequence; a row with
             # nothing in it is skipped.
-            if r and not any(cells.values()):
+            if not any(cells.values()):
                 continue
+            if budget:
+                budget.retain(width, cells)
             numbers.append(int(r) if r.isdigit() else (numbers[-1] + 1 if numbers else 1))
             rows.append([_clean_cell(cells.get(i, "")) for i in range(width)])
     return rows, numbers
@@ -472,16 +564,41 @@ def read_xlsx(raw: bytes):
     """Returns [{"name": tab name, "rows": [[cell,...],...]}], one per tab, in
     workbook order. Raises UploadRefused for every case §4.2 names as a refusal
     rather than a guess."""
+    if len(raw) > MAX_BYTES:
+        _xlsx_refused()
     try:
         zf = zipfile.ZipFile(io.BytesIO(raw))
     except zipfile.BadZipFile:
         raise UploadRefused("/file", "Not a readable .xlsx (zip) file.",
                             "รองรับเฉพาะไฟล์ .csv และ .xlsx")
-    inflated = sum(i.file_size for i in zf.infolist())
+    with zf:
+        try:
+            return _read_xlsx_archive(zf)
+        except (ET.ParseError, zipfile.BadZipFile, ValueError, EOFError, RuntimeError) as exc:
+            raise UploadRefused("/file", "The XLSX workbook is malformed and cannot be read.",
+                                "ไฟล์ XLSX เสียหายหรือรูปแบบไม่ถูกต้อง กรุณาบันทึกใหม่แล้วลองอีกครั้ง") from exc
+
+
+def _read_xlsx_archive(zf):
+    budget = _XlsxBudget()
+    infos = zf.infolist()
+    if len(infos) > 2048 or len({info.filename for info in infos}) != len(infos):
+        _xlsx_refused("The workbook ZIP has too many or duplicate entries.")
+    inflated = sum(i.file_size for i in infos)
     if inflated > MAX_ZIP_INFLATE:
         raise UploadRefused("/file", "The .xlsx inflates past the size this reader will extract.",
                             "ไฟล์ .xlsx นี้ขยายตัวใหญ่เกินกว่าที่ระบบอ่านได้",
                             {"inflated_bytes": inflated, "cap_bytes": MAX_ZIP_INFLATE})
+    # Validate actual bytes, not only untrusted ZIP metadata. Discard each chunk;
+    # parsing afterwards still streams worksheets rather than keeping XML trees.
+    actual = 0
+    for info in infos:
+        with zf.open(info) as source:
+            while chunk := source.read(64 * 1024):
+                actual += len(chunk)
+                if actual > MAX_ZIP_INFLATE:
+                    _xlsx_refused()
+                budget.check()
     if "xl/workbook.xml" not in zf.namelist():
         raise UploadRefused("/file", "A zip file, but not a recognisable .xlsx workbook.",
                             "รองรับเฉพาะไฟล์ .csv และ .xlsx")
@@ -491,11 +608,11 @@ def read_xlsx(raw: bytes):
         # the file four years and a day wrong — a whole-file refusal, not a guess.
         raise UploadRefused("/file", "This workbook uses the 1904 date system, which this reader does not support.",
                             "วันที่ในไฟล์นี้ใช้ฐานปี 1904 ระบบยังไม่รองรับ")
-    shared = _shared_strings(zf)
+    shared = _shared_strings(zf, budget)
     date_styles = _date_style_indices(zf)
     sheets = []
     for name, part in _workbook_sheets(zf):
-        rows, numbers = _sheet_rows(zf, part, shared, date_styles, epoch_1904)
+        rows, numbers = _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget)
         sheets.append({"name": name, "rows": rows, "row_numbers": numbers})
     return sheets
 
@@ -568,6 +685,13 @@ def _respecify_refs(records, hi, sheet_name, nums):
         bi_ri = rec.get("source_ref")
         if isinstance(bi_ri, (list, tuple)) and len(bi_ri) == 2:
             rec["source_ref"] = {"sheet": sheet_name, "row": nums[hi + 1 + bi_ri[1]]}
+            for cell in rec.get("calendar_months") or rec.get("months") or []:
+                if cell and "source_column" in cell:
+                    column, letters = cell["source_column"] + 1, ""
+                    while column:
+                        column, rem = divmod(column - 1, 26)
+                        letters = chr(65 + rem) + letters
+                    cell["source_ref"] = {**rec["source_ref"], "column": letters}
 
 
 def _classify_sheet(header, rows, sheet_name, warnings, nums):
@@ -744,7 +868,9 @@ def parse_upload(raw: bytes, filename, x_volt_officer, x_volt_role, with_payload
     UploadRefused for a whole-file failure — no run is created for those, so an
     empty run never pretends to be an import (§4.1's rule). `with_payload` also
     returns the book payload the importer's own `assemble_payload` built from the
-    file — what `install` lands."""
+    file — what `install` lands. When supplied, `on_progress` is called after each
+    classified sheet with keyword arguments `processed` and `phase_total` (sheet
+    counts, including unrecognised tabs)."""
     kind = sniff_kind(raw)
     if kind == "OLE":
         raise UploadRefused("/file", "Legacy .xls (BIFF) or a password-protected .xlsx — neither is readable here.",
@@ -756,7 +882,21 @@ def parse_upload(raw: bytes, filename, x_volt_officer, x_volt_role, with_payload
         sheets_raw = read_xlsx(raw)
     else:
         encoding, text = decode_csv(raw)
-        reader_rows = list(csv.reader(io.StringIO(text)))
+        from .csv_safety import formula
+        reader_rows = []
+        total_cells = 0
+        try:
+            for number, row in enumerate(csv.reader(io.StringIO(text)), 1):
+                total_cells += len(row)
+                if len(row) > XLSX_MAX_COLUMNS or total_cells > 1000000 or any(len(value) > XLSX_MAX_CELL_CHARS for value in row):
+                    _xlsx_refused()
+                if any(formula(value) for value in row):
+                    raise UploadRefused("/file", "CSV row %d contains spreadsheet formula text." % number,
+                                        "ไฟล์ CSV มีข้อความที่โปรแกรมตารางจะตีความเป็นสูตร กรุณาใช้ค่าข้อมูลแทน")
+                reader_rows.append(row)
+        except csv.Error as exc:
+            raise UploadRefused("/file", "The CSV is malformed or contains an oversized field.",
+                                "ไฟล์ CSV มีรูปแบบไม่ถูกต้องหรือมีช่องข้อมูลใหญ่เกินขอบเขต") from exc
         sheets_raw = [{"name": None, "rows": _clean_rows(reader_rows)}]
 
     sheets_out = []

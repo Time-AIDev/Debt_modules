@@ -20,6 +20,7 @@ def _hash(token):
 
 
 def issue(payload):
+    payload = with_expiry(payload)
     token = secrets.token_urlsafe(32)
     try:
         if not db.configured():
@@ -34,6 +35,16 @@ def issue(payload):
     return token
 
 
+def with_expiry(payload):
+    """New credentials opt into TTL; existing credentials are never silently changed."""
+    from . import auth
+    payload = dict(payload)
+    ttl = auth.current_config().tab_absolute_seconds
+    if ttl:
+        payload["expires_at"] = payload["iat"] + ttl
+    return payload
+
+
 def read(token):
     if not isinstance(token, str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", token):
         return None
@@ -44,7 +55,13 @@ def read(token):
             row = conn.execute(text(
                 "select payload from app.auth_session where token_hash=:h and revoked_at is null"),
                 {"h": _hash(token)}).scalar()
-            return dict(row, session_policy="tab") if row else None
+            if row:
+                from . import auth
+                expires = row.get("expires_at")
+                if expires is not None and auth._now() >= expires:
+                    return None
+                return dict(row, session_policy="tab")
+            return None
     except Exception:
         raise unavailable() from None
 

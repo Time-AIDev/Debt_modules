@@ -1,0 +1,28 @@
+<h1>Volt Debt — Odoo Integration v1.2</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>Odoo Integration v1.2 — what the realignment reads from Odoo beyond v1.1's orders and customers: installation dates, helpdesk tickets and the Order-Done gap. Atop v1.1 (moved to 13 History); v1.0's target-state material remains the MVP plan.</td></tr>
+<tr><td>Version</td><td>1.2. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Implementation</td><td>backend/app/integrations/odoo.py · routers/integrations.py · app/invoice_pipeline.py · app/migration.py</td></tr>
+</table>
+
+<h2>0. Plain language first</h2>
+<p><strong>Discovery</strong> — connecting to Odoo and listing which models hold data before assuming a mapping. <strong>Snapshot</strong> — the last good copy of Odoo data kept on disk so the app runs when Odoo is down. <strong>Helpdesk ticket</strong> — the Odoo record CX opens when a customer reports a fault; the team pastes its link into the sheet today.</p>
+
+<h2>1. What stands from v1.1</h2>
+<p>JSON-RPC over HTTPS, read-only always; ODOO_URL, ODOO_DB, ODOO_LOGIN, ODOO_API_KEY in backend/.env, names in code, values nowhere; discovery first; sync on demand plus a guarded startup attempt; the fallback chain ODOO → cached snapshot → sheet fixtures with data_source on every row; masking of phone and email at import; local status overrides with provenance (R14). Nothing here changes those.</p>
+
+<h2>2. Three new reads</h2>
+<table>
+<tr><th>Read</th><th>Expected source (confirmed by discovery)</th><th>Used by</th><th>If absent</th></tr>
+<tr><td>Installation dates: planned, EPC-confirmed, actual start and end</td><td>sale.order custom fields or project.task on the linked project; the sheet's EPC Start Date and EPC End Date came from here</td><td>Invoice pipeline look-ahead (REQ-INV-001), gate 2 (REQ-INV-002), installation-day check (REQ-INV-005), the gap list (REQ-INT-032)</td><td>The pipeline shows the order with "no date from Odoo" and the gate cannot pass; nothing is invented</td></tr>
+<tr><td>Helpdesk tickets: id, stage, team, deadline, link</td><td>helpdesk.ticket filtered by partner</td><td>service_issue.ticket_url and ticket_status (REQ-COL-076); the closure item on the officer's Today list</td><td>The officer pastes the link and marks closure by hand, as today</td></tr>
+<tr><td>Order status and product group</td><td>sale.order state and the product's group</td><td>Entity derivation (REQ-ENT-001); the "installed but not Order-Done" gap list</td><td>Entity refuses to resolve; the document is not created (FigJam S03)</td></tr>
+</table>
+
+<h2>3. The gap list</h2>
+<p>For every order whose actual installation end date is set and whose status is not Order-Done, Debt lists the order, the crew, the dates and the days since installation. The list is shown on Data sources and migration for the operations owner. Debt does not flip the status; it says who should.</p>
+
+<h2>4. Failure modes</h2>
+<p>Unchanged: not configured → 422 integration_not_configured naming the variable names; unreachable → 502 integration_unavailable, retryable; a corrupt snapshot reads as no snapshot. New: a model missing from discovery marks that read as UNAVAILABLE on the status panel, and every screen that depends on it says so in place rather than showing an empty gate as passed.</p>

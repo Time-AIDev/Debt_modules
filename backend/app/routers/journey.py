@@ -143,12 +143,17 @@ def money_position(customer, total=None):
     per_contract = []
     for k in customer.contracts:
         _c, dpd, _band, block, _period = main._contract_view(k)
+        from .. import invoice_reviews
+        imported = invoice_reviews.contract_arrears(customer, k, journey.for_current(), settings.business_date)
+        arrears = block.cumulative_arrears
+        if imported is not None:
+            arrears, dpd = imported
         # cumulative_arrears is the overdue instalment lines only (arrears.py `arr`);
         # the penalty is accrued beside it, never inside it. Round-2 thip T2-01 caught
         # the earlier subtraction, which invented a 371,932 "instalment" figure.
         penalty += block.penalty_accrued_unbilled
-        instalments += block.cumulative_arrears
-        per_contract.append({"uid": k.uid, "product": k.product, "instalments_overdue": str(block.cumulative_arrears),
+        instalments += arrears
+        per_contract.append({"uid": k.uid, "product": k.product, "instalments_overdue": str(arrears),
                              "penalty": str(block.penalty_accrued_unbilled), "oldest_dpd": dpd,
                              "pmt": str(getattr(k, "pmt", None)) if getattr(k, "pmt", None) is not None else None,
                              # Ruling 43 / R4-F01: session-scoped read.
@@ -183,7 +188,19 @@ def money_position(customer, total=None):
         _sum = " + ".join("%s %s" % (c["uid"], c["instalments_overdue"]) for c in per_contract)
         note_th += " · ยอดค้างรวมจาก %d สัญญา (%s)" % (len(per_contract), _sum)
         note_en += " · arrears summed across %d contracts (%s)" % (len(per_contract), _sum)
+    from .. import payment_summary, instalment_evidence
+    review_entries = []
+    for contract in customer.contracts:
+        if instalment_evidence.required(contract):
+            peak_cycles, _, _ = payment_summary.peak_cycles_for(contract.uid, journey.for_current())
+            review_entries.append(payment_summary.for_contract(contract, settings.business_date, Decimal("0"),
+                                                               peak_cycles=peak_cycles))
+    review_amount = sum((Decimal(entry["review_amount"]) for entry in review_entries), Decimal("0"))
+    review_required = any(not entry["schedule_verified"] or entry["review_count"]
+                          or entry["unplaced_peak_details"] for entry in review_entries)
     return {
+        "review_amount": str(review_amount), "review_required": bool(review_required),
+        "collection_basis": "CONFIRMED_EVIDENCE" if review_entries else "LEDGER",
         "amount_to_ask": str(instalments),
         "instalments_overdue": str(instalments),
         "penalty_accrued_unbilled": str(penalty),
@@ -208,6 +225,10 @@ def money_position(customer, total=None):
 def _work_item(state, customer, business_date, case_state=None):
     main = _main()
     total, oldest, band, outstanding = _aggregate(customer)
+    position = payment_position.build(customer, state, business_date)
+    from .. import invoice_reviews
+    contract_outstanding = invoice_reviews.contract_outstanding(customer, state)
+    outstanding = Decimal(position["due_outstanding_amount"])
     # Delta-100 D2a: the row's own 0..100 risk score, from the aggregate just
     # computed (the same snapshot the row serves) and the case's own broken-PTP
     # and last-contact record. One computation, served on the row and its nested
@@ -262,6 +283,7 @@ def _work_item(state, customer, business_date, case_state=None):
         "risk_score": risk_score,
         "aggregate_overdue": str(total),
         "aggregate_outstanding": str(outstanding),
+        "contract_outstanding": str(contract_outstanding),
         "oldest_dpd": oldest,
         "aging_bucket": band.code,
         "band_set_code": band.band_set_code,
@@ -275,7 +297,7 @@ def _work_item(state, customer, business_date, case_state=None):
         # Feedback Round 1 / Task 10, plan 2026-09-11 §1.4: the position rides beside
         # the money. Covers /v1/today items and (via case_detail's shared call) the
         # case's own work_item in one place — do not add it a second time there.
-        "payment_position": payment_position.build(customer, state, business_date),
+        "payment_position": position,
         **_board().serve(customer, oldest, case_state=cs, journey_state=state),
         "recovery_stage": state.recovery_overlay.get(customer.uid, customer.recovery_stage),
         "ladder": journey.ladder_payload_for(state, customer, oldest, missed),

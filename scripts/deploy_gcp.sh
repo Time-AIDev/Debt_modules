@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 #
-# Deploy the Volt Debt prototype to Cloud Run for a UAT feedback round.
+# LEGACY COMPATIBILITY ONLY: deploy the per-browser UAT prototype to Cloud Run.
+# The shared dev/staging/production release path is scripts/release.sh. This
+# legacy profile provisions no durable worker, private upload buckets or scanner
+# and therefore must never be described as the production-equivalent stage.
 #
 # ONE service, not two. Production keeps debt-api and debt-web apart (§5.1, §5.2)
 # and both Dockerfiles still stand for that. But a split web tier has to mint an
@@ -17,6 +20,11 @@
 # `app.session_state` on Cloud SQL — a revision restart does NOT clear it.
 
 set -euo pipefail
+
+if [ "${LEGACY_GCP_UAT:-}" != "1" ]; then
+  printf 'Legacy GCP UAT requires LEGACY_GCP_UAT=1. Use scripts/release.sh staging up for shared-state parity.\n' >&2
+  exit 2
+fi
 
 PROJECT="${PROJECT:?set PROJECT to the GCP project id}"
 REGION="${REGION:-asia-southeast1}"
@@ -60,6 +68,8 @@ say "Verifying before shipping"
 ( cd frontend && npx vitest run )
 
 say "Building the interface into the API image"
+cp infra/production/requirements.lock backend/requirements.lock
+RUNTIME_POLICY="$(python3 scripts/runtime_env.py --environment staging --state fixtures --format gcloud)"
 ( cd frontend && npm ci --no-audit --no-fund >/dev/null 2>&1 || npm install --no-audit --no-fund >/dev/null )
 ( cd frontend && npm run build )
 rm -rf backend/static
@@ -130,18 +140,20 @@ if [ "$LOGIN_ON" -eq 1 ]; then
   # debt-api-sa only, and the first revision already needs AUTH_SESSION_SECRET.
   # --set-secrets replaces every mapping, so the integrations ride along; without them
   # the new revision ran with Odoo and PEAK dark until the Cloud SQL step below.
-  DEPLOY_FLAGS=(--set-env-vars "ENV=uat,AUTH_MODE=on,AUTH_ALLOW_TEST_ACCOUNTS=true,SLOW_REQUEST_MS=1200,SLOW_SQL_MS=100"
+  DEPLOY_FLAGS=(--set-env-vars "$RUNTIME_POLICY,ENV=uat,AUTH_MODE=on,AUTH_SESSION_POLICY=cookie,REQUIRE_DEPENDENCY_READINESS=false,SLOW_REQUEST_MS=1200,SLOW_SQL_MS=100"
                 --set-secrets "$INTEGRATION_SECRETS,$AUTH_SECRETS"
                 --service-account "debt-api-sa@$PROJECT.iam.gserviceaccount.com")
   echo "  on — AUTH_MODE=on from the first revision"
 else
-  printf '\033[33m  SKIPPED — AUTH_SESSION_SECRET has no version; login stays off.\033[0m\n'
+  echo "AUTH_SESSION_SECRET must be provisioned before a staging deploy." >&2
+  exit 1
 fi
 
 say "Deploying to Cloud Run (Cloud Build compiles the image — no local Docker)"
-# Four requests per instance avoids CPU/JSON contention; capacity comes from up to
-# five instances. Session state is restored from app.session_state on first touch.
-# The lockout counter in auth.py is per process too, and one instance keeps it whole.
+# Upload parts and operation-run progress live in process memory. Keep both service
+# and revision maximums at one so upload/poll requests reach the same process.
+# Four concurrent requests avoids CPU/JSON contention. Cloud SQL restores session
+# state, but an instance restart still loses in-flight uploads and operation runs.
 # --no-allow-unauthenticated: the service is closed until IAP is attached below.
 # Nothing is ever public, not even for the seconds between deploy and IAP.
 # 2026-09-21 sizing for the user-testing round: 1Gi because a 25 MB sheet upload can
@@ -159,7 +171,7 @@ gcloud run deploy "$SERVICE" \
   "${ACCESS_FLAGS[@]}" \
   --port 8080 \
   --cpu 1 --memory 2Gi --no-cpu-throttling \
-  --concurrency 4 --min-instances 1 --max-instances 5 \
+  --concurrency 4 --min-instances 1 --max=1 --max-instances 1 \
   "${DEPLOY_FLAGS[@]}" \
   --quiet
 
@@ -246,7 +258,7 @@ say "Attaching Cloud SQL, the secrets, and DATABASE_URL"
 gcloud run services update "$SERVICE" --region "$REGION" \
   --add-cloudsql-instances "$CONN" \
   --service-account "debt-api-sa@$PROJECT.iam.gserviceaccount.com" \
-  --update-env-vars "DATABASE_URL=$DB_URL_API" \
+  --update-env-vars "$RUNTIME_POLICY,ENV=uat,AUTH_MODE=on,AUTH_SESSION_POLICY=cookie,REQUIRE_DEPENDENCY_READINESS=false,DATABASE_URL=$DB_URL_API" \
   --update-secrets "$INTEGRATION_SECRETS" \
   --quiet
 

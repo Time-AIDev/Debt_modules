@@ -52,11 +52,16 @@ class NotConfigured(PeakError):
         self.missing = [k for k in REQUIRED_ENV if not env(k)]
 
 
-def _config(instance="EPC"):
-    if env("ENV") == "prd":
+def _outbound_guard():
+    from ..runtime_policy import shared_state_enabled
+    if env("ENV") == "prd" or (shared_state_enabled() and env("PEAK_OUTBOUND_ENABLED", "false") != "true"):
         from ..errors import Problem
         raise Problem("feature_disabled", 503, "PEAK outbound is disabled",
-                      "Production uses PEAK file imports only.", "ใช้การนำเข้าไฟล์ PEAK ในรอบนี้", "DEBT-PEAK-OFF")
+                      "This shared environment uses PEAK file imports only.", "ใช้การนำเข้าไฟล์ PEAK ในรอบนี้", "DEBT-PEAK-OFF")
+
+
+def _config(instance="EPC"):
+    _outbound_guard()
     missing = [k for k in REQUIRED_ENV if not env(k)]
     if missing:
         raise NotConfigured(instance)
@@ -89,10 +94,6 @@ def probe():
 
 
 def create_draft(document, instance="EPC"):
-    if env("ENV") == "prd":
-        from ..errors import Problem
-        raise Problem("feature_disabled", 503, "PEAK outbound is disabled",
-                      "Production uses PEAK file imports only.", "ใช้การนำเข้าไฟล์ PEAK ในรอบนี้", "DEBT-PEAK-OFF")
     """POST one document into PEAK as a DRAFT. Returns {peak_ref, peak_number}.
 
     `document` is the peak_document payload (intent, idempotency_key, amount,
@@ -100,6 +101,7 @@ def create_draft(document, instance="EPC"):
     header so a retry that reaches PEAK twice still creates once. Raises PeakError
     on any refusal or transport failure — the caller marks the record UNSENT.
     """
+    _outbound_guard()
     config = _config(instance)
     family = DOCUMENT_FAMILY.get(document["intent"])
     if family is None:

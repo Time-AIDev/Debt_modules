@@ -3,7 +3,7 @@
 CLOSED means the customer paid off the balance per the terms and conditions, and
 nothing else. Every other way a contract ends — VOLT terminating on default, or the
 customer asking to terminate — is TERMINATED, and it must carry its cause. These
-tests pin the split: the derivation, the terminate act and its balance gate, the
+tests pin the split: the derivation, the terminate act, the
 cause stamped by the write-off and by a cooperative decommission, the sheet's own
 tracking categories, and the reconciliation row that stays honest while the sheet
 does not carry the value yet.
@@ -65,7 +65,7 @@ def test_a_live_contract_keeps_the_case_out_of_terminated():
         cases._set_contract_fields(customer.contracts[0], status=original)
 
 
-# --- the act and its money gate ---------------------------------------------------------
+# --- the act and its money record -------------------------------------------------------
 
 def test_termination_gate_blocks_a_live_contract_that_owes(monkeypatch):
     from app import main
@@ -79,25 +79,42 @@ def test_termination_gate_blocks_a_live_contract_that_owes(monkeypatch):
     assert checks == []
 
 
-def test_the_terminate_route_requires_manager_a_cause_and_a_closed_balance(monkeypatch):
+@pytest.mark.parametrize("role,actor", [
+    ("OFFICER", "thip"), ("SUPERVISOR", "settasak"),
+    ("MANAGER", "settasak"), ("OWNER", "owner"),
+])
+def test_the_terminate_route_allows_officer_and_above_with_a_balance(role, actor):
     case = _case_of("C-002032")
     uid = case["customer_uid"]
+    contract = _contract_of(uid)
+    from app import main
+    assert main._contract_view(contract)[3].closing_balance > 0
+    before = client.get("/v1/cases/by-customer/%s" % uid).json()
+    response = client.post("/v1/cases/by-customer/%s:terminate" % uid,
+                           headers={"X-Volt-Role": role, "X-Volt-Officer": actor},
+                           json={"cause": "CUSTOMER_REQUEST", "reason": "ลูกค้าแจ้งขอยกเลิกทาง LINE"})
+    assert response.status_code == 200, response.json()
+    entry = _latest_audit()
+    assert entry["act"] == "CONTRACT_TERMINATED"
+    assert (entry["actor_claimed"], entry["actor_role"]) == (actor, role)
+    assert entry["detail"]["contract_terminated"]["cause"] == "CUSTOMER_REQUEST"
+    detail = client.get("/v1/cases/by-customer/%s" % uid).json()
+    assert detail["case"]["payment_status"] == "TERMINATED"
+    assert detail["case"]["termination"]["by"] == actor
+    assert detail["case"]["termination"]["instrument"] == "TERMINATE_ACT"
+    assert detail["contracts"][0]["status"] == "TERMINATED"
+    assert detail["work_item"]["aggregate_outstanding"] == before["work_item"]["aggregate_outstanding"]
+    assert detail["payment_summary"]["totals"]["outstanding_amount"] == before["payment_summary"]["totals"]["outstanding_amount"]
+    assert detail["invoices"] == before["invoices"]
+    assert detail["receipts"] == before["receipts"]
+    assert not any(item["customer"]["uid"] == uid for item in client.get("/v1/today").json()["items"])
 
-    # A live contract that still owes: the gate refuses before anything is written.
-    monkeypatch.setattr(cases, "termination_gate",
-                        lambda customer: ([{"contract_uid": "k", "outstanding": "1", "payoff_amount": "1000"}], []))
-    refused = client.post("/v1/cases/by-customer/%s:terminate" % uid, headers=MANAGER,
-                          json={"cause": "DEFAULT", "reason": "x"})
-    assert (refused.status_code, refused.json()["code"]) == (409, "balance_not_closed")
-    assert refused.json()["extensions"]["payoff_amount"] == "1000"
 
-    # The role gate comes first.
-    officer = client.post("/v1/cases/by-customer/%s:terminate" % uid,
-                          headers={"X-Volt-Role": "OFFICER"}, json={"cause": "DEFAULT", "reason": "x"})
-    assert (officer.status_code, officer.json()["code"]) == (403, "forbidden")
-
-    # An unknown cause is refused by name BEFORE the money gate (the unpatched gate
-    # would say 409 — input errors are not hidden behind a balance).
+def test_terminate_route_excludes_ops_and_requires_cause_and_reason():
+    uid = _case_of("C-002032")["customer_uid"]
+    ops = client.post("/v1/cases/by-customer/%s:terminate" % uid,
+                      headers={"X-Volt-Role": "OPS"}, json={"cause": "DEFAULT", "reason": "x"})
+    assert (ops.status_code, ops.json()["code"]) == (403, "forbidden")
     unknown = client.post("/v1/cases/by-customer/%s:terminate" % uid, headers=MANAGER,
                           json={"cause": "WHATEVER", "reason": "x"})
     assert (unknown.status_code, unknown.json()["code"]) == (422, "termination_cause_unknown")
@@ -105,38 +122,29 @@ def test_the_terminate_route_requires_manager_a_cause_and_a_closed_balance(monke
                         json={"cause": "DEFAULT", "reason": "  "})
     assert (blank.status_code, blank.json()["code"]) == (422, "reason_required")
 
-    # With the way open, ... (the balance gate itself was asserted above).
-    monkeypatch.setattr(cases, "termination_gate", lambda customer: ([], []))
 
-    # With the way open, the act writes the contract, the case, the event and the audit.
-    before = case["payment_status"]
-    ok = client.post("/v1/cases/by-customer/%s:terminate" % uid, headers=MANAGER,
-                     json={"cause": "CUSTOMER_REQUEST", "reason": "ลูกค้าแจ้งขอยกเลิกทาง LINE"})
-    assert ok.status_code == 200, ok.json()
-    entry = _latest_audit()          # before any further GET: the read is its own act
-    assert entry["act"] == "CONTRACT_TERMINATED"
-    assert entry["detail"]["contract_terminated"]["cause"] == "CUSTOMER_REQUEST"
-    detail = client.get("/v1/cases/by-customer/%s" % uid).json()
-    after = detail["case"]
-    assert after["payment_status"] == "TERMINATED"
-    assert after["payment_status_system"] == "TERMINATED"
-    assert after["termination"]["cause"] == "CUSTOMER_REQUEST"
-    assert after["termination"]["instrument"] == "TERMINATE_ACT"
-    assert next(k["status"] for k in detail["contracts"]) == "TERMINATED"
-    assert before != "TERMINATED"   # the fixture really did start somewhere else
+def test_terminate_route_does_not_require_instalment_review(monkeypatch):
+    uid = _case_of("C-002032")["customer_uid"]
+    monkeypatch.setattr(cases, "termination_gate", lambda customer: (
+        [{"contract_uid": customer.contracts[0].uid, "reason": "BALANCE_REQUIRES_REVIEW",
+          "outstanding": None, "payoff_amount": None}], []))
+    response = client.post("/v1/cases/by-customer/%s:terminate" % uid,
+                           headers={"X-Volt-Role": "OFFICER", "X-Volt-Officer": "thip"},
+                           json={"cause": "DEFAULT", "reason": "หลักฐานยังรอตรวจ"})
+    assert response.status_code == 200, response.json()
 
 
-def test_the_terminate_route_cannot_run_twice(monkeypatch):
+def test_the_terminate_route_cannot_run_twice():
     case = _case_of("C-002032")
     uid = case["customer_uid"]
-    monkeypatch.setattr(cases, "termination_gate", lambda customer: ([], []))
     first = client.post("/v1/cases/by-customer/%s:terminate" % uid, headers=MANAGER,
                         json={"cause": "DEFAULT", "reason": "ยึดคืนแล้ว"})
     assert first.status_code == 200, first.json()
+    archive_count = client.get("/v1/terminated-customers", params={"q": uid}).json()["meta"]["total"]
     again = client.post("/v1/cases/by-customer/%s:terminate" % uid, headers=MANAGER,
                         json={"cause": "DEFAULT", "reason": "ยึดคืนแล้ว"})
-    assert again.status_code in (409, 422)
-    assert again.json()["code"] in ("status_unchanged", "balance_not_closed")
+    assert again.json()["code"] == "status_unchanged"
+    assert client.get("/v1/terminated-customers", params={"q": uid}).json()["meta"]["total"] == archive_count
 
 
 def test_the_payment_status_route_refuses_terminated():

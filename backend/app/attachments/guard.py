@@ -287,6 +287,7 @@ def _css_active_content(text):
 
 
 def _check_csv(raw):
+    from ..csv_safety import formula
     text = None
     for enc in ("utf-8-sig", "tis-620"):
         try:
@@ -296,8 +297,8 @@ def _check_csv(raw):
             continue
     for r, row in enumerate(csv.reader(io.StringIO(text)), start=1):
         for c, cell in enumerate(row):
-            v = cell.lstrip(" \t\r\n")
-            if v[:1] in ("=", "+", "-", "@") and len(v) > 1 and not re.match(r"^[-+]?\d", v):
+            v = cell.lstrip(" \t\r\n\ufeff")
+            if formula(cell):
                 col = chr(ord("A") + c) if c < 26 else "col%d" % (c + 1)
                 raise Refused("csv_formula_cell", "cell %s%d starts with %r (spreadsheet formula)" % (col, r, v[:1]),
                               "เซลล์ %s%d ขึ้นต้นด้วย %s ซึ่งโปรแกรมตารางจะตีความเป็นสูตร" % (col, r, v[:1]))

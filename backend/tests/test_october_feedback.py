@@ -170,6 +170,7 @@ def test_invoice_status_preview_returns_actionable_invoices_first_and_caps_the_p
         "uid": overdue["uid"], "reference": "IV-LATE", "kind": "BALANCE", "month_index": 1,
         "due_date": "2026-10-01", "state": "OVERDUE", "peak_state": "APPROVED_IN_PEAK",
         "amount": "3000", "outstanding": "3000.00",
+        "collection_due_date": "2026-10-01", "review_status": "UNMATCHED", "collection_included": True,
     }]
 
 
@@ -177,6 +178,33 @@ def test_invoice_status_preview_rejects_unknown_customers():
     response = client.get("/v1/customers/not-a-customer/invoice-statuses")
 
     assert response.status_code == 404
+
+
+def test_invoice_status_preview_can_return_every_invoice_with_decimal_payment_totals():
+    customer = main.IDENTITIES[0]
+    state = journey.for_current()
+    for i in range(25):
+        invoice = journey.make_invoice(state, "K-ALL", "EPC", "BALANCE", "100.01", date(2026, 10, 1), "SENT")
+        invoice.update(customer_uid=customer.uid, peak_number="IV-%s" % i, outstanding="100.01")
+    partial = journey.make_invoice(state, "K-ALL", "EPC", "BALANCE", "200.50", date(2026, 10, 1), "PARTIALLY_PAID")
+    partial.update(customer_uid=customer.uid, outstanding="50.25")
+    paid = journey.make_invoice(state, "K-ALL", "EPC", "BALANCE", "300.10", date(2026, 10, 1), "PAID")
+    paid.update(customer_uid=customer.uid)
+    for status in ("CANCELLED", "DRAFT"):
+        excluded = journey.make_invoice(state, "K-ALL", "EPC", "BALANCE", "999.99", date(2026, 10, 1), status)
+        excluded.update(customer_uid=customer.uid)
+
+    body = client.get("/v1/customers/%s/invoice-statuses" % customer.uid, params={"include_all": True}).json()
+
+    assert len(body["items"]) == 29
+    assert body["meta"]["has_more"] is False
+    assert body["meta"]["remaining"] == 0
+    assert body["summary"]["paid"] == "450.35"
+    assert body["summary"]["outstanding"] == body["summary"]["due_outstanding_amount"] == "2550.50"
+    assert body["summary"]["due_invoice_count"] == 27
+    limited = client.get("/v1/customers/%s/invoice-statuses" % customer.uid, params={"limit": 1}).json()
+    assert len(limited["items"]) == 1
+    assert limited["summary"] == body["summary"]
 
 
 def test_collection_invoice_sort_rule_prioritises_actionable_state_then_due_date():

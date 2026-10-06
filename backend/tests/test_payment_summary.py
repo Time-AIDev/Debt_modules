@@ -5,7 +5,7 @@ cycle, and where each cycle stands, as a picture. The interface adds nothing up,
 every count and total the picture draws is served, and tied out here against the
 engine figures the rest of the page already prints.
 
-Every test here is an ADDITION. Nothing in this file edits an existing assertion.
+Expectations distinguish imported assumptions from confirmed payment evidence.
 """
 from datetime import date
 from decimal import Decimal
@@ -43,18 +43,19 @@ def test_a_lease_case_serves_every_cycle_with_its_status():
     assert [c["n"] for c in contract["cycles"]] == list(range(1, 97))
     # The four statuses partition the cycles — nothing is counted twice or dropped.
     assert sum(contract["counts"].values()) == 96
-    assert contract["counts"] == {"PAID": 22, "OVERDUE": 1, "UPCOMING": 73, "NO_AMOUNT": 0}
-    overdue = [c for c in contract["cycles"] if c["status"] == "OVERDUE"]
-    assert [c["due_date"] for c in overdue] == ["2026-10-10"]
+    assert contract["counts"] == {"PAID": 0, "OVERDUE": 0, "UPCOMING": 73, "NO_AMOUNT": 0,
+                                   "INFERRED_PAID": 22, "SHEET_REPORTED_PAID": 0, "UNCONFIRMED": 1, "REJECTED": 0}
+    assert contract["schedule_verified"] is False
+    assert contract["review_count"] == 23
 
 
 def test_the_lease_totals_tie_out_to_the_engine_figures_on_the_same_page():
     data = _case(LEASE_WITH_LATE)
     (contract,) = data["payment_summary"]["contracts"]
     (k,) = data["contracts"]
-    assert contract["overdue_amount"] == k["instalments_overdue"] == "11649.00"
+    assert contract["overdue_amount"] == k["instalments_overdue"] == "0.00"
     cycles = contract["cycles"]
-    assert _d(contract["paid_amount"]) == sum(_d(c["paid"]) for c in cycles) == Decimal("256278.00")
+    assert _d(contract["paid_amount"]) == sum(_d(c["paid"]) for c in cycles) == Decimal("0.00")
     assert _d(contract["contract_amount"]) == sum(_d(c["amount"]) for c in cycles)
     assert _d(contract["outstanding_amount"]) == sum(_d(c["outstanding"]) for c in cycles)
     assert contract["next_due"] == {"n": 24, "due_date": "2026-11-10", "amount": "11649.00"}
@@ -65,7 +66,8 @@ def test_the_sheet_count_is_served_beside_the_engine_count_never_blended():
     cell); the sheet's own grid has 19 PAID cells, because it starts recording six
     months in. Both are served so the page can say "sheet says 19" beside "22"."""
     (contract,) = _case(LEASE_WITH_LATE)["payment_summary"]["contracts"]
-    assert contract["counts"]["PAID"] == 22
+    assert contract["counts"]["PAID"] == 0
+    assert contract["counts"]["INFERRED_PAID"] == 22
     assert contract["sheet"] == {"paid_cells": 19, "paid_amount": "221331.00", "late_cells": 1, "cells": 30}
 
 
@@ -105,9 +107,9 @@ def test_a_paid_cash_deposit_is_not_counted_as_a_paid_instalment():
     ]
     assert entry["breakdown"] == {
         "deposit": {"count": 1, "counts": {"PAID": 1, "OVERDUE": 0, "UPCOMING": 0, "NO_AMOUNT": 0},
-                    "remaining_count": 0},
+                    "remaining_count": 0, "display_paid_count": 1, "unverified_paid_count": 1, "display_remaining_count": 0},
         "instalment": {"count": 1, "counts": {"PAID": 0, "OVERDUE": 0, "UPCOMING": 1, "NO_AMOUNT": 0},
-                       "remaining_count": 1},
+                       "remaining_count": 1, "display_paid_count": 0, "unverified_paid_count": 0, "display_remaining_count": 1},
     }
     assert summary["totals"]["breakdown"] == entry["breakdown"]
 
@@ -127,6 +129,7 @@ def test_lease_cycle_numbers_remain_instalment_numbers():
     assert entry["breakdown"]["deposit"]["count"] == 0
     assert entry["breakdown"]["instalment"] == {
         "count": 2, "counts": entry["counts"], "remaining_count": 1,
+        "display_paid_count": 1, "unverified_paid_count": 1, "display_remaining_count": 1,
     }
 
 
@@ -235,9 +238,14 @@ def test_peak_cycles_for_reads_this_sessions_peak_invoices():
     from app import journey
     from tests.test_peak_book import _with_peak, PAID, LATE
     customer, state = _with_peak([PAID, LATE, dict(LATE, doc_no="IVT-9", cycle=None)])
-    cycles, unplaced, as_of = payment_summary.peak_cycles_for(customer.contracts[0].uid, state)
+    contract = customer.contracts[0]
+    contract.first_due = date(2026, 4, 12)
+    contract.build()
+    contract.schedule_confirmation = {"first_due": "2026-04-12", "document_ref": "test signed contract"}
+    cycles, unplaced, as_of = payment_summary.peak_cycles_for(contract.uid, state)
     assert set(cycles) == {3, 4} and cycles[4]["status"] == "OVERDUE" and cycles[3]["doc_no"] == "IVT-1"
-    assert unplaced == 1 and as_of == "2026-09-14"
+    assert unplaced == 0 and as_of == "2026-09-14"
+    assert len(cycles[4]["invoices"]) == 2
 
 
 def test_the_contract_totals_follow_a_peak_overlay_not_just_the_engine():
@@ -261,19 +269,21 @@ def test_the_contract_totals_follow_a_peak_overlay_not_just_the_engine():
     assert Decimal(entry["outstanding_amount"]) == sum(Decimal(c["outstanding"]) for c in entry["cycles"])
 
 
-def test_two_peak_invoices_on_one_cycle_the_later_issued_on_wins_and_the_loser_is_superseded():
-    """I2: two PEAK invoices landing on the same month_index must not just overwrite
-    each other by iteration order — the later issued_on wins, and the invoice it beats
-    is counted, not silently dropped."""
+def test_two_peak_invoices_on_one_cycle_are_both_retained():
+    """Both effective invoices are evidence, not a latest-document contest."""
     from tests.test_peak_book import _with_peak, PAID
     customer, state = _with_peak([PAID, dict(PAID, doc_no="IVT-9", issued_on="2026-06-20")])
     contract = customer.contracts[0]
+    contract.first_due = date(2026, 4, 12)
+    contract.build()
+    contract.schedule_confirmation = {"first_due": "2026-04-12", "document_ref": "test signed contract"}
     cycles, unplaced, as_of = payment_summary.peak_cycles_for(contract.uid, state)
     assert set(cycles) == {3} and unplaced == 0
-    assert cycles[3]["doc_no"] == "IVT-9"                # 2026-06-20 beats PAID's 2026-06-05
+    assert len(cycles[3]["invoices"]) == 2
+    assert cycles[3]["paid"] == "16798.00"
     entry = payment_summary.for_contract(contract, date(2026, 10, 23), "0.00", peak_cycles=cycles)
-    assert entry["peak"]["invoices"] == 1
-    assert entry["peak"]["superseded_invoices"] == 1
+    assert entry["peak"]["invoices"] == 2
+    assert entry["peak"]["superseded_invoices"] == 0
 
 
 def test_a_month_index_beyond_the_schedule_counts_as_unplaced():
@@ -283,5 +293,8 @@ def test_a_month_index_beyond_the_schedule_counts_as_unplaced():
     from tests.test_peak_book import _with_peak, PAID
     customer, state = _with_peak([dict(PAID, doc_no="IVT-77", cycle={"n": 9999, "of": 48})])
     contract = customer.contracts[0]
+    contract.first_due = date(2026, 4, 12)
+    contract.build()
+    contract.schedule_confirmation = {"first_due": "2026-04-12", "document_ref": "test signed contract"}
     cycles, unplaced, as_of = payment_summary.peak_cycles_for(contract.uid, state)
     assert cycles == {} and unplaced == 1

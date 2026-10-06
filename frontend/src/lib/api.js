@@ -63,9 +63,15 @@ async function readJson(response, path) {
         status: response.status,
       })
     }
+    noteState(response, path)
+    finishMutation(response)
     return body
   }
+  finishMutation(response, body)
   signalAuth(response.status, body)
+  if (body?.code === 'idempotency_conflict') {
+    throw pendingProblem('operation_outcome_unknown', 'คำขอนี้มีรายการก่อนหน้าที่อาจบันทึกแล้ว กรุณาตรวจสอบผลในระบบก่อนส่งใหม่')
+  }
   throw Object.assign(new Error(path), {
     problem: body || { code: 'request_failed', title: `HTTP ${response.status}`, status: response.status },
     status: response.status,
@@ -77,7 +83,9 @@ async function get(path, params, { background = false, signal } = {}) {
   Object.entries(params || {}).forEach(([k, v]) => {
     if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v)
   })
-  const response = await fetch(url, { headers: roleHeaders(background), signal })
+  const headers = roleHeaders(background)
+  const response = await fetch(url, { headers, signal })
+  if (headers['X-Volt-Background']) backgroundResponses.add(response)
   return readJson(response, path)
 }
 
@@ -121,8 +129,11 @@ function noteEpoch(response) {
 // AUTH_REQUIRED_EVENT is re-exported from ./events.js above — declaring it here too
 // is a duplicate export and the browser refuses the whole module (blank page).
 function signalAuth(status, body) {
-  if (status !== 401 || !body || body.code !== 'auth_required') return
+  if (status !== 401 || !body || !['auth_required', 'reauth_required'].includes(body.code)) return
   clearTabToken()
+  clearPendingMutations()
+  resourceVersions.clear()
+  seenStateVersion = null
   try {
     if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
       window.dispatchEvent(new window.CustomEvent(AUTH_REQUIRED_EVENT))
@@ -130,23 +141,187 @@ function signalAuth(status, body) {
   } catch { /* the screen still shows the problem */ }
 }
 
-async function post(path, payload) {
-  const response = await fetch(BASE + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...roleHeaders() },
-    body: JSON.stringify(payload || {}),
+// An uncertain network outcome keeps its key for a user's retry. Known refusals
+// clear it; malformed successful JSON also retains it until a readable replay.
+const PENDING_KEY = 'volt.pending-operations.v1'
+const PENDING_TTL_MS = 24 * 60 * 60 * 1000
+const PENDING_MAX_ENTRIES = 128
+const PENDING_MAX_BYTES = 64 * 1024
+const pendingMutations = new Map()
+let pendingStorageCorrupt = false
+restorePendingMutations()
+const responseMutations = new WeakMap()
+const backgroundResponses = new WeakSet()
+const resourceVersions = new Map()
+let seenStateVersion = null
+
+function resourceKey(path) {
+  const clean = path.split('?')[0]
+  const customer = /^\/v1\/(?:cases\/by-customer|customers)\/([^/:]+)/.exec(clean)
+  if (customer) return `customer:${customer[1]}`
+  const record = /^\/v1\/([^/]+)\/([^/:]+)/.exec(clean)
+  return record ? `${record[1]}:${record[2]}` : clean.split(':')[0]
+}
+
+function noteState(response, path) {
+  const raw = response.headers?.get?.('x-volt-state-version')
+  if (!/^\d+$/.test(String(raw))) return
+  const version = String(raw)
+  if (seenStateVersion === null || BigInt(version) > BigInt(seenStateVersion)) seenStateVersion = version
+  // Background polling may announce new data, but must not make an open edit
+  // silently claim it was based on that unseen newer version.
+  if (response.ok && !backgroundResponses.has(response)) resourceVersions.set(resourceKey(path), version)
+}
+
+function pendingProblem(code, message) {
+  return Object.assign(new Error(code), {
+    status: 409,
+    problem: { code, status: 409, title: 'Confirm the previous operation first',
+      detail: 'An earlier result is uncertain. Check the saved records before submitting a new operation.',
+      message_th: message, retryable: false },
   })
-  const body = await readJson(response, path)
-  notifyChanged(path, 'POST')
-  return body
+}
+
+function restorePendingMutations() {
+  let raw = null
+  try { raw = window.sessionStorage.getItem(PENDING_KEY) } catch { return }
+  if (!raw) return
+  try {
+    if (raw.length > PENDING_MAX_BYTES) throw new Error('size')
+    const entries = JSON.parse(raw)
+    if (!Array.isArray(entries) || entries.length > PENDING_MAX_ENTRIES) throw new Error('entries')
+    for (const entry of entries) {
+      if (!entry || !/^[a-f0-9]{64}$/.test(entry.fingerprint) ||
+          !/^[A-Za-z0-9_.:-]{1,200}$/.test(entry.key) || !Number.isFinite(entry.at) || entry.at <= 0 ||
+          !(entry.expectedVersion === null || /^\d{1,20}$/.test(String(entry.expectedVersion)))) throw new Error('metadata')
+      pendingMutations.set(entry.fingerprint, {
+        key: entry.key, at: entry.at, expectedVersion: entry.expectedVersion, persistent: true,
+      })
+    }
+  } catch { pendingStorageCorrupt = true }
+}
+
+function persistPendingMutations() {
+  const entries = [...pendingMutations].filter(([, item]) => item.persistent)
+    .map(([fingerprint, item]) => ({ fingerprint, key: item.key, expectedVersion: item.expectedVersion, at: item.at }))
+  const serialized = JSON.stringify(entries)
+  if (entries.length > PENDING_MAX_ENTRIES || serialized.length > PENDING_MAX_BYTES) {
+    throw pendingProblem('pending_operations_full', 'มีงานที่ผลลัพธ์ยังไม่ยืนยันมากเกินไป กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
+  }
+  try {
+    if (entries.length) window.sessionStorage.setItem(PENDING_KEY, serialized)
+    else window.sessionStorage.removeItem(PENDING_KEY)
+  } catch {
+    throw pendingProblem('operation_storage_unavailable', 'เก็บข้อมูลสำหรับตรวจสอบการบันทึกซ้ำไม่ได้ กรุณาตรวจสอบการตั้งค่าเบราว์เซอร์')
+  }
+}
+
+function clearPendingMutations() {
+  pendingMutations.clear()
+  pendingStorageCorrupt = false
+  try { window.sessionStorage.removeItem(PENDING_KEY) } catch { /* auth still ends */ }
+}
+
+function acceptAuthenticatedLogin(body) {
+  // A successful sign-in can switch people in this tab. Previous-person retry
+  // metadata must never become an instruction submitted by the new identity.
+  clearPendingMutations()
+  resourceVersions.clear()
+  return acceptLogin(body)
+}
+
+function finishMutation(response, problem = null) {
+  const operation = responseMutations.get(response)
+  if (!operation || response.status >= 500) return
+  // A reused key with a changed payload proves an earlier submission exists,
+  // not that it is safe to submit again with a new key.
+  if (problem?.code === 'idempotency_conflict') return
+  pendingMutations.delete(operation.signature)
+  try { persistPendingMutations() } catch { /* retaining a completed replay is safe */ }
+  noteState(response, operation.path)
+}
+
+async function operationFingerprint(method, path, body, headers, stableUploadIdentity = null) {
+  // Auth bodies contain credentials and have no server response cache. Never
+  // persist even their hashes, which could make weak test passwords guessable.
+  if (path.startsWith('/v1/auth/')) return null
+  let payload = typeof body === 'string' ? body : [body?.size || 0, body?.type || '', body?.lastModified || 0]
+  let trustworthy = true
+  if (stableUploadIdentity) {
+    payload = stableUploadIdentity.value
+    trustworthy = stableUploadIdentity.trustworthy
+  } else if (body && typeof body !== 'string') {
+    const identity = await fileIdentity(body)
+    payload = identity.value
+    trustworthy = identity.trustworthy
+  }
+  const source = JSON.stringify([method, path, payload,
+    ...['Content-Type', 'X-Volt-Filename', 'X-Volt-Attach-To'].map((key) => headers?.[key] || ''),
+    stableUploadIdentity ? '' : headers?.['X-Volt-Upload'] || ''])
+  if (trustworthy && globalThis.crypto?.subtle && typeof TextEncoder !== 'undefined') {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', new TextEncoder().encode(source))
+    return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')
+  }
+  // Insecure prototype origins can lack SubtleCrypto. This fallback is volatile,
+  // bounded in aggregate, and deliberately never enters sessionStorage.
+  return `volatile:${source}`
+}
+
+async function fileIdentity(file) {
+  const metadata = [file?.name || '', file?.size || 0, file?.type || '', file?.lastModified || 0]
+  if (globalThis.crypto?.subtle && typeof file?.arrayBuffer === 'function') {
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', await file.arrayBuffer())
+    return { value: [...metadata, [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, '0')).join('')], trustworthy: true }
+  }
+  return { value: metadata, trustworthy: false }
+}
+
+function mutationHeaders(path, signature) {
+  const headers = roleHeaders()
+  if (signature === null) return headers
+  if (pendingStorageCorrupt) throw pendingProblem('operation_outcome_unknown', 'ข้อมูลตรวจสอบงานก่อนหน้าอ่านไม่ได้ กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
+  let operation = pendingMutations.get(signature)
+  if (operation && (Date.now() - operation.at >= PENDING_TTL_MS || operation.at > Date.now() + 60000)) {
+    throw pendingProblem('operation_outcome_unknown', 'งานก่อนหน้าเกินช่วงเวลาที่ตรวจสอบการบันทึกซ้ำได้ กรุณาตรวจสอบผลในระบบก่อนส่งใหม่')
+  }
+  if (!operation) {
+    const totalBytes = [...pendingMutations.keys()].reduce((sum, key) => sum + key.length + 256, signature.length + 256)
+    if (pendingMutations.size >= PENDING_MAX_ENTRIES || totalBytes > PENDING_MAX_BYTES) {
+      throw pendingProblem('pending_operations_full', 'มีงานที่ผลลัพธ์ยังไม่ยืนยันมากเกินไป กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
+    }
+    operation = { key: uploadId(), at: Date.now(),
+      expectedVersion: resourceVersions.get(resourceKey(path)) ?? seenStateVersion,
+      persistent: !signature.startsWith('volatile:') }
+    pendingMutations.set(signature, operation)
+    if (operation.persistent) {
+      try { persistPendingMutations() } catch (error) { pendingMutations.delete(signature); throw error }
+    }
+  }
+  headers['Idempotency-Key'] = operation.key
+  if (operation.expectedVersion !== null && !path.startsWith('/v1/operation-runs/')) headers['If-Match'] = operation.expectedVersion
+  return headers
+}
+
+async function mutationFetch(method, path, body, extra = {}) {
+  const { stableUploadIdentity, ...options } = extra
+  const signature = await operationFingerprint(method, path, body, extra.headers, stableUploadIdentity)
+  if (extra.signal?.aborted) throw new DOMException('aborted', 'AbortError')
+  const response = await fetch(BASE + path, {
+    ...options, method, body,
+    headers: { ...mutationHeaders(path, signature), ...extra.headers },
+  })
+  if (signature !== null) responseMutations.set(response, { signature, path })
+  return response
+}
+
+async function post(path, payload) {
+  return send('POST', path, payload || {})
 }
 
 async function send(method, path, payload) {
-  const response = await fetch(BASE + path, {
-    method,
-    headers: { 'Content-Type': 'application/json', ...roleHeaders() },
-    body: payload === undefined ? undefined : JSON.stringify(payload),
-  })
+  const response = await mutationFetch(method, path,
+    payload === undefined ? undefined : JSON.stringify(payload),
+    { headers: { 'Content-Type': 'application/json' } })
   const body = await readJson(response, path)
   notifyChanged(path, method)
   return body
@@ -167,6 +342,7 @@ async function exportCsv(path, params) {
   const response = await fetch(withQuery(path, params), { headers: roleHeaders() })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
+    finishMutation(response, body)
     signalAuth(response.status, body)
     throw Object.assign(new Error(path), {
       problem: body || { code: 'export_failed', title: `HTTP ${response.status}`, status: response.status },
@@ -174,6 +350,7 @@ async function exportCsv(path, params) {
     })
   }
   const text = await response.text()
+  finishMutation(response)
   const disposition = (response.headers && typeof response.headers.get === 'function' && response.headers.get('Content-Disposition')) || ''
   const named = /filename\*?="?([^";]+)"?/.exec(disposition)
   return { text, filename: named ? decodeURIComponent(named[1].replace(/^UTF-8''/i, '')) : 'workbook.csv' }
@@ -206,7 +383,8 @@ function uploadId() {
 async function discardParts(id) {
   const path = `/v1/imports/parts/${id}`
   try {
-    await fetch(BASE + path, { method: 'DELETE', headers: roleHeaders() })
+    const response = await mutationFetch('DELETE', path)
+    finishMutation(response)
   } catch { /* best effort; the backend also expires abandoned chunks */ }
 }
 
@@ -216,10 +394,8 @@ async function sendParts(file, { signal, onProgress } = {}) {
   try {
     for (let i = 0; i < of; i += 1) {
       const path = `/v1/imports/parts/${id}/${i}?of=${of}`
-      const response = await fetch(BASE + path, {
-        method: 'POST',
-        headers: { ...roleHeaders(), 'Content-Type': 'application/octet-stream' },
-        body: file.slice(i * PART_BYTES, (i + 1) * PART_BYTES),
+      const response = await mutationFetch('POST', path, file.slice(i * PART_BYTES, (i + 1) * PART_BYTES), {
+        headers: { 'Content-Type': 'application/octet-stream' },
         signal,
       })
       await readJson(response, path)
@@ -240,19 +416,18 @@ async function postRaw(path, file, extraHeaders = {}, {
   chunk = true, signal, onProgress,
 } = {}) {
   let upload = null
+  const stableUploadIdentity = await fileIdentity(file)
   try {
     upload = chunk && file.size ? await sendParts(file, { signal, onProgress }) : null
     onProgress?.({ phase: 'parsing', uploadedBytes: file.size, totalBytes: file.size })
-    const response = await fetch(BASE + path, {
-      method: 'POST',
+    const response = await mutationFetch('POST', path, upload ? '' : file, {
+      stableUploadIdentity,
       headers: {
-        ...roleHeaders(),
         'Content-Type': file.type || 'application/octet-stream',
         'X-Volt-Filename': encodeURIComponent(file.name || 'upload'),
         ...(upload ? { 'X-Volt-Upload': upload } : {}),
         ...extraHeaders,
       },
-      body: upload ? '' : file,
       signal,
     })
     const body = await readJson(response, path)
@@ -320,13 +495,12 @@ async function postOperation(path, file, extraHeaders = {}, options = {}) {
 // above, POSTed with a JSON body (the reason) instead of GET's bare query, and
 // carrying back the `X-Volt-Export-Uid` the server minted for the record.
 async function exportCsvPost(path, payload) {
-  const response = await fetch(BASE + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...roleHeaders() },
-    body: JSON.stringify(payload || {}),
+  const response = await mutationFetch('POST', path, JSON.stringify(payload || {}), {
+    headers: { 'Content-Type': 'application/json' },
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
+    finishMutation(response, body)
     signalAuth(response.status, body)
     throw Object.assign(new Error(path), {
       problem: body || { code: 'export_failed', title: `HTTP ${response.status}`, status: response.status },
@@ -334,6 +508,7 @@ async function exportCsvPost(path, payload) {
     })
   }
   const text = await response.text()
+  finishMutation(response)
   const disposition = (response.headers && typeof response.headers.get === 'function' && response.headers.get('Content-Disposition')) || ''
   const named = /filename\*?="?([^";]+)"?/.exec(disposition)
   const uid = (response.headers && typeof response.headers.get === 'function' && response.headers.get('X-Volt-Export-Uid')) || null
@@ -345,13 +520,12 @@ async function exportCsvPost(path, payload) {
 // CSV exports above, handed back as a Blob plus the server's file name. The
 // `filename*=UTF-8''…` form wins when the server sends both.
 async function exportFilePost(path, payload, fallbackName) {
-  const response = await fetch(BASE + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...roleHeaders() },
-    body: JSON.stringify(payload || {}),
+  const response = await mutationFetch('POST', path, JSON.stringify(payload || {}), {
+    headers: { 'Content-Type': 'application/json' },
   })
   if (!response.ok) {
     const body = await response.json().catch(() => null)
+    finishMutation(response, body)
     signalAuth(response.status, body)
     throw Object.assign(new Error(path), {
       problem: body || { code: 'export_failed', title: `HTTP ${response.status}`, status: response.status },
@@ -359,6 +533,7 @@ async function exportFilePost(path, payload, fallbackName) {
     })
   }
   const blob = await response.blob()
+  finishMutation(response)
   const disposition = (response.headers && typeof response.headers.get === 'function' && response.headers.get('Content-Disposition')) || ''
   const star = /filename\*=UTF-8''([^;]+)/i.exec(disposition)
   const plain = /filename="?([^";]+)"?/i.exec(disposition)
@@ -367,6 +542,8 @@ async function exportFilePost(path, payload, fallbackName) {
 }
 
 export const api = {
+  contractScheduleConfirmation: (uid) => get(`/v1/contracts/${uid}/schedule-confirmation`),
+  confirmContractSchedule: (uid, body) => post(`/v1/contracts/${uid}/schedule-confirmation`, body),
   messageTemplates: (params) => get('/v1/message-templates', params),
   createMessageTemplate: (payload) => post('/v1/message-templates', payload),
   updateMessageTemplate: (uid, payload) => put(`/v1/message-templates/${uid}`, payload),
@@ -379,7 +556,7 @@ export const api = {
   // One request for the Data sources screen (migration + integrations + crm + peak).
   dataSourcesOverview: () => get('/v1/data-sources/overview'),
   refreshImports: () => post('/v1/session:refresh-imports', {}),
-  readyz: () => fetch('/readyz').then((r) => (r.ok ? r.json() : null)).catch(() => null),
+  readyz: () => fetch('/api/readyz').then((r) => (r.ok ? r.json() : null)).catch(() => null),
   boardColumns: () => get('/v1/board/columns'),
   customerContracts: (uid) => get(`/v1/customers/${uid}/contracts`),
   contractSummary: (uid) => get(`/v1/contracts/${uid}/summary`),
@@ -442,6 +619,8 @@ export const api = {
   contractReceipts: (uid) => get(`/v1/contracts/${uid}/receipts`),
   contractInstalments: (uid) => get(`/v1/contracts/${uid}/instalments`),
   previewServiceDeferral: (uid, payload) => post(`/v1/contracts/${uid}/service-deferrals/preview`, payload),
+  previewInvoiceReviews: (uid, payload) => post(`/v1/cases/by-customer/${uid}/invoice-reviews/preview`, payload),
+  confirmInvoiceReviews: (uid, payload) => post(`/v1/cases/by-customer/${uid}/invoice-reviews`, payload),
   confirmServiceDeferral: (uid, payload) => post(`/v1/contracts/${uid}/service-deferrals`, payload),
   previewServiceDeferralReverse: (uid, row, payload) => post(`/v1/contracts/${uid}/service-deferrals/${row}/reverse-preview`, payload),
   reverseServiceDeferral: (uid, row, payload) => post(`/v1/contracts/${uid}/service-deferrals/${row}/reverse`, payload),
@@ -485,9 +664,7 @@ export const api = {
   setNplType: (customerUid, payload) => post(`/v1/cases/by-customer/${customerUid}/npl-type`, payload),
   // Feedback Round 1 / WP9: a phone number a person enters, with a reason ({ phone, reason, by }).
   setCustomerPhone: (customerUid, payload) => post(`/v1/cases/by-customer/${customerUid}/phone`, payload),
-  // 2026-09-20 (Closed/Terminated): end the contract with a cause and a reason. The
-  // server refuses while a live contract still owes (409 balance_not_closed, with
-  // the payoff figure); the OWNER write-off is the other way to close the balance.
+  // End live contracts with a cause and reason; the actual balance remains unchanged.
   terminateCustomerContract: (customerUid, payload) => post(`/v1/cases/by-customer/${customerUid}:terminate`, payload),
   // 2026-09-20: the one audited read of the customer's full number. Every list and
   // the case detail serve only the mask plus `phone_revealable`; the server writes
@@ -649,11 +826,14 @@ export const api = {
   // Login (design 2026-09-13).
   authConfig: () => get('/v1/auth/config'),
   authMe: () => get('/v1/auth/me'),
-  authPassword: async (payload) => acceptLogin(await post('/v1/auth/password', payload)),
-  authGoogle: async (payload) => acceptLogin(await post('/v1/auth/google', payload)),
+  authPassword: async (payload) => acceptAuthenticatedLogin(await post('/v1/auth/password', payload)),
+  authGoogle: async (payload) => acceptAuthenticatedLogin(await post('/v1/auth/google', payload)),
   authLogout: async () => {
     const result = await post('/v1/auth/logout', {})
     clearTabToken()
+    clearPendingMutations()
+    resourceVersions.clear()
+    seenStateVersion = null
     return result
   },
   // Feedback Round 1 / WP10–WP11: the managed allow-list, and one's own display name.

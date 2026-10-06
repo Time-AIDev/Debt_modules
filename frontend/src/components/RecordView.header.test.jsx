@@ -73,6 +73,47 @@ describe('the case header (F03, F04, F12, F15)', () => {
     expect(screen.getByText('เหลือ 1 งวด')).toBeInTheDocument()
   })
 
+  it('shows two invoice-backed CASH instalments and separates the PEAK balance', async () => {
+    api.caseDetail.mockResolvedValue(headerCase({
+      contracts: [{ ...CASE.contracts[0], product: 'CASH', entity: 'EPC' }],
+      work_item: { ...CASE.work_item, aggregate_outstanding: '325000.00' },
+      payment_summary: {
+        ...CASE.payment_summary,
+        totals: { ...CASE.payment_summary.totals, outstanding_amount: '0.00',
+          breakdown: { instalment: { count: 1, display_paid_count: 1, display_remaining_count: 0,
+            counts: { PAID: 1, OVERDUE: 0 } } } },
+        display_instalments: {
+          total_count: 2, paid_count: 1, remaining_count: 1, overdue_count: 1,
+          peak_outstanding: '165000.00', contract_outstanding: '325000.00', peak_balance_complete: true,
+          contracts: [{ contract_uid: 'ct-1', source: 'PEAK_REPORT', cycles: [
+            { n: 1, kind: 'BALANCE', status: 'PAID', source: 'PEAK', due_date: '2026-07-20', amount: '160000.00' },
+            { n: 2, kind: 'BALANCE', status: 'OVERDUE', source: 'PEAK', due_date: '2026-08-23', amount: '165000.00' },
+          ] }],
+        },
+      },
+    }))
+    renderScreen(<Record />, { route: '/customers/c-1' })
+    expect(await screen.findByText('1 / 2')).toBeInTheDocument()
+    expect(screen.getByText('เหลือ 1 งวด')).toBeInTheDocument()
+    expect(screen.getByText('งวดค้าง').closest('.case__fact')).toHaveTextContent('1')
+    expect(screen.getByText('คงเหลือ').closest('.case__fact')).toHaveTextContent('325,000.00')
+    expect(screen.getByText(/PEAK.*165,000.00/)).toBeInTheDocument()
+  })
+
+  it('does not compare a partial PEAK balance with a multi-contract case balance', async () => {
+    api.caseDetail.mockResolvedValue(headerCase({
+      contracts: [{ ...CASE.contracts[0], product: 'CASH' }, { ...CASE.contracts[0], uid: 'ct-2', product: 'LEASE' }],
+      payment_summary: { ...CASE.payment_summary, display_instalments: {
+        total_count: 2, paid_count: 1, remaining_count: 1, overdue_count: 1,
+        peak_outstanding: '165000.00', contract_outstanding: '325000.00', peak_balance_complete: false,
+        contracts: [],
+      } },
+    }))
+    renderScreen(<Record />, { route: '/customers/c-1' })
+    expect(await screen.findByText('1 / 2')).toBeInTheDocument()
+    expect(screen.queryByText(/PEAK.*165,000.00/)).not.toBeInTheDocument()
+  })
+
   it('serves the system size, the monthly instalment and the unpaid-invoice count', async () => {
     renderScreen(<Record />, { route: '/customers/c-1' })
     expect(await screen.findByText('6.25 kWp')).toBeInTheDocument()
@@ -91,7 +132,9 @@ describe('the case header (F03, F04, F12, F15)', () => {
 
   it('prints the Volt ID before the customer number', async () => {
     renderScreen(<Record />, { route: '/customers/c-1' })
-    expect(await screen.findByText('V-1001 · 28099990001')).toBeInTheDocument()
+    const identity = await screen.findByText('V-1001')
+    expect(identity.closest('.case__idRow')).toHaveTextContent('V-1001· 28099990001')
+    expect(screen.getByRole('button', { name: 'คัดลอกตัวระบุลูกค้า' })).toBeInTheDocument()
   })
 
   it('says what the sheet says, where PEAK disagrees, and the day the sheet knows payments to', async () => {
@@ -127,4 +170,24 @@ describe('the case header (F03, F04, F12, F15)', () => {
       .toBeInTheDocument()
     expect(screen.queryByText(/ข้อมูลการชำระจากชีต/)).toBeNull()
   })
+})
+
+
+it('shows reported paid instalments and the unverified count together in the scorecard', async () => {
+  api.caseDetail.mockResolvedValue(headerCase({ payment_summary: {
+    ...CASE.payment_summary,
+    totals: { ...CASE.payment_summary.totals,
+      breakdown: { instalment: {
+        count: 48, counts: { PAID: 4, INFERRED_PAID: 6, SHEET_REPORTED_PAID: 2 },
+        remaining_count: 44, display_paid_count: 12, unverified_paid_count: 8,
+        display_remaining_count: 36,
+      } },
+    },
+  } }))
+  renderScreen(<Record />, { route: '/customers/c-1' })
+  const value = await screen.findByText('12 / 48')
+  const card = value.closest('.case__fact')
+  expect(card).toHaveTextContent('8 รอยืนยันจาก PEAK')
+  expect(card).toHaveTextContent('เหลือ 36 งวด')
+  expect(card.querySelector('.case__unverifiedPaid')).toHaveTextContent('8')
 })

@@ -1,0 +1,59 @@
+<h1>Volt Debt — Case Register v1.4</h1>
+<p>Dated 2026-09-02. Owner: Arina. The realignment's cases appended to v1.3 (which moves to 13 History). The N, P, UC, S and I series of v1.1 to v1.3 stand unchanged and are not restated. Read with Requirements Amendment v2.6, Collection Workflow Alignment v3.0 and Interview and SOP Findings 2026-09-01.</p>
+
+<h2>0. Plain language first</h2>
+<p>A <strong>case</strong> in this register is a situation someone will meet and the rule that answers it; it is not a customer case. An <strong>open item</strong> is a question the business has not yet answered, with the person who owns the answer.</p>
+
+<h2>1. New cases — D series (the daily loop)</h2>
+<table>
+<tr><th>Case</th><th>The situation</th><th>The rule that answers it</th></tr>
+<tr><td>DC1</td><td>An officer logs a call and tries to close the drawer without saying what happens next</td><td>Refused (next_action_required). A PTP or a service issue in the same call sets the next action itself</td></tr>
+<tr><td>DC2</td><td>The customer says "call me back Thursday"</td><td>next_action = CALLBACK on Thursday; the case appears in tier 2 on Thursday and is overdue on Friday</td></tr>
+<tr><td>DC3</td><td>A promise date passes with no receipt approved in PEAK</td><td>The system marks the PTP BROKEN, increments broken_ptp_count, and the case moves to tier 3; nobody types it</td></tr>
+<tr><td>DC4</td><td>Two officers reach the same customer on the same day</td><td>The second attempt is refused by the daily-slot law (v2.4); the log shows who reached them first</td></tr>
+<tr><td>DC5</td><td>An officer wants the manager's view on one case</td><td>A review request with a reason and a question; the answer returns to the officer's Today list; a second open request on the same case refuses (review_pending)</td></tr>
+<tr><td>DC6</td><td>An officer sets dc_status to Power Cutoff by hand</td><td>dc_status records what was done; the act itself is a power_restriction request that needs the configured approver, and the two are shown side by side</td></tr>
+<tr><td>DC7</td><td>A customer pays while restricted</td><td>Restoration is due the same business day before 15:00, else the next; the case shows RESTORE_DUE until O&amp;M confirms</td></tr>
+<tr><td>DC8</td><td>The Odoo ticket closes but the officer never hears</td><td>Tier 6 item "ticket closed, resume follow-up" the next morning; the hold ends only when the officer confirms with the customer</td></tr>
+<tr><td>DC9</td><td>A Manager changes a bucket boundary</td><td>A new band set version; every bucket still travels with its band_set_code; history keeps the old set</td></tr>
+<tr><td>DC10</td><td>A case reads Late in payment_status and No Action in dc_status</td><td>Both are true and both are shown; neither is derived from the other</td></tr>
+</table>
+
+<h2>2. New cases — P series (pipeline and PEAK drafts)</h2>
+<table>
+<tr><th>Case</th><th>The situation</th><th>The rule that answers it</th></tr>
+<tr><td>PC1</td><td>Sales says the down payment is in but PEAK has no receipt and no slip is attached</td><td>Gate 1 stays open; release refuses (gate_not_passed). A gate enforced by a request is not a gate</td></tr>
+<tr><td>PC2</td><td>EPC moves the date after the draft invoice was created</td><td>The invoice owner must choose STAND, AMEND_DUE_DATE or CANCEL_AND_REISSUE; silence is not an option; the last two are new drafts</td></tr>
+<tr><td>PC3</td><td>An officer wants to send the invoice link before AR approves</td><td>Refused (invoice_not_approved): no QR exists on a draft</td></tr>
+<tr><td>PC4</td><td>A retry after a timeout</td><td>The same idempotency key returns the same document; PEAK is never asked twice</td></tr>
+<tr><td>PC5</td><td>AR rejects a draft receipt because the slip was for another customer</td><td>REJECTED with PEAK's reason; a tier-6 item returns to the officer who confirmed the slip</td></tr>
+<tr><td>PC6</td><td>Someone asks Debt to approve a document "just this once"</td><td>There is no such endpoint and no such client method; the request returns peak_draft_only</td></tr>
+<tr><td>PC7</td><td>A restructure is approved and the journal fails while the void succeeded</td><td>Two documents, two states; the case shows one APPROVED_IN_PEAK and one UNSENT; the second is re-sendable and nothing pretends both landed</td></tr>
+<tr><td>PC8</td><td>The product group cannot resolve a company</td><td>No document is created (FigJam S03); the pipeline item shows the reason</td></tr>
+</table>
+
+<h2>3. New cases — M series (migration)</h2>
+<table>
+<tr><th>Case</th><th>The situation</th><th>The rule that answers it</th></tr>
+<tr><td>MC1</td><td>A Comment cell holds three MapLog strings and a paragraph of Thai</td><td>Three contact_log rows with their timestamps and agents; the paragraph becomes the note on the newest</td></tr>
+<tr><td>MC2</td><td>PTP Date reads 7/31/2026 on one tab and 31/08/26 on another</td><td>The tab decides the format; a row that fits neither is imported with a warning and no PTP</td></tr>
+<tr><td>MC3</td><td>A month cell says Link Sent where the engine expects a receipt</td><td>A delivery record, no receipt; the engine's arrears stand and the row carries a warning</td></tr>
+<tr><td>MC4</td><td>The sheet's late fee and the engine's late fee differ on one contract</td><td>Both are shown on the case during migration with the method named; the engine's figure is the one used, flagged indicative while CF1 is open</td></tr>
+<tr><td>MC5</td><td>An order is installed per Odoo but still Order - EPC Installation in the sheet</td><td>On the gap list with the days since installation; Debt does not flip the status</td></tr>
+<tr><td>MC6</td><td>The import count does not match the sheet's own pivot</td><td>The run is marked not reconciled and says which status and product differ; nothing is silently accepted</td></tr>
+</table>
+
+<h2>4. Open items raised by the interview</h2>
+<table>
+<tr><th>Id</th><th>Question</th><th>Owner</th><th>State</th></tr>
+<tr><td>CF1</td><td>Late-fee rate 0.3 or 0.1 percent per day</td><td>Win, Legal, Accounting</td><td><strong>DECIDED 2026-09-09, ruling 87</strong> — 0.03 percent per day; invoicing ON. Was: OPEN — Legal re-reading the agreement; invoicing OFF</td></tr>
+<tr><td>OD-31</td><td>Grace 0, 11 or 14 days</td><td>Legal</td><td><strong>DECIDED 2026-09-09, ruling 88</strong> — no grace (0 days). Was: OPEN — 14 configured, indicative</td></tr>
+<tr><td>OD-02</td><td>Allocation order of a short payment</td><td>Accounting, Legal</td><td>OPEN — the engine refuses</td></tr>
+<tr><td>OD-04 extended</td><td>Collection NPL policy: 60 days, 90 days, or two missed with no contact</td><td>Owner, Whan</td><td>OPEN — 60 / 2 configured</td></tr>
+<tr><td>OQ-40</td><td>Restructure entry gate 40 or 25 percent</td><td>Owner</td><td>OPEN — 40 configured</td></tr>
+<tr><td>OQ-41</td><td>Who signs the termination letter</td><td>Legal</td><td>OPEN</td></tr>
+<tr><td>OQ-42</td><td>Invoice owner: AR or Collection</td><td>Owner</td><td>OPEN — Collection meanwhile</td></tr>
+<tr><td>OQ-43</td><td>LINE Official Account retention plan</td><td>Owner</td><td>OPEN — business, not build</td></tr>
+<tr><td>OQ-44</td><td>Power restriction approver while the Debt Manager post is vacant</td><td>Owner</td><td>OPEN — OWNER configured</td></tr>
+<tr><td>INT-04, 05, 06</td><td>Odoo installation-date model; PEAK draft state read-back; two PEAK credential sets</td><td>First, Dan, Whan</td><td>OPEN — confirmed on first live contact</td></tr>
+</table>

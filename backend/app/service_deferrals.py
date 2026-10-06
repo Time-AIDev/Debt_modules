@@ -94,8 +94,16 @@ def raw_lines(contract):
 
 
 def ordered_regular(lines):
-    return sorted((l for l in lines if l.is_active_regular),
-                  key=lambda l: getattr(l, "service_original_due_date", l.due_date))
+    from . import request_context
+    cache = request_context.reads()
+    key = ("service_deferrals.ordered", id(lines), len(lines))
+    hit = cache.get(key) if cache is not None else None
+    if hit is not None and hit[0] is lines:
+        return hit[1]
+    ordered = sorted((l for l in lines if l.is_active_regular),
+                     key=lambda l: getattr(l, "service_original_due_date", l.due_date))
+    if cache is not None: cache[key] = (lines, ordered)
+    return ordered
 
 
 def invoices_for(contract_uid):
@@ -104,10 +112,14 @@ def invoices_for(contract_uid):
 
 
 def cycle_invoices(contract_uid):
+    from . import instalment_evidence, journey
     grouped = {}
+    found = journey.contract_by_uid(contract_uid)
+    lines = ordered_regular(raw_lines(found[1])) if found else []
     for inv in invoices_for(contract_uid):
-        if inv.get("month_index") and inv.get("state") not in ("CANCELLED", "DRAFT", "AR_REVIEW"):
-            grouped.setdefault(inv["month_index"], []).append(inv)
+        n = instalment_evidence.match_invoice(found[1], inv, lines)[0] if found else None
+        if n and inv.get("state") not in ("CANCELLED", "DRAFT", "VOID", "AR_REVIEW"):
+            grouped.setdefault(n, []).append(inv)
     return grouped
 
 
@@ -167,7 +179,14 @@ def decorate_invoice(inv):
     found = journey.contract_by_uid(inv.get("contract_uid"))
     if found and customer_has_history(found[0].uid):
         inv = dict(inv, service_adjusted=True)
-    move = active_moves(inv.get("contract_uid")).get(inv.get("month_index"))
+    moves = active_moves(inv.get("contract_uid"))
+    if not moves:
+        return inv
+    n = inv.get("contract_cycle")
+    if n is None and found:
+        from . import instalment_evidence
+        n = instalment_evidence.match_invoice(found[1], inv, ordered_regular(raw_lines(found[1])))[0]
+    move = moves.get(n)
     if not move:
         return inv
     return dict(inv, collection_due_date=move["new_due_date"], service_deferral=move,
@@ -250,6 +269,22 @@ def _no_payment(customer, contract, cycles, reversing=False):
         if paid or received or pending or lines[n - 1].total_amount <= ZERO:
             raise problem("payment_conflict", "งวดที่จ่ายแล้ว จ่ายบางส่วน หรือรอยืนยันรับเงิน ไม่สามารถเลื่อนหรือย้อนรายการได้", 409)
     return lines, mapped
+
+
+def invoice_eligibility(inv):
+    """Use the authoritative form validation for the row's disabled reason."""
+    try:
+        customer, contract = _contract(inv.get("contract_uid"))
+        if inv.get("review_status") == "REJECTED":
+            raise problem("invoice_rejected", "ต้องรับรองใบแจ้งหนี้กลับก่อนเลื่อนงวด", 409)
+        n = inv.get("contract_cycle")
+        if not n:
+            raise problem("invoice_unmatched", "ต้องแก้ข้อมูลจับคู่สัญญาและเดือนบริการก่อน", 409)
+        _no_payment(customer, contract, [n])
+        return dict(inv, deferral_eligible=True, deferral_reason=None, deferral_reason_code=None)
+    except errors.Problem as exc:
+        return dict(inv, deferral_eligible=False, deferral_reason=exc.message_th,
+                    deferral_reason_code=exc.code)
 
 
 def _version(contract, inputs, impact):

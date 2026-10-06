@@ -1,6 +1,9 @@
 """Private task receiver; verifies Google OIDC in addition to Cloud Run IAM."""
 import hashlib
 import os
+import json
+import re
+import time
 import httpx
 from fastapi import Body, FastAPI, Header
 from sqlalchemy import text
@@ -50,6 +53,48 @@ async def execute(body: dict = Body(...), authorization: str = Header(default=No
 
 async def execute_job(uid):
     """Execute a durable intent; called by authenticated HTTP or the private daemon."""
+    # The same job cannot execute concurrently on two Cloud Tasks deliveries or
+    # local worker processes. Release this session lock even after a SQL error.
+    with db.connect() as lease:
+        acquired = lease.execute(text("select pg_try_advisory_lock(hashtext(:k))"),
+                                 {"k": "job:" + uid}).scalar_one()
+        lease.commit()
+        if not acquired:
+            raise errors.Problem("job_already_running", 503, "Job running", "Another worker owns this job.",
+                                 "งานนี้กำลังทำงานอยู่", "DEBT-JOB-503", retryable=True)
+        try:
+            with lease.begin():
+                row = lease.execute(text("select finished_at,dead_lettered_at from app.task_outbox where uid=:u for update"),
+                                    {"u": uid}).first()
+                if not row:
+                    raise errors.not_found("job")
+                if row.finished_at or row.dead_lettered_at:
+                    return {"completed": not bool(row.dead_lettered_at), "dead_letter": bool(row.dead_lettered_at)}
+                attempt = lease.execute(text(
+                    "update app.task_outbox set attempt_count=attempt_count+1,dispatched_at=now() "
+                    "where uid=:u returning attempt_count"), {"u": uid}).scalar_one()
+            try:
+                return await _execute_job_body(uid)
+            except Exception as exc:
+                permanent = isinstance(exc, (FileNotFoundError, KeyError, ValueError)) or (
+                    isinstance(exc, errors.Problem) and exc.status < 500 and
+                    exc.status not in (408, 425, 429) and not exc.retryable)
+                max_attempts = max(1, int(os.environ.get("MAX_JOB_ATTEMPTS", "5")))
+                code = re.sub(r"[^a-zA-Z0-9_]", "", str(getattr(exc, "code", type(exc).__name__)))[:80]
+                if permanent or attempt >= max_attempts:
+                    await run_in_threadpool(_dead_letter, uid, code)
+                    return {"completed": False, "dead_letter": True}
+                delay = min(300, 5 * 2 ** min(attempt - 1, 6))
+                await run_in_threadpool(_retry, uid, code, delay)
+                raise
+        finally:
+            if lease.in_transaction():
+                lease.rollback()
+            lease.execute(text("select pg_advisory_unlock(hashtext(:k))"), {"k": "job:" + uid})
+            lease.commit()
+
+
+async def _execute_job_body(uid):
     with db.connect() as conn:
         row = conn.execute(text("select payload, finished_at from app.task_outbox where uid=:u"), {"u": uid}).first()
     if not row: raise errors.not_found("job")
@@ -57,7 +102,10 @@ async def execute_job(uid):
     payload = row.payload
     from .pipelines import runs
     run = await run_in_threadpool(runs.get, uid)
-    if run and run["state"] in ("done", "cancelled", "failed"):
+    if run and run["state"] == "failed":
+        await run_in_threadpool(_dead_letter, uid, "run_failed")
+        return {"completed": False, "dead_letter": True}
+    if run and run["state"] in ("done", "cancelled"):
         await run_in_threadpool(_finished, uid)
         return {"completed": True}
     if run and run.get("cancel_requested_at"):
@@ -80,8 +128,15 @@ async def execute_job(uid):
             response = await client.post(payload["path"] + ("?" + payload["query"] if payload["query"] else ""),
                                          content=raw, headers=payload["headers"])
             if response.status_code >= 400:
-                raise errors.Problem("job_execution_unavailable", 503, "Job not committed",
-                                     "Task execution can be retried.", "งานยังไม่สำเร็จ ระบบจะลองใหม่", "DEBT-JOB-503")
+                try:
+                    detail = response.json()
+                except ValueError:
+                    detail = {}
+                retryable = response.status_code >= 500 or response.status_code in (408, 425, 429) or bool(detail.get("retryable"))
+                raise errors.Problem(detail.get("code", "job_execution_refused"), response.status_code,
+                                     "Job not committed", "The API refused the task execution.",
+                                     "งานยังไม่สำเร็จ กรุณาตรวจสอบสถานะงาน", "DEBT-JOB-%s" % response.status_code,
+                                     retryable=retryable)
     finally: WORKER_RUN.reset(token)
     await run_in_threadpool(_finished, uid)
     return {"completed": True}
@@ -89,4 +144,33 @@ async def execute_job(uid):
 
 def _finished(uid):
     with db.connect() as conn, conn.begin():
-        conn.execute(text("update app.task_outbox set finished_at=now() where uid=:u"), {"u": uid})
+        name = conn.execute(text("update app.task_outbox set finished_at=now(),next_attempt_at=null "
+                                 "where uid=:u returning payload->>'object_name'"), {"u": uid}).scalar()
+    # Database commit precedes removal: a rolled-back business write must retain
+    # its replay input. Cleanup failure is recoverable by the retention sweep.
+    if name:
+        try:
+            task_objects.delete(name)
+        except Exception as exc:
+            print(json.dumps({"event": "job_input_cleanup_deferred", "cause": type(exc).__name__}), flush=True)
+
+
+def _retry(uid, code, delay):
+    with db.connect() as conn, conn.begin():
+        conn.execute(text("update app.task_outbox set last_error_code=:e,"
+                          "next_attempt_at=now()+:d * interval '1 second' where uid=:u"),
+                     {"u": uid, "e": code, "d": delay})
+
+
+def _dead_letter(uid, code):
+    problem = {"code": "job_dead_letter", "status": 422, "retryable": False,
+               "detail": "Task requires operator review before a new submission.",
+               "message_th": "งานหยุดแล้ว กรุณาให้ผู้ดูแลตรวจสอบก่อนส่งงานใหม่", "cause": code}
+    with db.connect() as conn, conn.begin():
+        conn.execute(text("update app.task_outbox set finished_at=now(),dead_lettered_at=now(),"
+                          "last_error_code=:e,next_attempt_at=null where uid=:u"), {"u": uid, "e": code})
+        conn.execute(text("update app.operation_run set payload=payload || cast(:p as jsonb),updated_at=now() "
+                          "where uid=:u and coalesce(payload->>'state','') not in ('done','cancelled')"),
+                     {"u": uid, "p": json.dumps({"state": "failed", "phase": "failed", "problem": problem,
+                                                 "finished_at": time.time()})})
+    print(json.dumps({"event": "job_dead_letter", "job_uid": uid, "cause": code}), flush=True)

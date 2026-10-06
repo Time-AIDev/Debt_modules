@@ -385,6 +385,7 @@ def label_for(band_set_code, band_code, lang="th"):
 
 
 STATUS_LABEL_TH = {
+    "EVIDENCE_UNVERIFIED": "รอตรวจสอบยอด",
     "NPL_CONFIRMED": "NPL ยืนยันแล้ว",
     "RESOLVED": "ปิดแล้ว",
     "CLOSED": "ปิดสัญญา",
@@ -393,6 +394,7 @@ STATUS_LABEL_TH = {
     "TERMINATED": "ยุติสัญญา",
 }
 STATUS_LABEL_EN = {
+    "EVIDENCE_UNVERIFIED": "Balance awaiting review",
     "NPL_CONFIRMED": "NPL confirmed",
     "RESOLVED": "Resolved",
     "CLOSED": "Contract closed",
@@ -505,6 +507,8 @@ def resolve_band(status, dpd, band_set_code) -> Band:
     # Status still wins over the number, and the set still travels with the answer.
     if status in STATUS_OVERRIDE:
         return Band(STATUS_OVERRIDE[status], band_set_code)
+    if status == "EVIDENCE_UNVERIFIED":
+        return Band("EVIDENCE_UNVERIFIED", band_set_code)
     if dpd is None:
         return Band(None, band_set_code)
 

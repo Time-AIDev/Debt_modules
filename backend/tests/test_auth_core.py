@@ -127,6 +127,22 @@ def test_session_idle_and_absolute_expiry():
     assert auth.read_session(token, SECRET.encode(), now=auth.ABSOLUTE_SECONDS + 1) is None
 
 
+def test_configured_six_hour_idle_window_and_expiry_display(tmp_path):
+    config = auth.load_config(_environ(AUTH_IDLE_SECONDS=str(6 * 60 * 60)), env_file=tmp_path / "x")
+    auth.set_config(config)
+    session = auth.new_session("tester", "TEST", "OFFICER", "nantapol", False, now=0)
+    token = auth.sign_session(session, SECRET.encode())
+    assert auth.read_session(token, SECRET.encode(), now=6 * 60 * 60) == session
+    assert auth.read_session(token, SECRET.encode(), now=6 * 60 * 60 + 1) is None
+    assert auth.me_payload(session)["expires_at"] == 6 * 60 * 60
+
+
+@pytest.mark.parametrize("value", ["0", "-1", "abc", "28801"])
+def test_invalid_idle_window_refuses_startup(tmp_path, value):
+    with pytest.raises(auth.AuthConfigError, match="AUTH_IDLE_SECONDS"):
+        auth.load_config(_environ(AUTH_IDLE_SECONDS=value), env_file=tmp_path / "x")
+
+
 def test_lockout_after_five_failures_and_release_after_fifteen_minutes():
     for i in range(4):
         auth.record_failure("tester", now=100 + i)

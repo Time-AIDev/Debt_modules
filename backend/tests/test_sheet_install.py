@@ -5,6 +5,8 @@ and ids under the importer's own headers; the real sheet holds real customers.
 import io
 import re
 import zipfile
+import threading
+import time
 from datetime import date
 
 import pytest
@@ -12,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app import book, db, imports, journey, main, migrate
 from app.main import app
+from app.pipelines import runs
 from tests.test_round5_data_flow import _xlsx_bytes_multi
 
 XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -255,3 +258,111 @@ def test_a_tenth_of_the_book_may_leave_without_a_confirmation(client, landed_db)
     assert r.status_code == 422 and r.json()["extensions"]["retire"]["customers"] == 2
     r = _post(client, _leasing_book(10), install=True, headers=MANAGER)       # 1 of 11: no question
     assert r.status_code == 200 and r.json()["install"]["retired"] == 1
+
+
+def _await_import(client, uid):
+    deadline = time.monotonic() + 10
+    while time.monotonic() < deadline:
+        response = client.get("/v1/operation-runs/%s" % uid)
+        assert response.status_code == 200, response.text
+        operation = response.json()
+        if operation["state"] in ("done", "failed", "cancelled"):
+            return operation
+        time.sleep(0.01)
+    pytest.fail("Import did not finish: %s" % operation)
+
+
+def _start_import(client, raw, install=False, confirm=None):
+    query = "?install=true" if install else ""
+    if confirm is not None:
+        query += "&confirm_retire=%d" % confirm
+    response = client.post("/v1/imports:start" + query, content=raw,
+                           headers={"X-Volt-Filename": "synthetic.xlsx", "Content-Type": XLSX, **MANAGER})
+    assert response.status_code == 202, response.text
+    return response.json()["uid"]
+
+
+def test_async_sheet_check_reports_real_parser_progress_and_completes(client, monkeypatch):
+    progress = []
+    original = runs.progress
+
+    def observe(uid, **fields):
+        original(uid, **fields)
+        if fields.get("phase") == "parsing" and fields.get("phase_total") is not None:
+            snapshot = runs.get(uid)
+            progress.append((snapshot["processed"], snapshot["phase_total"]))
+
+    monkeypatch.setattr(runs, "progress", observe)
+    operation = _await_import(client, _start_import(client, _workbook()))
+    assert operation["state"] == "done", operation["problem"]
+    assert progress == [(1, 2), (2, 2)]
+    report = operation["result"]
+    assert report["installed"] is False
+    assert report["counts"]["rows_imported"] == 4
+    assert report["counts"]["customers"] == 3
+    assert [s["kind"] for s in report["sheets"]] == ["LEASING_BOOK", "COLLECTION_TRACKING"]
+
+
+def test_async_sheet_install_requires_the_exact_retirement_confirmation(client, landed_db):
+    from sqlalchemy import text
+
+    installed = _await_import(client, _start_import(client, _workbook(), install=True))
+    assert installed["state"] == "done", installed
+    assert installed["result"]["install"]["customers"] == 3
+    smaller = _workbook(leasing=(K1,), tracked=())
+    checked = _await_import(client, _start_import(client, smaller))
+    assert checked["state"] == "done", checked
+    assert checked["result"]["retire"] == {
+        "customers": 2, "live": 3, "dropped_tabs": ["tracking"], "needs_confirm": True}
+    for confirm in (None, 1):
+        refused = _await_import(client, _start_import(client, smaller, install=True, confirm=confirm))
+        assert refused["state"] == "failed", refused
+        assert refused["problem"]["code"] == "install_would_retire"
+        assert landed_db.execute(text(
+            "select count(*) from landing.customer where data_source='SHEET' and retired_at is null"
+        )).scalar_one() == 3
+    confirmed = _await_import(client, _start_import(client, smaller, install=True, confirm=2))
+    assert confirmed["state"] == "done", confirmed
+    assert confirmed["result"]["installed"] is True
+    assert confirmed["result"]["install"]["retired"] == 2
+    assert {c.volt_id for c in main.CUSTOMERS} == {K1}
+
+
+def test_async_sheet_cancel_before_commit_rolls_back_the_install(client, landed_db, monkeypatch):
+    from sqlalchemy import text
+
+    reached_commit = threading.Event()
+    install_exited = threading.Event()
+    release = threading.Event()
+    original = imports.install
+
+    def pause_install(payload, confirm_retire=None, before_commit=None):
+        commit_callback = before_commit
+
+        def pause():
+            reached_commit.set()
+            assert release.wait(10), "Test did not release the commit boundary"
+            commit_callback()
+
+        try:
+            return original(payload, confirm_retire, before_commit=pause)
+        finally:
+            install_exited.set()
+
+    monkeypatch.setattr(imports, "install", pause_install)
+    uid = _start_import(client, _workbook(), install=True)
+    try:
+        assert reached_commit.wait(10), runs.get(uid)
+        stopped = client.post("/v1/operation-runs/%s:cancel" % uid)
+        assert stopped.status_code == 200, stopped.text
+        assert stopped.json()["state"] == "cancel_requested"
+    finally:
+        release.set()
+        operation = _await_import(client, uid)
+        if reached_commit.is_set():
+            assert install_exited.wait(10), "Install did not finish rolling back"
+    assert operation["state"] == "cancelled", operation
+    assert operation["committed"] is False
+    assert landed_db.execute(text("select count(*) from landing.customer")).scalar_one() == 0
+    assert landed_db.execute(text("select count(*) from landing.import_run")).scalar_one() == 0
+    assert client.get("/v1/imports").json()["meta"]["total"] == 0

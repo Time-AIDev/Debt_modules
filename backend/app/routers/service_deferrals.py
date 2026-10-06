@@ -1,7 +1,7 @@
 """Officers confirm service deferrals; accounting review is tracked separately."""
 from fastapi import APIRouter, Body, Header, Query
 
-from .. import audit, officers, service_deferrals as domain
+from .. import audit, officers, payment_claims, service_deferrals as domain
 
 router = APIRouter(prefix="/v1/contracts/{contract_uid}/service-deferrals")
 queue_router = APIRouter()
@@ -33,7 +33,10 @@ def confirm(contract_uid: str, body: dict = Body(...), x_volt_role: str = Header
             x_volt_officer: str = Header(default=None)):
     by, role = actor(x_volt_role, x_volt_officer)
     audit.describe(act="SERVICE_INSTALMENTS_DEFERRED", subject=("contract", contract_uid))
-    return {"deferral": domain.confirm(contract_uid, body, by, role)}
+    result = domain.confirm(contract_uid, body, by, role)
+    reconciliation = payment_claims.reconcile_current("service_deferral_confirmed")
+    audit.describe(detail={"reconciliation": reconciliation})
+    return {"deferral": result, "reconciliation": reconciliation}
 
 
 @router.post("/{uid}/reverse-preview")
@@ -48,7 +51,10 @@ def reverse(contract_uid: str, uid: str, body: dict = Body(...),
             x_volt_role: str = Header(default="OFFICER"), x_volt_officer: str = Header(default=None)):
     by, role = actor(x_volt_role, x_volt_officer)
     audit.describe(act="SERVICE_DEFERRAL_REVERSED", subject=("contract", contract_uid))
-    return {"deferral": domain.reverse(contract_uid, uid, body, by, role)}
+    result = domain.reverse(contract_uid, uid, body, by, role)
+    reconciliation = payment_claims.reconcile_current("service_deferral_reversed")
+    audit.describe(detail={"reconciliation": reconciliation})
+    return {"deferral": result, "reconciliation": reconciliation}
 
 
 @router.post("/{uid}/accounting-review")

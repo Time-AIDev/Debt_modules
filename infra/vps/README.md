@@ -1,7 +1,7 @@
 # Debt Platform SSH server
 
 Server: `debt-production` / `143.198.207.143`. Source directory:
-`/srv/volt-debt-platform`. Intended domain: `debtcollection.volt.co.th`.
+`/srv/volt-debt-platform`. Intended domain: `collection.volt.co.th`.
 
 The Compose deployment prepares PostgreSQL 16 and application images. It is a
 single-server deployment, without the regional HA described in `infra/production`.
@@ -48,17 +48,17 @@ Do not push these snapshots to replace the GitHub repository.
 
 ## Domain setup — 2026-10-05
 
-Caddy is running with `debtcollection.volt.co.th` and the existing temporary
+Caddy is running with `collection.volt.co.th` and the existing temporary
 `debt.143-198-207-143.sslip.io` hostname. Ports 80 and 443 are published; Docker
 and containers are configured to restart automatically.
 
-Create DNS A record `debtcollection.volt.co.th` → `143.198.207.143` (host label
-`debtcollection` in the `volt.co.th` zone). Do not add an AAAA record: this server
+Create DNS A record `collection.volt.co.th` → `143.198.207.143` (host label
+`collection` in the `volt.co.th` zone). Do not add an AAAA record: this server
 has no global IPv6 address. Caddy obtains and renews the HTTPS certificate
 automatically once public DNS resolves to this server and ports 80/443 are reachable.
 Certificate issuance and HTTPS on the new hostname remain pending DNS.
 
-Add `https://debtcollection.volt.co.th` to the existing Google OAuth client's
+Add `https://collection.volt.co.th` to the existing Google OAuth client's
 Authorized JavaScript origins before using Google sign-in on the new hostname.
 The OAuth client itself is managed outside this server.
 
@@ -109,3 +109,41 @@ Before go-live: add the production DNS A record, verify its certificate and actu
 Google sign-in, validate roles/workflows and load, and provide an independent
 backup destination and incident notification contact. The current local backup
 does not survive loss of this VPS. Maintenance remains enabled.
+
+
+## Shared release workflow — 2026-10-06
+
+The current target is `https://collection.volt.co.th` on `143.198.207.143`.
+Use `scripts/release.sh` for dev, staging and production; `infra/runtime/README.md`
+describes isolated local stacks. `scripts/runtime_env.py` and
+`backend/app/runtime_policy.py` supply common limits, session policy, disabled
+external financial writes, durable state and worker health. The legacy GCP UAT
+script requires explicit `LEGACY_GCP_UAT=1` and retains its compatibility model.
+
+Build once from the canonical locked Dockerfiles and promote exact image digests.
+Pass `VOLT_GIT_REVISION` as a build argument and keep the tested Git commit.
+Production release performs a read-only preflight (`--check`), keeps maintenance
+while migrating and testing the candidate, and opens traffic only with `--go-live`.
+Always pass a rollback API compatible with additive schema version2; never
+point an old version1-only readiness image at schema2 and call rollback healthy.
+
+The k6 scenario is `tests/load/production.js`. It operates on a separately seeded
+synthetic database through genuine auth, transaction, case-note writes and
+idempotent retries. Private load credentials remain outside Git. Record cold
+first-request/priming separately from steady workload. The DOCX generator
+`scripts/build_production_report.py` reads JSON/JUnit evidence without inventing
+successful results; final artifacts are under `reports/production-20261006`.
+
+The production Google OAuth client administrator must add
+`https://collection.volt.co.th` as an authorized JavaScript origin. A browser
+smoke test found an origin-denied error; displaying the login page or obtaining
+HTTP200 does not prove Google login works. Do not open the maintenance gate until
+that browser check passes.
+
+The backup now persists paused-writer IDs, and recovery uses the same backup lock
+at boot/every minute to resume writers after an interrupted capture. Off-server
+backup export requires `age`, configured `rclone`, an off-server public encryption
+recipient and a passed restore. Export verifies remote bytes and binds its proof
+to this backup's manifests. Pruning defaults to preview and only removes old
+verified-offsite backups; it preserves a minimum recovery set. An external backup
+recipient/destination and incident receiver are still operator configuration.

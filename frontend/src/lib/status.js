@@ -198,7 +198,7 @@ export function reconStatus(row) {
  * OVERDUE · UPCOMING · NO_AMOUNT, + partly_paid) and the sheet month grid (PAID · LATE
  * · LINK_SENT · CLOSED · empty). Any other sheet kind looks "not due" and says its code.
  */
-const CELL = { PAID: 'paid', OVERDUE: 'late', LATE: 'late', UPCOMING: 'notdue', NO_AMOUNT: 'notdue', LINK_SENT: 'link', CLOSED: 'closed' }
+const CELL = { REJECTED: 'rejected', INFERRED_PAID: 'inferred', SHEET_REPORTED_PAID: 'reported', UNCONFIRMED: 'unconfirmed', PAID: 'paid', OVERDUE: 'late', LATE: 'late', UPCOMING: 'notdue', NO_AMOUNT: 'notdue', LINK_SENT: 'link', CLOSED: 'closed' }
 export function cellStatus(code, partly = false) {
   if (partly) return { kind: 'part', key: 'status.cell.part' }
   if (!code) return { kind: 'notdue', key: 'status.cell.notdue' }

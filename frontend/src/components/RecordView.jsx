@@ -15,13 +15,15 @@ import { StatusIcon, StatusPill, NeutralChip } from './StatusIcon.jsx'
 import { Icon } from './Icon.jsx'
 import { InfoPopover } from './InfoPopover.jsx'
 import { PhoneLine } from './PhoneLine.jsx'
+import { CustomerIdentity } from './CustomerIdentity.jsx'
+import { InvoiceReviews } from './InvoiceReviews.jsx'
 import { TerminateDrawer } from './TerminateDrawer.jsx'
 import { MoveDrawer } from './MoveDrawer.jsx'
 import { DataTable } from './DataTable.jsx'
 import { ManualInvoiceMatch } from './ManualInvoiceMatch.jsx'
 import { PreInstallCard } from './PreInstallCard.jsx'
 import { CycleGrid } from './CycleGrid.jsx'
-import { ServiceDeferrals } from './ServiceDeferrals.jsx'
+import { ServiceDeferrals, InvoiceDeferral } from './ServiceDeferrals.jsx'
 import { OfficerScoreboard } from './OfficerScoreboard.jsx'
 import { ContractDetailsDrawer } from './ContractDetailsDrawer.jsx'
 import { SocialComposer } from './SocialComposer.jsx'
@@ -88,7 +90,6 @@ function IdentityOnlyRecord({ data, mode, onClose }) {
   const word = useWord()
   const customer = data.customer || {}
   const crm = customer.odoo_crm
-  const ids = [customer.volt_id, customer.customer_no].filter(Boolean).join(' · ')
   const order = data.order || {}
   const facts = [
     [t('record.orderStage'), order.order_status],
@@ -117,7 +118,7 @@ function IdentityOnlyRecord({ data, mode, onClose }) {
             <a className="case__odooLink" href={crm.url} target="_blank" rel="noopener noreferrer">{customer.display_name}</a>
           ) : customer.display_name}</h1></div>
           <div className="case__idRow">
-            {crm?.url && ids ? <a className="case__odooLink num" href={crm.url} target="_blank" rel="noopener noreferrer">{ids}</a> : <span className="num">{ids}</span>}
+            <CustomerIdentity customer={customer} />
           </div>
         </div>
       </header>
@@ -362,17 +363,22 @@ export function RecordView({
   const kase = data.case || {}
   const customer = data.customer || {}
   const crm = customer.odoo_crm
-  const customerIds = [customer.volt_id, customer.customer_no].filter(Boolean).join(' · ')
   const work = data.work_item || {}
   const mp = work.money_position || {}
   const summary = data.payment_summary
   const totals = summary?.totals || {}
+  const displayInstalments = summary?.display_instalments
   const instalmentTotals = totals.breakdown?.instalment
-  const instalmentCount = instalmentTotals?.count ?? totals.cycle_count
+  const instalmentCount = displayInstalments?.total_count ?? instalmentTotals?.count ?? totals.cycle_count
   const instalmentCounts = instalmentTotals?.counts ?? totals.counts
-  const instalmentRemaining = instalmentTotals?.remaining_count ?? totals.remaining_count
+  const instalmentPaid = displayInstalments?.paid_count ?? instalmentTotals?.display_paid_count ?? instalmentCounts?.PAID ?? 0
+  const instalmentUnverifiedPaid = displayInstalments?.unverified_paid_count ?? instalmentTotals?.unverified_paid_count ?? 0
+  const instalmentRemaining = displayInstalments?.remaining_count ?? instalmentTotals?.display_remaining_count ?? instalmentTotals?.remaining_count ?? totals.remaining_count
   const overdue = totals.overdue_amount ?? work.aggregate_overdue
-  const balance = totals.outstanding_amount ?? work.aggregate_outstanding
+  const hasCash = (data.contracts || []).some((contract) => contract.product === 'CASH')
+  const balance = totals.due_outstanding_amount ?? (hasCash && displayInstalments ? displayInstalments.contract_outstanding : totals.outstanding_amount ?? work.aggregate_outstanding)
+  const peakBalanceDiffers = hasCash && displayInstalments?.peak_balance_complete && displayInstalments?.peak_outstanding != null
+    && displayInstalments.peak_outstanding !== displayInstalments.contract_outstanding
   const dpd = work.oldest_dpd
   const bandLabel = lang === 'en' ? work.aging_bucket_label_en : work.aging_bucket_label_th
   const assessmentHold = kase.npl_assessment?.assessment_hold
@@ -386,6 +392,9 @@ export function RecordView({
   const first = (data.contracts || [])[0]
   const pp = work.payment_position || {}
   const manager = atLeast('MANAGER')
+  const canTerminate = ['OFFICER', 'SUPERVISOR', 'MANAGER', 'OWNER'].includes(identity.role)
+  const hasLiveContract = (data.contracts || []).some((contract) =>
+    !['CLOSED', 'WRITTEN_OFF', 'TERMINATED', 'CANCELLED'].includes(contract.status))
   const pay = paymentStatus(kase.payment_status)
   const system = kase.payment_status_confirmed || kase.payment_status_system
   const biz = businessDate || businessDateOf(data)
@@ -397,7 +406,8 @@ export function RecordView({
   // are known only from PEAK — said beside the days overdue.
   const capturedNote = kase.sheet_captured_on && biz && kase.sheet_captured_on < biz
     ? t('data.sheetCapturedOn', { on: fmtDate(kase.sheet_captured_on) }) : ''
-  const provenance = summary ? ((lang === 'en' ? summary.provenance_en : summary.provenance_th) || t('record.cycleNote')) : ''
+  const provenance = summary ? ((lang === 'en' ? displayInstalments?.provenance_en : displayInstalments?.provenance_th)
+    || (lang === 'en' ? summary.provenance_en : summary.provenance_th) || t('record.cycleNote')) : ''
   const actName = (s) => (lang === 'en' ? s.act_en : s.act_th)
 
   const contacts = data.contact_log || []
@@ -420,7 +430,10 @@ export function RecordView({
   const facts = [
     {
       key: 'paid', label: t('record.paidOfTotal'), big: true,
-      value: scheduled ? `${instalmentCounts?.PAID ?? 0} / ${instalmentCount}` : '—',
+      value: scheduled ? <><span>{`${instalmentPaid} / ${instalmentCount}`}</span>
+        {instalmentUnverifiedPaid > 0 ? <small className="case__unverifiedPaid" title={t('record.unverifiedPaidNote')}>
+          {t('record.unverifiedPaid', { n: instalmentUnverifiedPaid })}
+        </small> : null}</> : '—',
       sub: instalmentRemaining != null ? t('record.remainingNote', { n: instalmentRemaining }) : t('record.noSchedule'),
     },
     {
@@ -429,11 +442,16 @@ export function RecordView({
         ? t('record.pmtNote', { n: first.term_months }) + (data.contract_count > 1 ? ` · ${t('record.contracts', { n: data.contract_count })}` : '')
         : '',
     },
-    { key: 'overdueCycles', label: t('record.overdueCycles'), value: instalmentCounts?.OVERDUE ?? '—', title: t('record.overdueCyclesNote') },
+    { key: 'overdueCycles', label: t('record.overdueCycles'), value: displayInstalments?.overdue_count ?? instalmentCounts?.OVERDUE ?? '—', title: t('record.overdueCyclesNote') },
     { key: 'arrears', label: t('record.arrears'), value: money(overdue), sub: work.installments_note || '', title: t('record.arrearsNote') },
     { key: 'age', label: t('record.age'), value: dpd === null || dpd === undefined ? t('today.dpdNone') : `DPD ${dpd}`,
       sub: [bandLabel, assessmentHold, capturedNote].filter(Boolean).join(' · ') },
-    { key: 'balance', label: t('record.balance'), value: money(balance), title: t('record.balanceNote') },
+    { key: 'balance', label: t('record.balance'), value: money(balance),
+      sub: totals.due_outstanding_amount !== undefined ? [
+        t('invoiceReview.future', { amount: money(totals.future_outstanding_amount) }),
+        t('invoiceReview.contractBalance', { amount: money(work.contract_outstanding ?? totals.outstanding_amount) }),
+      ].join(' · ') : peakBalanceDiffers ? t('record.peakBalanceDiff', { amount: money(displayInstalments.peak_outstanding) }) : '',
+      title: t('record.balanceNote') },
     { key: 'asked', label: t('record.asked'), value: money(mp.amount_to_ask), sub: mp.amount_to_ask != null ? t('record.askedNote') : '' },
     {
       key: 'penalty', label: t('record.penalty'), value: money(mp.penalty_accrued_unbilled),
@@ -582,7 +600,7 @@ export function RecordView({
           <SourceChip source={customer.data_source} />
         </div>
         <div className="case__idRow">
-          {crm?.url && customerIds ? <a className="case__odooLink num" href={crm.url} target="_blank" rel="noopener noreferrer">{customerIds}</a> : <span className="num">{customerIds}</span>}
+          <CustomerIdentity customer={customer} />
           <span className="case__idPart"><span aria-hidden="true">·</span>{t('record.officerLine', { name: officerName(customer.officer) })}</span>
           <span className="case__idPart"><span aria-hidden="true">·</span><PhoneLine key={customer.uid} customer={customer} /></span>
         </div>
@@ -632,10 +650,9 @@ export function RecordView({
             </button>
           ) : null}
           <span className="case__spacer" />
-          {/* Below MANAGER the act stays visible and disabled with its reason (GUD-002). */}
-          {kase.payment_status !== 'TERMINATED' ? (
-            <button type="button" className="btn btn--danger" disabled={!manager}
-                    title={manager ? undefined : t('record.adjustStageManagerOnly')}
+          {hasLiveContract ? (
+            <button type="button" className="btn btn--danger" disabled={!canTerminate}
+                    title={canTerminate ? undefined : t('record.terminateRoleOnly')}
                     onClick={() => setTerminateOpen(true)}>
               {t('record.terminate')}
             </button>
@@ -663,6 +680,7 @@ export function RecordView({
                      problem={ptpProblem?.at === 'todo' ? ptpProblem.problem : null}
                      onClosePaid={() => closePaidPromise('todo')} />
 
+        {mp.review_required ? <p className="case__rowNote">{t('schedule.confirmedOnly')}</p> : null}
         <section className="case__facts" aria-label={t('record.fields')}>
           {facts.map((f) => (
             <div key={f.key} className={`case__fact${f.big ? ' case__fact--key' : ''}`} title={f.title}>
@@ -805,7 +823,7 @@ export function RecordView({
               <PreInstallCard item={data.pipeline_item} meta={data.pipeline_meta} onChanged={onChanged}
                               heading="preinstall.heading" evidenceOpen={false} />
             ) : null}
-            <Card title={t('record.tabInvoices')} extra={<InfoPopover>{t('record.peakNote')}</InfoPopover>}>
+            <Card title={t('record.tabInvoices')} extra={<InvoiceReviews data={data} onChanged={onChanged} />}>
               {invoices.length === 0 ? <p className="case__empty case__pad">{t('record.noInvoices')}</p> : (
                 <DataTable
                   caption={t('record.tabInvoices')}
@@ -820,18 +838,18 @@ export function RecordView({
                       // served one, the request rides its note (fixes the early-move gap).
                       key: 'due', label: t('record.invDue'),
                       render: (r) => <span className="num" title={(lang === 'en' ? r.amended_due_note_en : r.amended_due_note_th) || undefined}>
-                        {fmtDate(r.due_date)}{r.service_deferral ? <small className="case__rowNote">
+                        {fmtDate(r.due_date)}{r.schedule_due_date && r.schedule_due_date !== r.due_date ? <small className="case__rowNote">{t('schedule.scheduleDate', { date: fmtDate(r.schedule_due_date) })}</small> : null}{r.service_deferral ? <small className="case__rowNote">
                           {t('deferral.collectionDue')}: {fmtDate(r.collection_due_date)}</small> : null}</span>,
                     },
-                    { key: 'confirmedPaid', label: t('record.invConfirmedPaid'), num: true, render: (r) => money(r.confirmed_paid || 0) },
+                    { key: 'confirmedPaid', label: t('record.invConfirmedPaid'), num: true, render: (r) => r.payment_evidence === 'UNCONFIRMED' ? '—' : money(r.confirmed_paid || 0) },
                     { key: 'pending', label: t('record.invPending'), num: true, render: (r) => money(r.pending_amount || 0) },
-                    { key: 'outstanding', label: t('record.invOutstanding'), num: true, render: (r) => money(r.confirmed_outstanding ?? r.outstanding) },
+                    { key: 'outstanding', label: t('record.invOutstanding'), num: true, render: (r) => (r.payment_evidence === 'UNCONFIRMED' || r.liability_verified === false) ? '—' : money(r.confirmed_outstanding ?? r.outstanding) },
                     { key: 'change', label: t('record.invChange'), num: true,
-                      render: (r) => `${money(r.confirmed_outstanding ?? r.outstanding)} → ${money(r.projected_outstanding ?? r.outstanding)}` },
-                    { key: 'state', label: t('record.invState'), render: (r) => { const s = invoiceStatus(r.state); return <StatusPill kind={s.kind}>{t(s.key)}</StatusPill> } },
-                    { key: 'link', label: t('record.invLink'), render: (r) => (r.link_sent ? t('record.linkSent') : r.payment_link_state === 'PEAK_QR' ? t('record.linkReady') : t('record.linkNone')) },
+                      render: (r) => (r.payment_evidence === 'UNCONFIRMED' || r.liability_verified === false) ? '—' : `${money(r.confirmed_outstanding ?? r.outstanding)} → ${money(r.projected_outstanding ?? r.outstanding)}` },
+                    { key: 'state', label: t('record.invState'), render: (r) => { const s = invoiceStatus(r.collection_state || r.state); return <span><StatusPill kind={(r.payment_evidence === 'UNCONFIRMED' || r.liability_verified === false) ? 'notdue' : s.kind}>{r.payment_evidence === 'UNCONFIRMED' ? t('schedule.evidence.UNCONFIRMED') : r.liability_verified === false ? t('schedule.receiptOnly') : t(s.key)}</StatusPill>{r.unmatched_reason ? <small className="case__rowNote">{t(`schedule.reason.${r.unmatched_reason}`)}</small> : null}</span> } },
+                    { key: 'deferral', label: t('deferral.create'), render: (r) => <InvoiceDeferral invoice={r} data={data} onChanged={onChanged} /> },
                     { key: 'peak', label: t('record.invPeak'), render: (r) => r.peak_number || '—' },
-                    { key: 'cycle', label: t('record.invCycle'), render: (r) => (r.month_index ? `M${r.month_index}` : '—') },
+                    { key: 'cycle', label: t('record.invCycle'), render: (r) => ('contract_cycle' in r ? (r.contract_cycle ? `M${r.contract_cycle}` : '—') : (r.month_index ? `M${r.month_index}` : '—')) },
                     {
                       key: 'receipt', label: t('record.invReceipt'),
                       render: (r) => {
@@ -842,6 +860,7 @@ export function RecordView({
                         return `${rcp.ref || '—'} · ${rcp.received_on ? fmtDate(String(rcp.received_on).slice(0, 10)) : '—'}`
                       },
                     },
+                    { key: 'review', label: t('invoiceReview.title'), render: (r) => <InvoiceReviews invoice={r} data={data} onChanged={onChanged} /> },
                   ]}
                 />
               )}
@@ -908,11 +927,12 @@ export function RecordView({
         </div>
       </div>
 
-      {manager ? (
+      {canTerminate ? (
         <TerminateDrawer
           open={terminateOpen}
           onClose={() => setTerminateOpen(false)}
           customerUid={customer.uid}
+          outstanding={balance}
           onDone={onChanged}
         />
       ) : null}

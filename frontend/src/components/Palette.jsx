@@ -6,6 +6,7 @@ import { NAV_GROUPS } from '../lib/nav.js'
 import { invoiceStatus } from '../lib/status.js'
 import { StatusIcon } from './StatusIcon.jsx'
 import { internalOrigin, recordState } from '../lib/origin.js'
+import { money } from '../lib/format.js'
 
 const MATCH_FIELD = {
   volt_id: 'volt_id',
@@ -31,17 +32,13 @@ export function Palette({ open, onClose }) {
   const [query, setQuery] = useState('')
   const [customers, setCustomers] = useState([])
   const [index, setIndex] = useState(0)
-  const [preview, setPreview] = useState(null)
+  const [previewUid, setPreviewUid] = useState(null)
+  const [invoiceResults, setInvoiceResults] = useState({})
   const inputRef = useRef(null)
-  const previewUidRef = useRef(null)
-  const previewRequestRef = useRef(null)
-  const previewCacheRef = useRef(new Map())
+  const preview = previewUid ? { uid: previewUid, ...(invoiceResults[previewUid] || { state: 'loading' }) } : null
 
   function closePreview() {
-    previewUidRef.current = null
-    previewRequestRef.current?.abort()
-    previewRequestRef.current = null
-    setPreview(null)
+    setPreviewUid(null)
   }
 
   useEffect(() => {
@@ -49,7 +46,7 @@ export function Palette({ open, onClose }) {
     setQuery('')
     setCustomers([])
     setIndex(0)
-    previewCacheRef.current.clear()
+    setInvoiceResults({})
     closePreview()
     const id = setTimeout(() => inputRef.current?.focus(), 0)
     return () => clearTimeout(id)
@@ -76,6 +73,26 @@ export function Palette({ open, onClose }) {
       controller.abort()
     }
   }, [open, query])
+
+  useEffect(() => {
+    setInvoiceResults({})
+    if (!open || !customers.length) return undefined
+    const controller = new AbortController()
+    // Fetch once per search hit; the card totals and expanded list share the result.
+    customers.forEach((customer) => {
+      const uid = customer.customer_uid
+      api.customerInvoiceStatuses(uid, { include_all: true }, { signal: controller.signal }).then((data) => {
+        if (controller.signal.aborted) return
+        setInvoiceResults((current) => ({ ...current, [uid]: {
+          state: 'ready', items: data?.items || [], summary: data?.summary,
+        } }))
+      }).catch((error) => {
+        if (controller.signal.aborted || error?.name === 'AbortError') return
+        setInvoiceResults((current) => ({ ...current, [uid]: { state: 'error', items: [] } }))
+      })
+    })
+    return () => controller.abort()
+  }, [open, customers])
 
   const entries = useMemo(() => {
     const q = query.trim().toLocaleLowerCase()
@@ -110,33 +127,8 @@ export function Palette({ open, onClose }) {
   }, [query, customers, navigate, location, t, setTheme, theme, setDensity, density, setRailOpen, railOpen])
 
   useEffect(() => { setIndex(0) }, [query])
-  useEffect(() => () => previewRequestRef.current?.abort(), [])
-
   function showPreview(customer) {
-    const uid = customer.customer_uid
-    if (previewUidRef.current === uid) return
-    previewUidRef.current = uid
-    previewRequestRef.current?.abort()
-    const cached = previewCacheRef.current.get(uid)
-    if (cached) {
-      previewRequestRef.current = null
-      setPreview({ uid, state: 'ready', ...cached })
-      return
-    }
-    const controller = new AbortController()
-    previewRequestRef.current = controller
-    setPreview({ uid, state: 'loading', items: [], meta: {} })
-    api.customerInvoiceStatuses(uid, { limit: 5 }, { signal: controller.signal }).then((data) => {
-      if (controller.signal.aborted || previewUidRef.current !== uid) return
-      const result = { items: data?.items || [], meta: data?.meta || {} }
-      previewCacheRef.current.set(uid, result)
-      previewRequestRef.current = null
-      setPreview({ uid, state: 'ready', ...result })
-    }).catch((error) => {
-      if (controller.signal.aborted || previewUidRef.current !== uid || error?.name === 'AbortError') return
-      previewRequestRef.current = null
-      setPreview({ uid, state: 'error', items: [], meta: {} })
-    })
+    setPreviewUid(customer.customer_uid)
   }
 
   if (!open) return null
@@ -154,7 +146,7 @@ export function Palette({ open, onClose }) {
     if (preview.state === 'error') return <p id={panelId} role="status" className="palette__invoiceState palette__invoiceState--error">{t('palette.invoiceError')}</p>
     if (!preview.items.length) return <p id={panelId} role="status" className="palette__invoiceState">{t('palette.invoiceEmpty')}</p>
     return (
-      <div id={panelId} className="palette__invoicePopover" role="region" aria-label={t('palette.invoicePreview', { name: customer.display_name })}>
+      <div id={panelId} className="palette__invoicePopover" role="region" tabIndex={0} aria-label={t('palette.invoicePreview', { name: customer.display_name })}>
         <ul className="palette__invoiceList">
           {preview.items.map((invoice) => (
             <li key={invoice.uid}>
@@ -166,9 +158,6 @@ export function Palette({ open, onClose }) {
             </li>
           ))}
         </ul>
-        {preview.meta.has_more ? (
-          <p className="palette__invoiceMore">{t('palette.invoiceMore', { count: preview.meta.remaining })}</p>
-        ) : null}
       </div>
     )
   }
@@ -227,6 +216,10 @@ export function Palette({ open, onClose }) {
               >
                 <span className="chip chip--current">{entry.kind}</span>
                 <span className="palette__label">{entry.label}</span>
+                <span className="palette__balances">
+                  <span className="palette__balance palette__balance--paid">{t('palette.paid')} ฿{money(invoiceResults[entry.customer.customer_uid]?.summary?.paid)}</span>
+                  <span className="palette__balance palette__balance--outstanding">{t('palette.outstanding')} ฿{money(invoiceResults[entry.customer.customer_uid]?.summary?.outstanding)}</span>
+                </span>
                 <span className="palette__meta">{entry.meta}</span>
               </button>
               <button

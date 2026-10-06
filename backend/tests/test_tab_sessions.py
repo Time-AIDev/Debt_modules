@@ -78,3 +78,26 @@ def test_tab_mode_refuses_legacy_cookie_and_forged_bearer(tab_login):
     client.cookies.set(auth.COOKIE, signed)
     assert client.get("/v1/auth/me").status_code == 401
     assert client.get("/v1/auth/me", headers={"Authorization": "Bearer forged"}).status_code == 401
+
+
+def test_new_tab_session_has_configurable_absolute_expiry(tab_login, monkeypatch):
+    from dataclasses import replace
+    client, _ = tab_login
+    auth.set_config(replace(auth.current_config(), tab_absolute_seconds=60))
+    before = auth._now()
+    body = sign_in(client)
+    assert before + 59 <= body["expires_at"] <= before + 61
+    headers = {"Authorization": "Bearer " + body["session_token"]}
+    assert client.get("/v1/auth/me", headers=headers).status_code == 200
+    monkeypatch.setattr(auth, "_now", lambda: before + 62)
+    assert client.get("/v1/auth/me", headers=headers).status_code == 401
+
+
+def test_enabling_tab_ttl_does_not_rewrite_existing_credentials(tab_login):
+    from dataclasses import replace
+    client, _ = tab_login
+    original = sign_in(client)
+    auth.set_config(replace(auth.current_config(), tab_absolute_seconds=60))
+    response = client.get("/v1/auth/me", headers={"Authorization": "Bearer " + original["session_token"]})
+    assert response.status_code == 200
+    assert response.json()["expires_at"] is None

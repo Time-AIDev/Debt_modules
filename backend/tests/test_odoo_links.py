@@ -177,3 +177,33 @@ def test_an_odoo_sourced_row_links_by_its_own_lead_id(monkeypatch):
 
     assert _customer_odoo_crm(_customer("ODOO", crm_id="163354"))["record_id"] == 163354
     assert _customer_odoo_crm(_customer("ODOO", crm_id="28005004093")) is None
+
+
+def test_a_linked_sheet_identity_reads_the_exact_odoo_title(schema):
+    _sheet_customer(schema, 'VL0000143_Sheet_VOLT', 'VL0000143')
+    record = _odoo_record('VL0000143', '163354')
+    record['order']['odoo_lead_name'] = 'VL0000143_ชื่อจาก Odoo_VOLT'
+    writer.write(schema, [record], [], mode='NEW_ONLY', retire=True, refresh_source_rows=True)
+    assert odoo_links.names_for_customers(schema, ['VL0000143']) == {'VL0000143': 'VL0000143_ชื่อจาก Odoo_VOLT'}
+    schema.execute(text('update landing."order" set crm_id = :id where data_source = :src'), {'id': '999999', 'src': 'ODOO'})
+    assert odoo_links.names_for_customers(schema, ['VL0000143']) == {}
+
+
+def test_the_case_identity_serves_the_title_of_its_verified_odoo_lead(monkeypatch):
+    from app.routers.today import _customer_odoo_crm
+    monkeypatch.setenv("ODOO_URL", "https://odoo.example.com")
+    customer = _customer("SHEET", crm_id="28005004093", odoo_lead_id=163354)
+    customer.odoo_lead_name = "VL0000143_ชื่อจาก Odoo_VOLT"
+    assert _customer_odoo_crm(customer)["name"] == "VL0000143_ชื่อจาก Odoo_VOLT"
+    customer.odoo_lead_id = None
+    assert _customer_odoo_crm(customer) is None
+
+
+def test_a_newer_link_without_a_title_does_not_serve_the_older_lead_name(schema):
+    _sheet_customer(schema, "VL0000143_Sheet_VOLT", "VL0000143")
+    record = _odoo_record("VL0000143", "163354")
+    record["order"]["odoo_lead_name"] = "Old lead name"
+    writer.write(schema, [record], [], mode="NEW_ONLY", retire=True, refresh_source_rows=True)
+    odoo_links.reconcile(schema, {"VL0000144": ("VL0000143", 163355)}, retire=False)
+    assert odoo_links.active_for_customers(schema, ["VL0000143"]) == {"VL0000143": 163355}
+    assert odoo_links.names_for_customers(schema, ["VL0000143"]) == {}

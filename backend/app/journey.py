@@ -318,7 +318,11 @@ def missed_count(contract, as_of=None) -> int:
     as_of = as_of or settings.business_date
     # Ruling 49: session-scoped read — a session that has not restructured this
     # contract must not count missed instalments off another session's addendum.
-    from . import cases as cases_domain
+    from . import cases as cases_domain, instalment_evidence, payment_summary
+    if instalment_evidence.required(contract):
+        lines = instalment_evidence.collection_lines(contract, for_current(), payment_summary._active_lines(contract))
+        return len({(line.due_date.year, line.due_date.month) for line in lines
+                    if line.due_date < as_of and line.outstanding_amount > 0})
     return sum(
         1 for line in cases_domain.contract_field_of(contract, "instalments")
         if line.is_active_regular and line.due_date < as_of and line.outstanding_amount > 0
@@ -1162,9 +1166,9 @@ def _peak_contract_for(customer, inv):
         return contracts[0], True
     group = (inv.get("product_group") or "").lower()
     want = "CASH" if "cash" in group else ("LEASE" if "leas" in group else None)
-    for k in contracts:
-        if want and k.product == want:
-            return k, True
+    matches = [k for k in contracts if want and k.product == want]
+    if len(matches) == 1:
+        return matches[0], True
     return contracts[0], False
 
 
@@ -1225,12 +1229,19 @@ def _seed_peak_invoices(state, customer, peak, bd):
                            amount, due_on, state_code, scenario="PEAK",
                            issued_on=_date_or(row.get("issued_on"), due_on))
         inv["source"] = "PEAK_REPORT"
+        inv["report_as_of"] = peak.get("report_as_of")
         inv["peak_number"] = row["doc_no"]
         inv["peak_state"] = "APPROVED_IN_PEAK"
         inv["peak_state_note_th"] = note_th
         inv["peak_state_note_en"] = note_en
         inv["outstanding"] = str(Decimal(row.get("amount_awaiting") or "0").quantize(Decimal("0.01")))
+        from .instalment_evidence import service_period
+        service_month, conflict = service_period(row.get("lines") or [])
+        inv["service_month"] = row.get("service_month") or service_month
+        inv["service_month_conflict"] = row.get("service_month_conflict") or conflict
         inv["month_index"] = (row.get("cycle") or {}).get("n")
+        inv["source_due_date"] = row.get("due_on")
+        inv["due_date"] = row.get("due_on")
         inv["contract_resolved"] = resolved
         inv["link_sent"] = None                      # PEAK does not say; nothing is invented
         # stable id (fix round 1, I1): the SAME PEAK invoice reseeds onto the SAME uid.
@@ -1348,6 +1359,15 @@ def reseed_migrated_invoices(state, bd):
     """
     from .book import SHEET
     updated = added = flagged = 0
+    # Refresh observes one request's graph. Index its existing rows once instead
+    # of walking every customer's invoices/receipts for each contract. Keep row
+    # objects and insertion order; corrections still edit the same stable UID.
+    invoices_by_contract = {}
+    for uid, inv in state.invoices.items():
+        if inv.get("source") != "PEAK_REPORT":
+            invoices_by_contract.setdefault(inv.get("contract_uid"), []).append((uid, inv))
+    personal_receipts = {receipt.get("invoice_uid") for receipt in state.receipts.values()
+                         if receipt.get("source") not in PEAK_SOURCES}
     for customer in book_customers():
         if customer.data_source != SHEET or not customer.contracts:
             continue
@@ -1360,14 +1380,13 @@ def reseed_migrated_invoices(state, bd):
             lines = [l for l in contract.instalments
                      if getattr(l, "schedule_status", "ACTIVE") != "SUPERSEDED"]
             due = [l for l in lines if l.due_date <= bd and l.outstanding_amount > 0]
-            mine = [(uid, inv) for uid, inv in state.invoices.items()
-                    if inv.get("contract_uid") == contract.uid and inv.get("source") != "PEAK_REPORT"]
+            mine = list(invoices_by_contract.get(contract.uid, ()))
             if contract.product == "CASH":
                 mine = [(uid, inv) for uid, inv in mine if inv.get("kind") == "HANDOVER_BALANCE"]
                 for pos, line in enumerate(due):
                     if pos < len(mine):
                         uid, inv = mine[pos]
-                        if _person_receipt_on(state, uid):
+                        if uid in personal_receipts:
                             continue
                         if (str(inv.get("amount")) != str(line.total_amount)
                                 or str(inv.get("outstanding")) != str(line.outstanding_amount)):
@@ -1381,6 +1400,7 @@ def reseed_migrated_invoices(state, bd):
                                            "OVERDUE" if line.due_date < bd else "SENT",
                                            scenario="SHEET", issued_on=line.due_date - timedelta(days=7))
                         inv["outstanding"] = str(line.outstanding_amount)
+                        invoices_by_contract.setdefault(contract.uid, []).append((inv["uid"], inv))
                         added += 1
                 for uid, inv in mine[len(due):]:
                     if _on_or_before(inv.get("due_on"), bd) and not inv.get("sheet_no_longer_due"):
@@ -1404,6 +1424,7 @@ def reseed_migrated_invoices(state, bd):
                                        scenario="SHEET", issued_on=line.due_date - timedelta(days=10))
                     inv["outstanding"] = str(line.outstanding_amount)
                     _sheet_lease_invoice(inv, idx, idx in link_cells, contract)
+                    invoices_by_contract.setdefault(contract.uid, []).append((inv["uid"], inv))
                     added += 1
                     continue
                 uid, inv = hit
@@ -1417,7 +1438,7 @@ def reseed_migrated_invoices(state, bd):
                         flagged += 1
                     continue
                 inv.pop("sheet_no_longer_due", None)
-                if _person_receipt_on(state, uid):
+                if uid in personal_receipts:
                     continue
                 state_code = "PARTIALLY_PAID" if line.outstanding_amount < line.total_amount else "OVERDUE"
                 if (str(inv.get("amount")) != str(line.total_amount)

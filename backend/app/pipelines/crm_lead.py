@@ -8,6 +8,7 @@ import re
 from decimal import Decimal, InvalidOperation
 
 from .. import parsing
+from ..crm_policy import won_only
 
 MONTHS = {m.lower(): i for i, m in enumerate(
     ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"], 1)}
@@ -152,6 +153,8 @@ def eligibility_rejection(row):
     """
     if _text(row.get("stage_name")).strip() != "Won":
         return "not_won"
+    if won_only():
+        return None
     if not _text(row.get("epc_start_date")).strip():
         return "install_start_missing"
     if not _text(row.get("epc_end_date")).strip():
@@ -231,8 +234,10 @@ def normalise(rows, rules):
         watt = as_money(row.get("inverter_kw"))
         order = {
             "crm_id": odoo_id,
+            "odoo_lead_name": _text(row.get("name")).strip() or None,
             "order_type": "Leasing" if _text(row.get("order_type")).lower() == "leasing" else "Cash",
             "order_status": translated["stage_name"],
+            "crm_status": _text(row.get("stage_name")).strip(),
             "loan_status": None,
             "phase": translated["connection_type"],
             "com_status": translated["com_status"],

@@ -1,0 +1,54 @@
+<h1>Volt Debt — PEAK Integration v1.2</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>PEAK Integration v1.2 — the draft-only contract of decision C3, replacing v1.1's full-write flow (v1.1 moved to 13 History). v1.0's target-state material (webhooks, e-Tax, both instances, reconciliation) remains the MVP plan.</td></tr>
+<tr><td>Version</td><td>1.2. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Implementation</td><td>backend/app/integrations/peak.py · app/peak_documents.py · routers/payments.py</td></tr>
+</table>
+
+<h2>0. Plain language first</h2>
+<p><strong>Draft</strong> — a document that exists in PEAK but is not yet in the books; PEAK shows it in its draft list and a person approves it. <strong>Approved</strong> — in the books; it now has a document number and, for an invoice, a QR code. <strong>Rejected</strong> — a person in PEAK declined it; PEAK keeps the reason. <strong>Instance</strong> — one PEAK company file; there are two, EPC and SPV. <strong>Idempotency key</strong> — a unique tag Debt stores before creating a draft so a retry never creates it twice; PEAK bills per create.</p>
+
+<h2>1. The rule</h2>
+<p>Debt creates drafts and reads state. Debt never approves, posts, updates or deletes a PEAK document, and never edits an approved one — a change is a new draft (an amendment or a credit note) that a person approves. The client has two verbs and a test asserts there is no third. Nothing in this document changes who approves: AR does, inside PEAK.</p>
+
+<h2>2. The document record</h2>
+<p>peak_document: uid, intent (one of the 23 rows below), entity and company_id, source_ref (the invoice, receipt, restructure, recovery case or cancellation it came from), payload as sent, idempotency_key (stored before the call), state PENDING → DRAFT_CREATED → APPROVED_IN_PEAK or REJECTED, or UNSENT on a transport failure; peak_ref and peak_number once known; qr_payload once approved (invoices only); rejection_reason; created_by and timestamps. A replay with the same key returns the existing record. UNSENT is a queue on the Payments and PEAK drafts screen and is re-sendable.</p>
+
+<h2>3. The twenty-three outcomes</h2>
+<table>
+<tr><th>Intent</th><th>FigJam scenario</th><th>Document type in PEAK</th><th>Instance</th><th>Raised from</th></tr>
+<tr><td>INVOICE_CREATE</td><td>S01, S03</td><td>Invoice (tax invoice)</td><td>By product group</td><td>Invoice pipeline release; monthly instalment run; service billing</td></tr>
+<tr><td>INVOICE_AMEND_DUE_DATE</td><td>S02, S04</td><td>Amendment of the existing invoice</td><td>Same as the invoice</td><td>Pipeline reschedule; dispute ruling</td></tr>
+<tr><td>INVOICE_CANCEL_REISSUE</td><td>S02, S04</td><td>Credit note against the original, then a new invoice — two drafts, one pair</td><td>Same</td><td>Pipeline reschedule; dispute ruling</td></tr>
+<tr><td>RECEIPT_FULL</td><td>S05, S07 one contract, S08 not applicable</td><td>Receipt closing the invoice</td><td>Same</td><td>Slip confirmed; bank match</td></tr>
+<tr><td>RECEIPT_PARTIAL</td><td>S06</td><td>Partial receipt; invoice stays open; no credit note</td><td>Same</td><td>Slip confirmed for less than the invoice</td></tr>
+<tr><td>RECEIPT_MULTI_CONTRACT</td><td>S07 several contracts</td><td>Receipt applied by the multi-contract rule; a correction is a new entry</td><td>Same</td><td>Payments screen</td></tr>
+<tr><td>RECEIPT_UNAPPLIED</td><td>S07 cannot be matched</td><td>Nothing created; the money sits in the Finance exception queue</td><td>—</td><td>Payments screen, exception list</td></tr>
+<tr><td>RECEIPT_NET_OF_WHT</td><td>S08 certificate received</td><td>Receipt for the net amount plus a withholding-tax receivable at EPC</td><td>EPC</td><td>Payments screen, juristic customer</td></tr>
+<tr><td>WHT_WRITE_OFF</td><td>S08 certificate never arrives</td><td>Write-off of the withheld amount</td><td>EPC</td><td>Finance, Owner approval</td></tr>
+<tr><td>RESTRUCTURE_VOID_SERIES</td><td>S15</td><td>Credit note voiding the original instalment series, then the new series</td><td>SPV</td><td>Recovery, on restructure approval</td></tr>
+<tr><td>RESTRUCTURE_MODIFICATION_LOSS</td><td>S15</td><td>Journal for the modification loss in the entity holding the receivable</td><td>SPV</td><td>Recovery, on restructure approval — separate from the void; either can fail alone</td></tr>
+<tr><td>SETTLEMENT_RECEIPT</td><td>S16</td><td>Settlement receipt and contract closure; two receipts from two instances where lease and service arrears are both settled</td><td>SPV and EPC</td><td>Recovery, early settlement accepted</td></tr>
+<tr><td>BUYBACK_DEED_AND_PAYMENT</td><td>S18</td><td>Four movements: assignment deed, EPC pays SPV 100 percent of remaining NPV, SPV derecognises, new EPC record referencing the original number</td><td>Both</td><td>Recovery, 120-day assignment executed</td></tr>
+<tr><td>UNINSTALL_FEE_INVOICE</td><td>S19, S22</td><td>Invoice for the uninstall fee per watt, separate, never netted; late fees and balance alongside</td><td>EPC</td><td>Recovery, removal approved</td></tr>
+<tr><td>SERVICE_INVOICE</td><td>S23</td><td>Monthly service invoice at EPC on its own</td><td>EPC</td><td>Service billing, 25th–30th</td></tr>
+<tr><td>CANCELLATION_CREDIT_OR_REFUND</td><td>S24</td><td>Credit note and/or refund plus the cancellation-fee invoice</td><td>By track</td><td>Cancellation case</td></tr>
+<tr><td>CLOSE_LOST_FULL_REFUND</td><td>S24</td><td>Full refund, every fee waived</td><td>By track</td><td>Cancellation case, Manager with Owner</td></tr>
+<tr><td>WRITE_OFF_DERECOGNITION</td><td>S21</td><td>Derecognition in the EPC books, cash track only</td><td>EPC</td><td>Recovery, Owner approval</td></tr>
+<tr><td>PENALTY_INVOICE</td><td>Executive Brief 6.3</td><td><strong>Superseded 2026-09-09, ruling 87</strong> — CF1 is decided, so this is now raised. Was: "Penalty invoice — feature-flagged OFF while CF1 is open"</td><td>By product group</td><td><strong>Superseded — ruling 87.</strong> Was: "Never raised until CF1 closes"</td></tr>
+<tr><td>PROJECT_SALE_INVOICE</td><td>S10 register</td><td>EPC to SPV project sale at 100 percent of customer NPV</td><td>EPC</td><td>Inter-company register</td></tr>
+<tr><td>SERVICE_BULK_INVOICE</td><td>S10 register</td><td>Manual outside the ERP — refuses to post (manual_outside_erp stands)</td><td>—</td><td>Recorded only</td></tr>
+<tr><td>ACCOUNTING_FEE_50000</td><td>S10 register</td><td>Manual outside the ERP — refuses to post</td><td>—</td><td>Recorded only</td></tr>
+<tr><td>CREDIT_NOTE_STANDALONE</td><td>Sheet practice (AR keys "Credit Note" into a month cell)</td><td>Credit note with a reason from the dictionary</td><td>Same as the invoice</td><td>Payments screen, Manager approval</td></tr>
+</table>
+
+<h2>4. Read-back</h2>
+<p>State is read on demand from the document card, in the 02:30 run, and by webhook when PEAK provides one. APPROVED_IN_PEAK carries the PEAK number and, for invoices, the QR payload that the delivery step needs. REJECTED carries PEAK's reason and raises a tier-6 Today item for the person who raised the document. Whether PEAK's API exposes draft state for read-back is INT-05, confirmed on first live contact; until then the prototype's stub models both answers and the screen shows "state unknown — check PEAK" rather than guessing.</p>
+
+<h2>5. Credentials and instances</h2>
+<p>PEAK_UAT_CONNECT_ID, PEAK_UAT_PASSWORD, PEAK_UAT_USER_TOKEN and optional PEAK_UAT_BASE_URL as before; a second set with the suffix _SPV is read when present (INT-06). Names in code and refusals, values nowhere. /readyz reports configured-or-not only.</p>
+
+<h2>6. Failure modes</h2>
+<p>Not configured → 422 integration_not_configured. Transport failure → the document is UNSENT, re-sendable, 502 peak_unsent. Same key replayed → the existing record, never a second create. Any attempt to approve, update or delete through Debt → 403 peak_draft_only; the endpoint does not exist and the client has no method, so this code appears only from a mis-wired router in tests.</p>

@@ -234,6 +234,9 @@ PY
   fi
   say ""
 
+  while IFS= read -r setting; do export "$setting"; done < <(python3 "$ROOT/scripts/runtime_env.py" --environment dev --state fixtures)
+  export AUTH_SESSION_POLICY="cookie"  # No database in the explicit fixture walkthrough.
+  export DATABASE_URL=""  # Inherited server configuration must not turn the fixture demo into production.
   export AUTH_MODE="on"
   export AUTH_SESSION_SECRET="$SECRET"
   export AUTH_COOKIE_SECURE="false"

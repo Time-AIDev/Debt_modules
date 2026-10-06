@@ -53,6 +53,18 @@ beforeEach(() => {
 })
 
 describe('Today', () => {
+  it('filters collection by EPC beside the officer and keeps it on the board', async () => {
+    const user = userEvent.setup()
+    renderScreen(<Today />)
+    const entity = await screen.findByRole('combobox', { name: 'EPC/SPV' })
+    expect(entity).toHaveValue('')
+    await user.selectOptions(entity, 'EPC')
+    await waitFor(() => expect(api.today).toHaveBeenLastCalledWith({ entity: 'EPC' }))
+    await user.click(screen.getByRole('radio', { name: 'บอร์ด' }))
+    expect(screen.getByRole('combobox', { name: 'EPC/SPV' })).toHaveValue('EPC')
+    expect(screen.getByTestId('board')).toBeInTheDocument()
+  })
+
   it('switches workstreams through the URL and keeps pre-install separate from collection KPIs', async () => {
     const user = userEvent.setup()
     renderScreen(<Today />)

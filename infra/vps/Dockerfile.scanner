@@ -1,0 +1,5 @@
+# Keep the reviewed ClamAV engine and signature update behaviour; patch its OS.
+FROM clamav/clamav@sha256:ebec5bc138401b36ae987caa1a3fa3c3b2a21ed3d51f0bfa5852825e663e67b0
+USER root
+RUN apk upgrade --no-cache
+LABEL volt-debt.upstream.scanner.digest="sha256:ebec5bc138401b36ae987caa1a3fa3c3b2a21ed3d51f0bfa5852825e663e67b0"

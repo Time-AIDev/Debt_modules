@@ -293,3 +293,9 @@ def test_the_quote_odoo_holds_travels_on_the_order_to_read_never_to_bill():
     assert not {"dp_amount", "dp_pct", "term", "monthly_rate_inc_vat"} & set(order)
     empty = crm_lead.normalise([dict(row, dp_amount=0.0, dp_percent=False, monthly_rate=0.0)], RULES)[0][0]["order"]
     assert (empty["odoo_dp_amount"], empty["odoo_dp_pct"], empty["odoo_term"]) == (None, None, None)
+
+
+def test_the_exact_odoo_lead_title_survives_normalisation():
+    row = dict(RAW[0], name='28006752779_Danudech_ดนุเดช เลขะสันต์_VOLT')
+    records, _ = crm_lead.normalise([row], RULES)
+    assert records[0]['order']['odoo_lead_name'] == '28006752779_Danudech_ดนุเดช เลขะสันต์_VOLT'

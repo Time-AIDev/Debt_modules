@@ -10,10 +10,22 @@ failure looks like a product bug. This fixture makes each test start from seed.
 """
 import os
 
+# Destructive fixtures may never inherit a developer's deployed runtime/database.
+# Individual integration tests opt in using the dedicated VOLT_TEST_PG_URL fixture.
+os.environ["DATABASE_URL"] = ""
+os.environ["ENV"] = "dev"
+os.environ["VOLT_SHARED_STATE_ENABLED"] = "false"
+os.environ["AUTH_MODE"] = "off"
+
 # The business date follows today in Bangkok when a database is configured
 # (config.resolve_business_date). The suite runs on the demo date whatever the
 # calendar says, database tests included — pinned BEFORE the app is imported.
 os.environ.setdefault("VOLT_BUSINESS_DATE", "2026-10-23")
+# A laptop .env must not launch a live CRM pull during a database-backed boot test.
+# Integration tests supply their own credentials/transport explicitly. Otherwise an
+# unjoined boot pull can reuse the next test's single PostgreSQL connection.
+for _credential in ("ODOO_URL", "ODOO_DB", "ODOO_LOGIN", "ODOO_API_KEY"):
+    os.environ[_credential] = ""
 
 import pytest  # noqa: E402
 
@@ -23,6 +35,7 @@ from app import main  # noqa: E402
 @pytest.fixture(autouse=True)
 def fresh_app_state(tmp_path):
     os.environ["TERMINATION_ARCHIVE_PATH"] = str(tmp_path / "archive.sqlite3")
+    os.environ["VOLT_INVOICE_REVIEWS_PATH"] = str(tmp_path / "invoice-reviews.sqlite3")
     from app.fixtures import seed
 
     from app import customer_search, journey
@@ -109,6 +122,9 @@ def pg_url():
             url = pg_local.url()
         except Exception:
             pytest.skip("no local Postgres; run ./scripts/pg_local.sh start")
+    from sqlalchemy.engine import make_url
+    if make_url(url).database in {"debt", "volt_debt", "production", "staging"}:
+        pytest.exit("Refusing destructive fixtures on a production/prototype database",returncode=4)
     return url
 
 
@@ -156,3 +172,26 @@ def _clear_persisted_session_state():
 
     _session.clear_all_persisted()
     yield
+
+
+@pytest.fixture
+def evidence_for_power():
+    """Authored invoice proof for cutoff tests; sheet late marks are not debt proof."""
+    from app import journey
+
+    def add(customer_uid):
+        customer = journey.customer_by_uid(customer_uid)
+        contract = next((k for k in customer.contracts if k.product == "LEASE"), None)
+        if contract is None:
+            return
+        state = journey.for_current()
+        for month in (6, 7, 8):
+            uid = f"proof-{contract.uid}-{month}"
+            state.invoices[uid] = {
+                "uid": uid, "customer_uid": customer_uid, "contract_uid": contract.uid,
+                "source": "PEAK_REPORT", "contract_resolved": True, "state": "OVERDUE",
+                "amount": "1000.00", "outstanding": "1000.00", "month_index": None,
+                "due_date": f"2026-{month:02d}-10", "issued_on": f"2026-{month:02d}-01",
+                "peak_number": uid, "product": "LEASE", "entity": "TEST", "lines": [],
+            }
+    return add

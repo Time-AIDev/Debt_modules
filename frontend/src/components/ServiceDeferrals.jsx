@@ -56,11 +56,27 @@ export function ServiceDeferrals({ data, onChanged }) {
   </section>
 }
 
+export function InvoiceDeferral({ invoice, data, onChanged }) {
+  const { t } = usePrefs()
+  const { role } = useIdentity()
+  const [open, setOpen] = useState(false)
+  const allowed = ['OFFICER', 'SUPERVISOR', 'MANAGER', 'OWNER'].includes(role)
+  const entries = data.payment_summary?.contracts || []
+  return <div className="case__stack">
+    <button type="button" className="btn btn--sm" disabled={!allowed || !invoice.deferral_eligible}
+      onClick={() => setOpen(true)}>{t('deferral.create')}</button>
+    {!invoice.deferral_eligible && invoice.deferral_reason ? <small>{invoice.deferral_reason}</small> : null}
+    {open ? <DeferralDrawer action={{ kind: 'create', contract_uid: invoice.contract_uid, cycles: [invoice.contract_cycle] }}
+      data={data} entries={entries.filter((e) => e.contract_uid === invoice.contract_uid)}
+      onClose={() => setOpen(false)} onChanged={onChanged} /> : null}
+  </div>
+}
+
 function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
   const { t } = usePrefs()
   const toast = useToast()
-  const [contractUid, setContractUid] = useState(action.row?.contract_uid || entries[0]?.contract_uid || '')
-  const [form, setForm] = useState({ cycles: [], reason: '', service_from: '', service_until: '',
+  const [contractUid, setContractUid] = useState(action.contract_uid || action.row?.contract_uid || entries[0]?.contract_uid || '')
+  const [form, setForm] = useState({ cycles: action.cycles || [], reason: '', service_from: '', service_until: '',
     issue_uid: '', confirmation_note: '', confirmed_by: '', evidence_uid: '' })
   const [preview, setPreview] = useState(null)
   const [problem, setProblem] = useState(null)

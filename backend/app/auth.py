@@ -26,11 +26,14 @@ import re
 import secrets
 import sys
 import time
+import threading
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
 from starlette.concurrency import run_in_threadpool
+import anyio
 
 from . import errors
 
@@ -61,12 +64,18 @@ class AuthConfig:
     allowlist: dict = field(default_factory=dict)
     test_accounts: dict = field(default_factory=dict)
     cookie_secure: bool = True
+    idle_seconds: int = IDLE_SECONDS
     session_policy: str = "cookie"
+    tab_absolute_seconds: int = 0  # compatibility default; deployment policy opts in
+    reauth_seconds: int = 0
 
 
 _OFF = AuthConfig()
 _config = _OFF
 _FAILURES = {}
+ACTOR = ContextVar("authenticated_actor", default=None)
+_LOGIN_RATES = {}
+_RATE_LOCK = threading.Lock()
 
 
 def set_config(config):
@@ -78,9 +87,15 @@ def current_config():
     return _config
 
 
+def actor_key(actor):
+    """Opaque ownership identifier, so shared run progress never exposes e-mails."""
+    return hmac.new(current_config().secret, ("operation-owner:" + actor["sub"]).encode(), hashlib.sha256).hexdigest()
+
+
 def reset():
     set_config(_OFF)
     _FAILURES.clear()
+    _LOGIN_RATES.clear()
 
 
 def _file_names_auth_mode(env_file):
@@ -132,6 +147,14 @@ def load_config(environ=None, env_file=None):
     if len(secret) < MIN_SECRET:
         raise AuthConfigError("AUTH_MODE=on needs AUTH_SESSION_SECRET of at least %d characters" % MIN_SECRET)
 
+    raw_idle = _read(environ, "AUTH_IDLE_SECONDS")
+    try:
+        idle_seconds = IDLE_SECONDS if raw_idle is None else int(raw_idle)
+    except (TypeError, ValueError):
+        raise AuthConfigError("AUTH_IDLE_SECONDS must be a whole number of seconds") from None
+    if not 1 <= idle_seconds <= ABSOLUTE_SECONDS:
+        raise AuthConfigError("AUTH_IDLE_SECONDS must be between 1 and %d" % ABSOLUTE_SECONDS)
+
     allowlist = {}
     raw_allow = _read(environ, "AUTH_ALLOWLIST")
     if raw_allow:
@@ -179,6 +202,14 @@ def load_config(environ=None, env_file=None):
     policy = (_read(environ, "AUTH_SESSION_POLICY") or "cookie").strip()
     if policy not in ("cookie", "tab"):
         raise AuthConfigError("AUTH_SESSION_POLICY must be cookie or tab")
+    durations = {}
+    for key in ("AUTH_TAB_ABSOLUTE_SECONDS", "AUTH_REAUTH_SECONDS"):
+        try:
+            durations[key] = int(_read(environ, key) or "0")
+        except (TypeError, ValueError):
+            raise AuthConfigError(key + " must be a whole number of seconds") from None
+        if not 0 <= durations[key] <= 90 * 86400:
+            raise AuthConfigError(key + " must be between 0 and 7776000")
     return AuthConfig(
         on=True,
         secret=secret.encode("utf-8"),
@@ -186,7 +217,10 @@ def load_config(environ=None, env_file=None):
         allowlist=allowlist,
         test_accounts=accounts,
         cookie_secure=(_read(environ, "AUTH_COOKIE_SECURE") or "").strip().lower() != "false",
+        idle_seconds=idle_seconds,
         session_policy=policy,
+        tab_absolute_seconds=durations["AUTH_TAB_ABSOLUTE_SECONDS"],
+        reauth_seconds=durations["AUTH_REAUTH_SECONDS"],
     )
 
 
@@ -261,7 +295,7 @@ def read_session(token, secret, now=None):
         return None
     if not isinstance(payload, dict):
         return None
-    if now - payload.get("iat", 0) > ABSOLUTE_SECONDS or now - payload.get("seen", 0) > IDLE_SECONDS:
+    if now - payload.get("iat", 0) > ABSOLUTE_SECONDS or now - payload.get("seen", 0) > current_config().idle_seconds:
         return None
     return payload
 
@@ -273,7 +307,10 @@ def read_session(token, secret, now=None):
 
 def _recent(username, now):
     kept = [t for t in _FAILURES.get(username, []) if now - t < LOCK_WINDOW_SECONDS]
-    _FAILURES[username] = kept
+    if kept:
+        _FAILURES[username] = kept
+    else:
+        _FAILURES.pop(username, None)
     return kept
 
 
@@ -284,7 +321,11 @@ def is_locked(username, now=None):
 
 def record_failure(username, now=None):
     now = _now() if now is None else now
-    _recent(username, now).append(now)
+    for key in list(_FAILURES):
+        _recent(key, now)
+    kept = _recent(username, now)
+    if username in _FAILURES or len(_FAILURES) < 4096:
+        _FAILURES[username] = kept + [now]
 
 
 def clear_failures(username):
@@ -315,7 +356,8 @@ def me_payload(session):
     return {
         "subject": session["sub"], "kind": session["kind"], "role": session["role"],
         "officer": session["officer"], "can_switch": session["can_switch"],
-        "expires_at": None if session.get("session_policy") == "tab" else min(session["iat"] + ABSOLUTE_SECONDS, session["seen"] + IDLE_SECONDS),
+        "expires_at": (session.get("expires_at") if session.get("session_policy") == "tab"
+                       else min(session["iat"] + ABSOLUTE_SECONDS, session["seen"] + current_config().idle_seconds)),
         **({"session_policy": "tab"} if session.get("session_policy") == "tab" else {}),
     }
 
@@ -406,7 +448,11 @@ def verify_google_token(credential, client_id):
     """The token's claims, or raises. Lazy import: only a Google sign-in needs it."""
     from google.auth.transport import requests as google_requests
     from google.oauth2 import id_token
-    return id_token.verify_oauth2_token(credential, google_requests.Request(), client_id)
+    class BoundedRequest(google_requests.Request):
+        def __call__(self, *args, **kwargs):
+            kwargs["timeout"] = min(float(kwargs.get("timeout", 10)), 10)
+            return super().__call__(*args, **kwargs)
+    return id_token.verify_oauth2_token(credential, BoundedRequest(), client_id)
 
 
 # --- the middleware ------------------------------------------------------------------
@@ -510,6 +556,75 @@ def _append_refusal(entry):
         print("audit append failed for a session refusal: %s" % type(exc).__name__, file=sys.stderr)
 
 
+def request_limit(scope):
+    """Bound bodies before buffering, including sign-in and raw upload routes."""
+    path = scope.get("path", "")
+    if path in ("/v1/auth/password", "/v1/auth/google"):
+        return 64 * 1024
+    if path.startswith("/v1/imports/parts/"):
+        return 8 * 1024 * 1024
+    content_type = (_header(scope, b"content-type") or "").lower()
+    upload = path.startswith(("/v1/imports", "/v1/attachments")) or (
+        path.startswith("/v1/pipelines/") and "json" not in content_type)
+    name, default = ("REQUEST_UPLOAD_MAX_BYTES", 100 * 1024 * 1024) if upload else ("REQUEST_JSON_MAX_BYTES", 1024 * 1024)
+    return int(os.environ.get(name, default))
+
+
+def bounded_receive(scope, receive):
+    limit = request_limit(scope)
+    length = _header(scope, b"content-length")
+    try:
+        if length is not None and (int(length) < 0 or int(length) > limit):
+            raise body_problem("request_too_large", 413)
+    except ValueError:
+        raise body_problem("invalid_content_length", 400) from None
+    size = 0
+    deadline = time.monotonic() + float(os.environ.get("REQUEST_BODY_TIMEOUT_SECONDS", "30"))
+
+    async def bounded():
+        nonlocal size
+        try:
+            with anyio.fail_after(max(0, deadline - time.monotonic())):
+                message = await receive()
+        except TimeoutError:
+            raise body_problem("request_body_timeout", 408) from None
+        if message["type"] == "http.request":
+            size += len(message.get("body", b""))
+            if size > limit:
+                raise body_problem("request_too_large", 413)
+        return message
+    return bounded
+
+
+def body_problem(code, status):
+    return errors.Problem(code, status, "Request body refused",
+                          "The request exceeds its body size or time limit.",
+                          "คำขอมีขนาดใหญ่เกินไปหรือส่งข้อมูลนานเกินกำหนด", "DEBT-HTTP-0413")
+
+
+def check_login_rate(scope):
+    """Per-peer and process-wide bounds; forwarded headers are not trusted here."""
+    if scope.get("path") not in ("/v1/auth/password", "/v1/auth/google") or scope.get("method") != "POST":
+        return
+    now = time.monotonic()
+    window = int(os.environ.get("AUTH_LOGIN_RATE_WINDOW_SECONDS", "60"))
+    limit = int(os.environ.get("AUTH_LOGIN_RATE_LIMIT", "30"))
+    peer = (scope.get("client") or ("unknown",))[0]
+    with _RATE_LOCK:
+        stale = [key for key, (start, _count) in _LOGIN_RATES.items() if now - start >= window]
+        for key in stale:
+            del _LOGIN_RATES[key]
+        # Never permit arbitrary remote addresses to create unbounded state.
+        key = peer if peer in _LOGIN_RATES or len(_LOGIN_RATES) < 4096 else "overflow"
+        for bucket, ceiling in ((key, limit), ("global", limit * 10)):
+            start, count = _LOGIN_RATES.get(bucket, (now, 0))
+            if count >= ceiling:
+                raise errors.Problem("login_rate_limited", 429, "Too many sign-in attempts",
+                                     "Wait before trying to sign in again.",
+                                     "เข้าสู่ระบบถี่เกินไป กรุณารอสักครู่แล้วลองใหม่", "DEBT-AUTH-0429")
+            _LOGIN_RATES[bucket] = (start, count + 1)
+
+
 async def _read_body(receive):
     chunks, more = [], True
     while more:
@@ -543,6 +658,18 @@ class AuthMiddleware:
         self.still_allowed = still_allowed
 
     async def __call__(self, scope, receive, send):
+        actor_token = ACTOR.set(None)
+        try:
+            if scope["type"] == "http" and current_config().on:
+                check_login_rate(scope)
+                receive = bounded_receive(scope, receive)
+            await self._authenticated(scope, receive, send)
+        except errors.Problem as problem:
+            await problem.response(instance="urn:request:" + self.request_id())(scope, receive, send)
+        finally:
+            ACTOR.reset(actor_token)
+
+    async def _authenticated(self, scope, receive, send):
         config = current_config()
         path = scope.get("path", "")
         if (scope["type"] != "http" or not config.on or not path.startswith("/v1/")
@@ -584,6 +711,7 @@ class AuthMiddleware:
 
         role, officer = effective_identity(session, _header(scope, b"x-volt-role"),
                                            _header(scope, b"x-volt-officer"), self.roster())
+        ACTOR.set(dict(session, role=role, officer=officer))
         headers = [(k, v) for k, v in scope["headers"]
                    if k not in (b"x-volt-role", b"x-volt-officer", b"content-length")]
         original_length = _header(scope, b"content-length")
@@ -610,10 +738,12 @@ class AuthMiddleware:
                 # the framework nor a route should ever see this request.
                 disconnected = True
             else:
-                if os.environ.get("ENV") == "prd":
+                from .runtime_policy import shared_state_enabled
+                if shared_state_enabled():
                     from . import production_permissions
                     try:
-                        await run_in_threadpool(production_permissions.enforce, scope, session, raw)
+                        await run_in_threadpool(production_permissions.enforce, scope,
+                                               dict(session, role=role, officer=officer), raw)
                     except errors.Problem as problem:
                         await self._audit_refusal(scope, session, problem.status, problem.code)
                         await problem.response(instance="urn:request:" + self.request_id())(scope, receive, send)

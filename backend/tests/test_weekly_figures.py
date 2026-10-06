@@ -597,7 +597,7 @@ def test_a_slip_folded_into_an_allocated_peak_payment_holds_nobody_exactly_like_
 
 def test_a_lone_unallocated_slip_still_holds_and_an_unallocated_folded_payment_holds_once(client, monkeypatch):
     customer = _peak_lease_customer()
-    _apply_peak(customer, _peak_row("AWAITING"), as_of="2026-10-10")
+    _apply_peak(customer, dict(_peak_row("AWAITING"), cycle=None), as_of="2026-10-10")
     journey.reset()
     posted = client.post("/v1/receipts", json={"contract_uid": customer.contracts[0].uid,
                                                "invoice_uid": "inv-pk-IVT-9", "amount": "8399.00"})
@@ -608,7 +608,7 @@ def test_a_lone_unallocated_slip_still_holds_and_an_unallocated_folded_payment_h
     assert "OD02_RECEIPT_IN_PERIOD" in row["reasons"]
     # PEAK's side not allocated either: the folded payment still holds, and counts as ONE receipt
     monkeypatch.setattr(settings, "peak_report_allocates", False)
-    _apply_peak(customer, _peak_row("PAID", paid_on="2026-10-20"), as_of=str(BD))
+    _apply_peak(customer, dict(_peak_row("PAID", paid_on="2026-10-20"), cycle=None), as_of=str(BD))
     journey.reseed_peak(journey.for_current(), BD)
     [peak], [slip] = _peak_side_and_slip()
     assert peak["is_allocated"] is False and slip["is_allocated"] is False
@@ -683,7 +683,8 @@ def _redacted(value, words):
     return MARKER in value and _without_typed_numbers(value) and words in value
 
 
-def test_typed_numbers_never_leave_the_weekly_reasons_nor_a_stored_snapshot(client):
+def test_typed_numbers_never_leave_the_weekly_reasons_nor_a_stored_snapshot(client, evidence_for_power):
+    evidence_for_power(BANJERD)
     import json
     case = _journey_case_of(client, "C-002032")
     person = client.post("/v1/cases/by-customer/%s/payment-status" % case["customer_uid"],

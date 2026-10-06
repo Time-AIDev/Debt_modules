@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="th">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Import Data — Data Flow (Volt Debt)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+Thai:wght@400;500;600;700&family=IBM+Plex+Mono&display=swap" rel="stylesheet" />
+<style>
+  :root { --ink-900:#050505; --ink-700:#374151; --ink-500:#6b7280; --line:#e5e7eb; --brand:#f2b705; --brand-050:#fff7dc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 28px 22px 80px; background: #f3f4f6; color: var(--ink-900);
+         font: 400 14px/21px "IBM Plex Sans Thai", -apple-system, sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; }
+  header.page { margin-bottom: 18px; }
+  header.page h1 { margin: 0 0 4px; font-size: 20px; }
+  header.page p { margin: 0; color: var(--ink-500); font-size: 12.5px; }
+  .card { background: #fff; border: 1px solid var(--line); border-radius: 12px; padding: 18px 18px 8px; margin: 16px 0; }
+  .card h2 { margin: 0 0 2px; font-size: 15px; }
+  .card .note { margin: 0 0 12px; color: var(--ink-500); font-size: 12px; }
+  .mermaid { text-align: center; overflow-x: auto; padding: 4px 0 10px; }
+  .legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; font-size: 12px; color: var(--ink-700); }
+  .chip { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--line); border-radius: 999px; padding: 3px 10px; background: #fff; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+  table { border-collapse: collapse; width: 100%; font-size: 12.5px; }
+  th, td { border-bottom: 1px solid var(--line); text-align: left; padding: 8px 10px; vertical-align: top; }
+  th { background: #f9fafb; font-weight: 600; }
+  code { font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: 12px; background: #f3f4f6; padding: 1px 5px; border-radius: 4px; }
+  .foot { color: var(--ink-500); font-size: 11.5px; margin-top: 18px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="page">
+    <h1>Import Data — Data Flow</h1>
+    <p>Volt Debt prototype · หลังรอบ sync 2026-09-20 · <code>app/refresh.py</code> · <code>app/import_sync.py</code> · <code>app/data_epoch.py</code> · ที่มา: <code>docs/import-data-flow.md</code></p>
+    <div class="legend">
+      <span class="chip"><span class="dot" style="background:#f2b705"></span>landing / epoch (store กลาง)</span>
+      <span class="chip"><span class="dot" style="background:#1d4ed8"></span>seam / heal</span>
+      <span class="chip"><span class="dot" style="background:#818995"></span>ถูกกันโดย ruling</span>
+    </div>
+  </header>
+
+  <section class="card">
+    <h2>1 · ภาพรวม: แหล่งข้อมูล → landing → สมุดงาน → feature</h2>
+    <p class="note">ทุกทางนำเข้าผ่าน seam เดียว <code>refresh.after_landing()</code>; manual upload เป็นข้อยกเว้น (staged, ruling 73)</p>
+    <pre class="mermaid">
+flowchart LR
+  subgraph SRC["แหล่งข้อมูล · DataSources"]
+    P["PEAK report file (PeakIntake)"]
+    O["Odoo orders · sync / snapshot / sheet"]
+    C["crm.lead pull · :start / :run / 15-min"]
+    M["manual upload · /v1/imports"]
+  end
+  P -->|"POST :start (raw file)"| PS["peak_service.run_upload<br/>parse → lock → match → write"]
+  C -->|"POST crm-lead :start / :run"| CS["pipelines/service._land<br/>ingress → normalise → writer"]
+  O -->|"POST /integrations/odoo:sync"| OS["odoo.sync · sale.order → write_landing"]
+  M --> MS["staged ใน session เท่านั้น (ruling 73)"]
+  PS --> L
+  CS --> L
+  OS --> L
+  L["landing schema · import_run · customer · order · peak_invoice · import_unmapped"]
+  L --> R["refresh.after_landing(kind, run_id)"]
+  R --> B["main.CUSTOMERS / IDENTITIES / BY_CUSTOMER / BY_CONTRACT"]
+  R -->|"data_epoch.bump()"| E["app.data_epoch · ตัวนับกลาง"]
+  B --> F1["Today · Book · Record · workbook"]
+  B --> F2["cases · journey · recovery"]
+  B --> F3["invoice_pipeline · การ์ดก่อนติดตั้ง"]
+  B --> F4["reports · calendar · dashboard"]
+  E -.->|"X-Volt-Data-Epoch ทุก response"| H["session heal · import_sync.ensure_current()"]
+  H -.->|"reseed เฉพาะของ import"| B
+  MS -.->|"ไม่ bump epoch"| M
+  classDef store fill:#fff7dc,stroke:#f2b705,color:#111827;
+  classDef seam fill:#dbeafe,stroke:#1d4ed8,color:#111827;
+  classDef blocked fill:#f3f4f6,stroke:#818995,color:#4b5563,stroke-dasharray:4 3;
+  class L,E store;
+  class R,H seam;
+  class MS blocked;
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>2 · PEAK report: upload → apply → serve</h2>
+    <p class="note">run ล้มมีแถว FAILED durable · advisory lock กันซ้อน · apply ซ้ำต้อง force (manager) · served:false มีปุ่มซ่อม</p>
+    <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant UI as PeakIntake (FE)
+  participant R as routers/peak_pipeline
+  participant S as peak_service
+  participant DB as landing (Postgres)
+  participant RF as refresh / import_sync
+  UI->>R: POST .../peak-report:start (ไฟล์ + X-Volt-Filename)
+  R-->>UI: 202 + uid (watch)
+  R->>S: run_upload (background thread)
+  S->>DB: import_run RUNNING (durable ก่อน parse)
+  S->>S: parse → fingerprint check → pg advisory lock
+  alt ไฟล์ซ้ำ หรือมีรอบทำงานอยู่
+    S-->>UI: 409 peak_duplicate_report / peak_run_in_progress
+  else ปกติ
+    S->>S: match ladder (book + Odoo phone + links)
+    S->>DB: peak_invoice (COPY) + rejected → import_unmapped
+    S->>DB: finish_run OK
+  end
+  loop poll ทุก 2 วินาที
+    UI->>R: GET .../runs/{uid}
+  end
+  UI->>R: POST .../{id}:apply
+  R->>DB: stamp meta.applied
+  Note over R,DB: refuse: already_applied · older · narrower · report_already_applied (force = manager)
+  R->>RF: after_landing(peak, id)
+  RF->>DB: main.reload_book() + epoch bump
+  RF->>RF: import_sync.heal_session() + mark_seen (heal ครั้งเดียวต่อ epoch)
+  R-->>UI: served, moved_cases, refreshed_cases, note_th
+  opt served = false
+    UI->>R: POST .../{id}:refresh-served (ปุ่มซ่อม)
+    R->>RF: after_landing ซ้ำ (idempotent)
+  end
+  UI->>R: POST /links (confirm / retire)
+  R->>RF: after_landing(peak-link) — เปลี่ยนเจ้าของ invoice ได้โดยไม่อัปใหม่
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>3 · Odoo: crm.lead pull + orders sync</h2>
+    <p class="note">overlay ทั้งหมด key ด้วย <code>volt_id</code> ไม่ใช่เลขตำแหน่ง · <code>:use-snapshot</code> บอก <code>door</code> ของชุดข้อมูล</p>
+    <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant UI as DataSources (FE)
+  participant R as routers/pipelines · integrations
+  participant W as ingress + writer / odoo.sync
+  participant DB as landing
+  participant OS as orders store (per session)
+  participant RF as refresh
+  participant MB as main book
+  UI->>R: POST /pipelines/crm-lead:start (source odoo, mode)
+  R->>W: search_read crm.lead (paged 500)
+  W->>DB: upsert customer / order (NEW_ONLY ข้ามที่ match · OVERWRITE ลง ledger)
+  R->>RF: after_landing(crm-lead)
+  RF->>MB: reload_book + epoch bump → ทุกจอเห็นชุดใหม่ไม่ต้อง restart
+  UI->>R: POST /integrations/odoo:sync
+  R->>W: sale.order search_read → write_landing (run ODOO)
+  R->>OS: set_odoo_rows (เฉพาะ session นี้)
+  R->>OS: reconcile_source + reconcile_overrides (key = volt_id)
+  R->>RF: after_landing(odoo)
+  R-->>UI: synced, served, serve_problem, reconciled
+  UI->>R: POST /integrations/odoo:use-snapshot
+  R->>DB: last_run(ODOO) + meta.door → บอกว่าชุดไหน
+  R->>OS: set_odoo_rows + reconcile
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>4 · Session auto-heal (คำขอถัดไปเห็นข้อมูลใหม่เสมอ)</h2>
+    <p class="note">ของที่คนทำ (slip / PTP / evidence / gates / release) ไม่ถูกแตะ — reseed เฉพาะค่าที่มาจาก import</p>
+    <pre class="mermaid">
+sequenceDiagram
+  autonumber
+  participant A as เบราว์เซอร์ A (ผู้ใช้กด apply)
+  participant B as เบราว์เซอร์ B (session อื่น)
+  participant MW as tester_session middleware
+  participant IS as import_sync
+  participant DB as data_epoch + landing
+  participant ST as session stores
+  A->>DB: apply PEAK / pull crm.lead → refresh.after_landing
+  DB-->>DB: epoch = epoch + 1
+  B->>MW: GET /v1/today (คำขอถัดไปของ B)
+  MW->>IS: ensure_current()
+  IS->>DB: current() เทียบ seen_epoch ของ session B
+  IS->>ST: heal_session()
+  Note over ST: journey.reseed_peak · reseed_migrated_invoices<br/>invoice_pipeline.reseed_from_book<br/>cases.follow_import_for_all · peak_documents.reconcile
+  IS->>ST: seen_epoch = epoch
+  MW-->>B: 200 + X-Volt-Data-Epoch
+  B->>B: DATA_EPOCH_EVENT → useReloadOnEpoch() → refetch
+  opt ผู้ใช้ไม่อยากรอ
+    B->>MW: POST /v1/session:refresh-imports (ปุ่มบน DataStaleBanner)
+  end
+    </pre>
+  </section>
+
+  <section class="card">
+    <h2>5 · State ownership (ใครเป็นเจ้าของค่าอะไรหลัง heal)</h2>
+    <table>
+      <thead><tr><th>Store</th><th>import owns → รีเฟรช</th><th>คน owns → คงไว้</th></tr></thead>
+      <tbody>
+        <tr><td><code>journey.state</code></td><td>PEAK invoices/receipts · ยอด/กำหนด SHEET invoice</td><td>slip · PTP · contact · released pipeline invoice</td></tr>
+        <tr><td><code>cases.state</code></td><td><code>sheet</code> snapshot · <code>payment_status(_system)</code> · <code>next_action</code> เมื่อ set by SEED/MAPLOG</td><td>dc_status/NPL · person next action · PTP · contact log · ticket · review</td></tr>
+        <tr><td><code>invoice_pipeline.state</code></td><td>ชื่อ · EPC · planned date · ยอดที่ยังไม่ถูกยืนยัน · การ์ดใหม่</td><td>evidence · gates · history · delivery · released</td></tr>
+        <tr><td><code>peak_documents.state</code></td><td>flag <code>source_missing</code> จาก reconcile</td><td>สถานะเอกสาร · transport · idempotency key</td></tr>
+        <tr><td><code>orders.*</code></td><td>reconcile กับชุดที่ serve (volt_id)</td><td>approvals / added / removed ของ session นั้น</td></tr>
+        <tr><td><code>imports.state</code> (manual)</td><td>— (staged อย่างเดียว)</td><td>ทั้งหมด — ไม่มี epoch, ไม่แตะ landing</td></tr>
+      </tbody>
+    </table>
+    <p class="foot">อ่านคู่กับ <code>docs/import-data-flow.md</code> · endpoint ที่เกี่ยวข้อง: <code>GET /v1/data-state</code>, <code>POST /v1/session:refresh-imports</code>, <code>POST .../peak-report/landing-runs/{id}:refresh-served</code></p>
+  </section>
+</div>
+
+<script type="module">
+  import mermaid from 'https://cdn.jsdelivr.net/npm/mermaid@10/dist/mermaid.esm.min.mjs'
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: 'base',
+    securityLevel: 'loose',
+    fontFamily: '"IBM Plex Sans Thai", sans-serif',
+    themeVariables: {
+      fontFamily: '"IBM Plex Sans Thai", sans-serif',
+      primaryColor: '#ffffff',
+      primaryTextColor: '#111827',
+      primaryBorderColor: '#818995',
+      lineColor: '#4b5563',
+      secondaryColor: '#fff7dc',
+      tertiaryColor: '#f9fafb',
+      noteBkgColor: '#dbeafe',
+      noteBorderColor: '#1d4ed8',
+      actorBkg: '#ffffff',
+      actorBorder: '#818995',
+      signalColor: '#374151',
+      signalTextColor: '#111827',
+    },
+  })
+</script>
+</body>
+</html>

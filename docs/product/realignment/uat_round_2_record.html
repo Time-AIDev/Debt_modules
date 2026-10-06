@@ -1,0 +1,67 @@
+<h1>Volt Debt — Blind UAT Round 2 Record (2026-09-02)</h1>
+<p>Project: Volt Debt Collection App realignment (decisions C1–C7). Build judged: the round-1 build, business date 23/10/2026, API :8000, web :5173. Repo records: docs/uat/round-2.md, docs/uat/round-2/judge.md, docs/uat/round-2/{nantapol,thip,settasak}.md.</p>
+
+<blockquote><strong>Correction notice, 2026-09-09.</strong> This record was written when the
+late-fee rate was 0.3 %/day with 14 days' grace and CF1 was still open. Rulings 87 and 88
+decided both — see <code>docs/design/round-6/00-ledger.md</code> rulings 87–88. The CF1
+mentions below are glossary terminology and case-bound findings from this 2026-09-02
+round and are preserved unchanged as that record; they do not state today's status.</blockquote>
+
+<h2>0. How to read this record</h2>
+<p>A blind UAT round is run by testers who have never seen the app, playing the Debt team from the SOP and the seventeen-step workflow only. Every claim is re-run by an independent judge before it counts. Severity: P1 = wrong money on screen or a daily task that cannot be done; P2 = a step the tester could not finish unaided or finished wrongly because the screen misled them; P3 = polish. The stop rule (decision C7) is a full round with no P1, no P2 and at most three P3. Codes such as J2-01 are the judge's finding ids; N2, T2 and S2 are the three testers' own ids. CF1, OD-02 and OQ-44 are open business items in the Case Register. "PEAK" is the accounting system, which the app only ever writes drafts into.</p>
+
+<h2>1. Verdict</h2>
+<table>
+<tr><th>Severity</th><th>Confirmed</th><th>Ids</th></tr>
+<tr><td>P1</td><td>3</td><td>money on cash and lease cases; the two-contract customer; the settings outage</td></tr>
+<tr><td>P2</td><td>3</td><td>the link date; the third renegotiation; a broken promise lost after a no-answer call</td></tr>
+<tr><td>P3</td><td>19</td><td>wording, counts, ordering and form details across every screen</td></tr>
+<tr><td>By design</td><td>6</td><td>rules the app is following, cited in the judge's table</td></tr>
+<tr><td>Environment</td><td>1</td><td>the PEAK simulator was off for part of the round</td></tr>
+<tr><td>Driver artifact</td><td>2</td><td>limits of the test browser, not the app</td></tr>
+<tr><td>Not reproduced</td><td>1</td><td>the ticket tick order, which works in both orders</td></tr>
+</table>
+<p>Not clean. Round 3 was required and has been launched on the fixed build.</p>
+
+<h2>2. What mattered most (the judge's plain words)</h2>
+<ol>
+<li>The money was still wrong on the screen the officer reads before dialling. Every cash customer was shown owing 80% of an invoice that is fully outstanding, and every late customer was told to ask for less than the instalments missed, because a penalty nobody bills yet was subtracted instead of added. On one customer the app showed a 25,299 instalment for someone who pays 5,799.</li>
+<li>One keystroke by the lead took the whole desk down. An unchecked settings value is shared by every session, so the morning list and every case returned an error for minutes and two review requests were lost, while the screen said the save had failed.</li>
+<li>The app was quiet at the moments the sheet was loud. A third renegotiation escalated without a word and then refused while still storing the promise; a no-answer call made a broken promise vanish from the morning list; the October link the sheet recorded appeared on a November invoice the app had issued itself.</li>
+</ol>
+<p>What worked and is now protected by tests: the seven-tier morning list for both officers and the lead; the drawer refusing to close a call without a next step; the one-contact-per-day lock with its inbound alternative; the ticket returning to the officer's waiting list by itself; the officer to lead and back review round trip; the NPL type landing on the case; the cut-off request asking a reason, refusing when the SOP has not been followed, and restore clearing the status; the two release gates and the refusal to send a link before Accounting approves; the whole release to draft to approved to delivery chain with nothing in the app approving a PEAK document; and the work-book export.</p>
+
+<h2>3. The three P1 findings and their fixes</h2>
+<table>
+<tr><th>Id</th><th>Finding</th><th>Fix</th></tr>
+<tr><td>J2-01</td><td>The amount to ask subtracted an unbilled penalty, and cash arrears were derived as 80% of a fully outstanding invoice</td><td>The amount to ask is the instalments actually overdue; the accrued penalty sits beside it as a separate not-yet-billed line; a cash contract takes what has been paid from its own invoices</td></tr>
+<tr><td>J2-02</td><td>A customer with two sheet rows was shown one contract's cells against the other's instalment and note</td><td>Each row keeps its own contract, instalment, month grid and note; the case links the sibling row; the instalment comes from the most frequent paid cell, one rule shared by the grid and the contract</td></tr>
+<tr><td>J2-05</td><td>An unchecked band-set code saved in settings made every session's morning list and case page fail</td><td>The setting is validated against the known sets and refused with a Thai sentence and the list of valid codes; the code is now a select, never free text</td></tr>
+</table>
+
+<h2>4. The three P2 findings and their fixes</h2>
+<table>
+<tr><th>Id</th><th>Finding</th><th>Fix</th></tr>
+<tr><td>J2-03</td><td>The link the sheet recorded was stamped with today's date and shown on an invoice the app had just issued</td><td>Overdue invoices follow the grid's late cells; the sheet's link stays on its own month with no invented date; an overdue invoice with no link offers to record the link the officer sent, with their name and the date</td></tr>
+<tr><td>J2-06</td><td>The third renegotiation escalated silently and the fourth was refused while the promise was still stored</td><td>The response carries the promise, the review and the history lines; the refusal happens before anything is written and names the rule in Thai</td></tr>
+<tr><td>J2-09</td><td>An unanswered call moved a broken promise out of its tier</td><td>A broken promise stays until a later promise or an answered review; the row says why it is where it is</td></tr>
+</table>
+
+<h2>5. The nineteen P3 items</h2>
+<p>All nineteen were fixed across the two batches and the reconciliation pass. In short: the officer identity is one setting that actually filters the morning list; work-book search returns the row it opens; the ticket box works in either order; a refused act keeps the form and the date the officer typed; PEAK state is read from the answer instead of assumed; a slip can be confirmed from the case itself and the invoice list searches instead of capping at twenty-five; leasing rows carry a confirmable amount hint; month cells and invoices name each other; identities are offered per role; a refusal lists which preconditions were met; the penalty clock and the follow-up status say who set them and why; raw codes and English sentences are gone from the Thai screens; long names no longer collapse the case header; the install window checkbox says what it shows and out-of-window rows are counted separately; closing a ticket records who confirmed the fix; a postponement asks for the new date; the customer menu and its page share one name; a broken promise asks for confirmation and shows its lineage; the reminder set names its offsets; and the morning list sorts by days late within a tier.</p>
+
+<h2>6. Two judgement calls to note</h2>
+<table>
+<tr><th>Item</th><th>Call</th></tr>
+<tr><td>The penalty clock during a service ticket</td><td>Round 1 recorded that it keeps running, because that is what the team said happens today. The team's SOP and the seventeen-step workflow say it freezes. The app now freezes both the penalty and the days-late clock while a ticket is open, names the SOP on screen and stamps the dates. This is the one open item to confirm under CF1.</td></tr>
+<tr><td>One judge figure</td><td>The judge expected 23,298.00 for one customer, reading two overdue instalments from invoices the old derivation had created. That customer's own overdue column in the sheet reads 11,649.00, and the app now matches the sheet. The judge's other four figures are matched exactly.</td></tr>
+</table>
+
+<h2>7. Verification after the batches</h2>
+<table>
+<tr><th>Suite</th><th>Result</th></tr>
+<tr><td>Backend (pytest)</td><td>355 passed</td></tr>
+<tr><td>Frontend (vitest)</td><td>229 passed</td></tr>
+<tr><td>Black-box rules (e2e_check.py)</td><td>29 of 29</td></tr>
+</table>
+<p>The verification script printed EVERYTHING PASSED. The web was rebuilt and both servers restarted on the new build, with the PEAK simulator on from the first minute and the band set back to its normal value. Round 3 is running on this build with three fresh blind testers.</p>

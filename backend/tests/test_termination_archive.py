@@ -34,6 +34,47 @@ def test_shared_immutable_snapshot_and_audit_link(monkeypatch):
     audit = client.get('/v1/audit', params={'act': 'CONTRACT_TERMINATED'}).json()['entries'][0]
     assert audit['display']['case_url'] == '/terminated/' + row['archive_uid']
 
+
+def test_officer_unpaid_termination_preserves_balance_in_immutable_snapshot():
+    uid = target()
+    before = client.get('/v1/cases/by-customer/' + uid).json()
+    balance = before['work_item']['contract_outstanding']
+    assert float(balance) > 0
+    response = client.post('/v1/cases/by-customer/%s:terminate' % uid,
+                           headers={'X-Volt-Role': 'OFFICER', 'X-Volt-Officer': 'thip'},
+                           json={'cause': 'DEFAULT', 'reason': 'เหตุผลที่บันทึก\nบรรทัดสอง'})
+    assert response.status_code == 200, response.text
+    listing = client.get('/v1/terminated-customers', params={'q': uid}).json()['entries']
+    assert len(listing) == 1
+    archived = client.get('/v1/terminated-customers/' + listing[0]['archive_uid']).json()
+    assert archived['actor'] == 'thip'
+    assert archived['reason'] == 'เหตุผลที่บันทึก\nบรรทัดสอง'
+    assert archived['snapshot']['work_item']['contract_outstanding'] == balance
+    assert archived['snapshot']['invoices'] == before['invoices']
+    assert archived['snapshot']['receipts'] == before['receipts']
+    assert client.get('/v1/cases/by-customer/' + uid).json()['work_item']['contract_outstanding'] == balance
+    assert client.get('/v1/terminated-customers/' + listing[0]['archive_uid']).json() == archived
+
+
+def test_route_ends_all_live_contracts_with_one_customer_archive():
+    import copy
+    from app import main
+    uid = target()
+    customer = journey.customer_by_uid(uid)
+    extra = copy.deepcopy(customer.contracts[0]); extra.uid = 'extra-route-unpaid'; extra.customer_uid = uid
+    customer.contracts.append(extra); main.BY_CONTRACT[extra.uid] = (customer, extra)
+    try:
+        response = client.post('/v1/cases/by-customer/%s:terminate' % uid,
+                               headers={'X-Volt-Role': 'SUPERVISOR', 'X-Volt-Officer': 'settasak'},
+                               json={'cause': 'DEFAULT', 'reason': 'สองสัญญายังมียอด'})
+        assert response.status_code == 200, response.text
+        rows = client.get('/v1/terminated-customers', params={'q': uid}).json()['entries']
+        assert len(rows) == 1
+        assert {t['contract_uid'] for t in rows[0]['terminations']} == {customer.contracts[0].uid, extra.uid}
+        assert all(cases.contract_field_of(k, 'status') == 'TERMINATED' for k in customer.contracts)
+    finally:
+        customer.contracts.remove(extra); main.BY_CONTRACT.pop(extra.uid, None)
+
 def test_archive_write_failure_rolls_back_termination(monkeypatch):
     from app import termination_archive
     uid = target()

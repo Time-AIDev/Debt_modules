@@ -15,7 +15,7 @@ steps:
 
   - id: build-api
     name: gcr.io/cloud-builders/docker
-    args: ['build', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-api:${SHORT_SHA}', 'backend']
+    args: ['build', '-f', 'infra/production/Dockerfile.api', '-t', '${_REGION}-docker.pkg.dev/${PROJECT_ID}/debt/debt-api:${SHORT_SHA}', '.']
     waitFor: ['test']
 
   - id: build-web

@@ -463,6 +463,9 @@ def _bucket_codes():
              "label_th": band_sets.label_for(set_code, code) or code,
              "label_en": band_sets.label_for(set_code, code, "en") or code}
             for _lo, _hi, code in band_sets.BAND_SETS.get(set_code, ())]
+    rows.append({"code": "EVIDENCE_UNVERIFIED",
+                 "label_th": band_sets.label_for(set_code, "EVIDENCE_UNVERIFIED"),
+                 "label_en": band_sets.label_for(set_code, "EVIDENCE_UNVERIFIED", "en")})
     rows.append({"code": "NPL",
                  "label_th": band_sets.STATUS_LABEL_TH.get("NPL_CONFIRMED", "NPL"),
                  "label_en": band_sets.STATUS_LABEL_EN.get("NPL_CONFIRMED", "NPL")})

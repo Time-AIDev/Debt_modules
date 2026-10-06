@@ -320,6 +320,11 @@ def read_leasing_block(bi, header, rows, warnings):
             bucket=col(row, hdr, "Bucket - Weeks Late"),
             dp_paid=col(row, hdr, "DP Paid"),
             months=[month_cell(row[i]) if i < len(row) else None for i in month_cols],
+            calendar_months=[{"period": parse_date(rows[hi - 1][i])[:7],
+                              "cell": month_cell(row[i]) if i < len(row) else None,
+                              "source_column": i, "header": hdr[i]}
+                             for i in month_cols if hi > 0 and i < len(rows[hi - 1])
+                             and parse_date(rows[hi - 1][i])],
             ticket=OrderedDict(
                 action_type=col(row, hdr, "Action Type"), responsible_team=col(row, hdr, "Responsible Team"),
                 ticket_link=col(row, hdr, "Ticket Link"), deadline=col(row, hdr, "Deadline"),
@@ -353,7 +358,7 @@ def read_collection_tracking(bi, header, rows):
             ptp_date=parse_date(col(row, hdr, "PTP Date")), ptp_amount=money(col(row, hdr, "PTP Amount")),
             note=col(row, hdr, "Note (for supervisor review)"), action=col(row, hdr, "Action"),
             pmt=money(col(row, hdr, "PMT (excl. late fee)")),
-            months=[{"month": h, "cell": month_cell(row[i]) if i < len(row) else None} for i, h in month_cols],
+            months=[{"month": h, "source_column": i, "cell": month_cell(row[i]) if i < len(row) else None} for i, h in month_cols],
             total_paid=money(col(row, hdr, "Total Paid")), total_overdue=money(col(row, hdr, "Total Overdue")),
             total_outstanding=money(col(row, hdr, "Total Outstanding")),
         ))

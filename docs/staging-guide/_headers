@@ -1,0 +1,4 @@
+# Netlify serves these headers from the deploy root. The meta robots tag in the page
+# is the primary fence; this one also covers a direct asset fetch.
+/*
+  X-Robots-Tag: noindex, nofollow

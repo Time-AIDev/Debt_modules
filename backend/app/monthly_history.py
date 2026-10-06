@@ -76,13 +76,14 @@ def snapshot(kind, uids=None):
     if rows:
         conn = db.connect()
         try:
-            conn.execute(_UPSERT, rows)
-            if wanted is None:          # a full snapshot: whoever is not in the book left it
-                conn.execute(_LEFT, {"month": month, "uids": [r["customer_uid"] for r in rows]})
+            # Snapshot failure is optional. In a production request begin() is
+            # a savepoint, so its rollback must not cancel the caller's work.
+            scope = conn.begin_nested() if conn.in_transaction() else conn.begin()
+            with scope:
+                conn.execute(_UPSERT, rows)
+                if wanted is None:      # a full snapshot: whoever is not in the book left it
+                    conn.execute(_LEFT, {"month": month, "uids": [r["customer_uid"] for r in rows]})
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
         finally:
             conn.close()
     return len(rows)
@@ -100,12 +101,19 @@ def safe_snapshot(kind, uids=None):
 
 
 def _read(sql, params):
-    """A read on its own connection, its transaction ended either way."""
+    """End only this reader's owned transaction; a borrowed one stays open.
+
+    A production request owns the outer transaction. Explicit rollback here used
+    to cancel unrelated writes made earlier in the same request.
+    """
     conn = db.connect()
     try:
         return [dict(r) for r in conn.execute(text(sql), params).mappings()]
     finally:
-        conn.rollback()
+        from .production_unit import BorrowedConnection
+        if not isinstance(conn, BorrowedConnection):
+            # Also supports a harness reusing a real connection with close mocked.
+            conn.rollback()
         conn.close()
 
 

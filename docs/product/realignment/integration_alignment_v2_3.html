@@ -1,0 +1,45 @@
+<h1>Volt Debt Collection — Integration Alignment v2.3</h1>
+<table>
+<tr><th>Field</th><th>Value</th></tr>
+<tr><td>Document</td><td>Integration Alignment v2.3 — how the integration picture changes under the interview findings and decision C3 (PEAK draft only), atop Integration Alignment v2.2 (moved to 13 History). Where nothing here touches a rule, v2.2 and beneath it v2.1 stand.</td></tr>
+<tr><td>Version</td><td>2.3. Dated 2026-09-02.</td></tr>
+<tr><td>Owner</td><td>Arina (arina.j@volt.co.th)</td></tr>
+<tr><td>Read with</td><td>Odoo Integration v1.2 · PEAK Integration v1.2 · Requirements Amendment v2.6 · Interview and SOP Findings 2026-09-01</td></tr>
+</table>
+
+<h2>0. Plain language first</h2>
+<p><strong>Upstream</strong> — the system data comes from: Odoo. <strong>Downstream</strong> — the system documents go to: PEAK. <strong>Draft</strong> — a document PEAK holds but has not approved; a person approves it inside PEAK. <strong>Read back</strong> — Debt asking PEAK what happened to a draft. <strong>Idempotency key</strong> — a unique tag stored before a create call so that a retry can never create the document twice. <strong>Gap list</strong> — orders Odoo says are installed but the sheet never marked Order-Done.</p>
+
+<h2>1. The picture in one line</h2>
+<p><strong>Odoo → Debt → PEAK, and only drafts cross the last arrow.</strong> Odoo supplies orders, customers, installation dates and helpdesk tickets and is never written. Debt owns the case, the contact log, the promises, the next actions, the holds and the reviews — none of which reach a ledger (FigJam: 25 of 48 outcomes post nothing). PEAK receives every ledger-touching outcome as a draft in the instance company_id names (EPC for cash and service, SPV for lease; REQ-ENT-001 stands), and a person in PEAK approves it. Debt reads the approved state back and shows it on the case.</p>
+
+<h2>2. What each system is trusted with</h2>
+<table>
+<tr><th>System</th><th>Trusted with</th><th>Never</th></tr>
+<tr><td>Odoo</td><td>Order and customer identity; product group (hence the entity); EPC crew; planned, confirmed and actual installation dates; helpdesk ticket state and link; the Order-Done status the sheet used to copy</td><td>Written by Debt; a status override stays local with provenance (R14 stands)</td></tr>
+<tr><td>Debt</td><td>Cases, next actions, the contact log and the daily-slot law, PTPs and their outcomes, reviews, holds, power-restriction requests, the working list, migration provenance, the weekly report</td><td>Approving anything in PEAK; computing a component allocation while OD-02 is open</td></tr>
+<tr><td>PEAK</td><td>Every invoice, receipt, credit note, journal and write-off; approval; the QR on an approved invoice; contact codes and document numbers</td><td>Holding a case, a promise or a call — chasing is not a transaction</td></tr>
+<tr><td>The sheet</td><td>The migration source, once; then the last fallback rung for order rows</td><td>The record after migration</td></tr>
+<tr><td>LINE OA</td><td>A channel for delivery and conversation</td><td>The contact record — that is the contact log</td></tr>
+</table>
+
+<h2>3. The Odoo leg — three new reads</h2>
+<p>Beside sale.order and res.partner (v1.1), Debt reads: the installation dates on the order or its project (planned, confirmed by EPC, actual), which drive the invoice pipeline's three-day look-ahead and the installation-day check; the helpdesk ticket model, so a service issue can carry its ticket and learn when it closes; and the order status, so the gap list "installed per dates, not Order-Done per status" is computed rather than discovered by a person. Field names are confirmed by discovery on first live contact (v1.1's discovery-first rule stands); the mapping lands in Odoo Integration v1.2 section 2.</p>
+
+<h2>4. The PEAK leg — draft only</h2>
+<p>The client keeps two verbs: create a draft and read a document's state. There is no approve, post, update or delete, and a test asserts it. Every outgoing document is a peak_document (Data Model v2.3) whose idempotency key is stored before the call. States: PENDING, DRAFT_CREATED, APPROVED_IN_PEAK, REJECTED, UNSENT. The 23-outcome table and the two-instance routing live in PEAK Integration v1.2. The QR code on a customer invoice is read from the approved document, so a link cannot be sent for a draft that AR has not yet approved — the pipeline shows "waiting for AR" until it is.</p>
+
+<h2>5. Slips, receipts and OD-02</h2>
+<p>A slip confirmed by an officer creates a draft receipt at invoice level in the instance the invoice belongs to; AR approves it in PEAK. Nothing changes for allocation: instalment components are not written while the allocation order (OD-02) is open, and a short payment still raises the exception the v2.1 webhook raised. A receipt that cannot be tied to one customer stays in the Finance exception queue (FigJam S07) and credits nothing.</p>
+
+<h2>6. Events</h2>
+<p>Event Contracts v2.2 stands with its PROPOSED shapes. This version adds, PROPOSED: evt.case.next_action_set, evt.contact.logged, evt.review.requested and evt.review.answered, evt.service_issue.ticket_closed, evt.power_restriction.requested / approved / executed / restored, evt.peak_document.draft_created / approved / rejected, evt.pipeline.gate_passed and evt.pipeline.released, evt.migration.row_imported. Shapes settle when the MVP wires a bus; the prototype state machines are their source of truth.</p>
+
+<h2>7. Open integration items</h2>
+<table>
+<tr><th>Id</th><th>Item</th><th>Owner</th></tr>
+<tr><td>INT-04</td><td>Which Odoo model holds the confirmed installation date, and whether EPC confirmation is a field or a stage</td><td>First, Dan</td></tr>
+<tr><td>INT-05</td><td>Whether PEAK's API exposes document state (draft, approved) for read-back, or only creation</td><td>First, Whan</td></tr>
+<tr><td>INT-06</td><td>Whether the two PEAK instances share a token or need two credential sets</td><td>First</td></tr>
+<tr><td>INT-01..03</td><td>Unchanged from v2.1</td><td>as before</td></tr>
+</table>

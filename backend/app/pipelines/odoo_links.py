@@ -44,6 +44,24 @@ def active_for_customers(conn, customer_nos):
     return out
 
 
+def names_for_customers(conn, customer_nos):
+    """Exact crm.lead titles from successful source snapshots, by verified lead id."""
+    nos = [str(n) for n in customer_nos if n]
+    if not nos:
+        return {}
+    rows = conn.execute(text(
+        'select l.customer_no, case when r.status = \'OK\' '
+        'then o.extra->>\'odoo_lead_name\' end as name '
+        'from records.identity_link l '
+        'left join landing."order" o on o.volt_id = l.contact_code '
+        'and o.data_source = \'ODOO\' and o.crm_id = l.odoo_lead_id::text '
+        'left join landing.import_run r on r.id = o.import_run_id '
+        'where l.source = :s and l.retired_at is null and l.customer_no = any(:nos) '
+        'order by l.uid'), {"s": SOURCE, "nos": nos}).mappings().all()
+    latest = {str(row["customer_no"]): row["name"] for row in rows}
+    return {no: name for no, name in latest.items() if name}
+
+
 def social_for_customers(conn, customer_nos):
     """{customer_no: {line_id, meta_id}} from each linked live Odoo source row.
 

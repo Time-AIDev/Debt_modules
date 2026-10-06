@@ -1,0 +1,10 @@
+[Unit]
+Description=Check for interrupted Volt Debt backup every minute
+
+[Timer]
+OnBootSec=30s
+OnUnitInactiveSec=1min
+Unit=volt-debt-resume-writers.service
+
+[Install]
+WantedBy=timers.target

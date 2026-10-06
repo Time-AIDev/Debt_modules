@@ -4,6 +4,7 @@ The crm.lead file door went on 2026-09-25 (fix-all): the New Order Master sheet 
 through POST /v1/imports, and this pipeline reads Odoo only.
 """
 from ..integrations import odoo
+from ..crm_policy import won_only
 
 PAGE = 500
 ELIGIBILITY_DOMAIN = [
@@ -21,12 +22,16 @@ EXCLUSION_DOMAINS = {
 }
 
 
+def eligibility_domain():
+    return ELIGIBILITY_DOMAIN[:1] if won_only() else ELIGIBILITY_DOMAIN
+
+
 def _fields(rules):
-    """Exactly what §2 of the rules file maps, plus the id. Adding a row to that table
+    """Exactly what §2 of the rules file maps, plus the source id and title. Adding a row to that table
     adds the field to the pull; there is no constant here to keep in step with it."""
     named = [r["crm.lead field"] for r in rules.field_map
              if r["crm.lead field"] not in ("—", "")]
-    return sorted(set(named) | {"id"})
+    return sorted(set(named) | {"id", "name"})
 
 
 def from_odoo(rules, execute=None, on_progress=None, on_exclusions=None):
@@ -43,13 +48,15 @@ def from_odoo(rules, execute=None, on_progress=None, on_exclusions=None):
     config = odoo._config()
     uid = odoo._login(config)
     fields = _fields(rules)
+    domain = eligibility_domain()
+    exclusions = {"not_won": EXCLUSION_DOMAINS["not_won"]} if won_only() else EXCLUSION_DOMAINS
     if on_exclusions:
         on_exclusions({name: execute(config, uid, "crm.lead", "search_count", [domain])
-                       for name, domain in EXCLUSION_DOMAINS.items()})
-    total = execute(config, uid, "crm.lead", "search_count", [ELIGIBILITY_DOMAIN])
+                       for name, domain in exclusions.items()})
+    total = execute(config, uid, "crm.lead", "search_count", [domain])
     rows, last_id = [], 0
     while True:
-        page = execute(config, uid, "crm.lead", "search_read", [ELIGIBILITY_DOMAIN + [("id", ">", last_id)]],
+        page = execute(config, uid, "crm.lead", "search_read", [domain + [("id", ">", last_id)]],
                        {"fields": fields, "limit": PAGE, "order": "id"})
         if not page:
             break
@@ -57,7 +64,7 @@ def from_odoo(rules, execute=None, on_progress=None, on_exclusions=None):
         last_id = page[-1]["id"]
         if on_progress:
             on_progress(read=len(rows), total=total)
-    counted = min(total, execute(config, uid, "crm.lead", "search_count", [ELIGIBILITY_DOMAIN]))
+    counted = min(total, execute(config, uid, "crm.lead", "search_count", [domain]))
     if len(rows) < counted:
         raise odoo.OdooError("Odoo returned %d of the %d leads it counted" % (len(rows), counted))
     return rows
