@@ -16,7 +16,8 @@ def parse_date(value):
 
 @router.get('/v1/terminated-customers')
 def listing(q: str = '', since: str = None, until: str = None, cause: str = None,
-            actor: str = None, source: str = None, page: int = Query(1, ge=1)):
+            actor: str = None, source: str = None, page: int = Query(1, ge=1),
+            customer_uid: str = Query(default=None, min_length=1, max_length=200)):
     since, until = parse_date(since), parse_date(until)
     latest = {}
     for row in archive.records():
@@ -31,7 +32,8 @@ def listing(q: str = '', since: str = None, until: str = None, cause: str = None
         all_rows.append(row)
     needle = q.strip().casefold()
     rows = [r for r in all_rows if
-            (not needle or needle in ' '.join(str(r.get(k) or '') for k in ('customer_name', 'customer_no', 'volt_id', 'customer_uid')).casefold())
+            (not customer_uid or r['customer_uid'] == customer_uid)
+            and (not needle or needle in ' '.join(str(r.get(k) or '') for k in ('customer_name', 'customer_no', 'volt_id', 'customer_uid')).casefold())
             and (not since or bool(r.get('terminated_on') and r['terminated_on'][:10] >= since))
             and (not until or bool(r.get('terminated_on') and r['terminated_on'][:10] <= until))
             and (not cause or cause in r['causes']) and (not actor or actor == r.get('actor'))

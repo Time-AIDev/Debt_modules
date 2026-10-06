@@ -28,6 +28,7 @@ import urllib.request
 import uuid
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backup_evidence import verified_offsite
+from quality_evidence import QualityError, validate_bundle
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG = Path("/etc/volt-debt")
@@ -483,6 +484,18 @@ class Release:
         self.evidence["expected_schema_version"] = schema_version
         self.checkpoint()
 
+    def verify_quality(self):
+        path = getattr(self.args, "quality_evidence", None)
+        if path is None:
+            raise ReleaseError("All release quality evidence is required before go-live")
+        try:
+            outcome = validate_bundle(path, revision=self.args.revision,
+                                      api_image=self.args.api_image, web_image=self.args.web_image,
+                                      reader=lambda file: read_private(file, max_bytes=16 * 1024 * 1024))
+        except QualityError as exc:
+            raise ReleaseError(str(exc)) from None
+        self.evidence["checks"]["quality"] = outcome
+
     def up(self, *services):
         self.compose("up", "--detach", "--no-deps", "--force-recreate", "--pull", "never",
                      "--wait", "--wait-timeout", "180", *services)
@@ -517,6 +530,10 @@ class Release:
 
     def deploy(self):
         self.preflight()
+        if self.args.go_live:
+            # Missing quality proof must not stop writers or mutate configuration.
+            self.verify_quality()
+            self.verify_browser_origin()
         if self.args.check:
             self.evidence["status"] = "preflight_passed"
             return
@@ -590,6 +607,7 @@ def arguments(argv=None):
     parser.add_argument("--evidence", required=True, type=Path)
     parser.add_argument("--rollback-api-image")
     parser.add_argument("--browser-evidence", type=Path)
+    parser.add_argument("--quality-evidence", type=Path)
     parser.add_argument("--go-live", action="store_true")
     parser.add_argument("--check", action="store_true", help="Verify preflight without changing production configuration or containers")
     args = parser.parse_args(argv)
