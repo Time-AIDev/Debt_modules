@@ -101,6 +101,23 @@ def _save_rows(conn, generation, rows):
 
 
 def rebuild(conn):
+    """Use fresh bounded reads after source writes, then restore caller caches.
+
+    Global mutations deliberately avoid request-wide financial memoization. Their
+    projection publication is read-only derivation within the same transaction,
+    so it can safely share metadata and contract calculations for this build.
+    """
+    from . import main, request_context
+    memo_token = main._VIEW_MEMO.set({})
+    read_token = request_context.begin_read()
+    try:
+        return _rebuild(conn)
+    finally:
+        request_context.end_read(read_token)
+        main._VIEW_MEMO.reset(memo_token)
+
+
+def _rebuild(conn):
     """Build one complete shadow generation with legacy financial functions."""
     from . import cases, data_epoch, journey, session, today as domain
     from .config import settings

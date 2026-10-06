@@ -246,6 +246,123 @@ def test_shadow_build_failure_never_publishes_partial_generation(capacity, monke
     assert capacity.execute(text("select count(*) from app.customer_projection where generation=:g"), {"g": current}).scalar_one() == 1
 
 
+def test_global_rebuild_reads_proof_metadata_once_and_preserves_money_rows(capacity, pg_url, monkeypatch):
+    from collections import Counter
+    from sqlalchemy import event
+    from app import production_runtime, request_context
+    from app.routers.today import _legacy_workbook
+
+    # Imported contracts require explicit proof. Missing proof must retain their
+    # money rows while excluding them from automatic NPL, with one snapshot read
+    # for each complete metadata set rather than one read per eligibility call.
+    for customer in main.CUSTOMERS:
+        for contract in customer.contracts:
+            monkeypatch.setattr(contract, "requires_installation_confirmation", True, raising=False)
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **kwargs: None)
+    calls = Counter()
+    def count_reads(conn, cursor, statement, parameters, context, many):
+        normal = " ".join(statement.lower().split())
+        for key, marker in (("installations", "select contract_uid,payload from records.installation_confirmation"),
+                            ("supplements", "select contract_uid,payload from records.contract_supplement"),
+                            ("pipeline", "select payload from app.business_record where store_key='invoice_pipeline.state'")):
+            if normal.startswith(marker):
+                calls[key] += 1
+    event.listen(capacity, "before_cursor_execute", count_reads)
+    try:
+        with unit(capacity, mutation=True):
+            assert request_context.reads() is None and main._VIEW_MEMO.get() is None
+            read_projection.rebuild(capacity)
+            assert request_context.reads() is None and main._VIEW_MEMO.get() is None
+            assert calls == {"installations": 1, "supplements": 1, "pipeline": 1}
+            indexed = read_projection.workbook({})
+            memo, reads = main._VIEW_MEMO.set({}), request_context.begin_read()
+            try:
+                legacy = _legacy_workbook()
+                assert indexed["rows"] == legacy["rows"]
+                assert indexed["meta"]["total"] == legacy["meta"]["total"]
+                from app import collection_eligibility
+                assessments = [collection_eligibility.for_contract(contract)
+                               for customer in main.CUSTOMERS for contract in customer.contracts]
+                assert any(value["state"] == "UNCONFIRMED" for value in assessments)
+                assert all(value["eligible"] is False for value in assessments)
+            finally:
+                request_context.end_read(reads)
+                main._VIEW_MEMO.reset(memo)
+    finally:
+        event.remove(capacity, "before_cursor_execute", count_reads)
+
+
+def test_rebuild_uses_own_source_writes_and_fresh_pending_cash_without_replacing_parent_cache(capacity, pg_url, monkeypatch):
+    from app import payment_claims, production_runtime, request_context
+    from app.routers.today import _legacy_workbook
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **kwargs: None)
+    with unit(capacity, mutation=True):
+        read_projection.rebuild(capacity)
+        before = read_projection.workbook({})
+        row = next(row for row in before["rows"] if row.get("case", {}).get("payment_status") == "LATE")
+        uid, outstanding = row["customer"]["uid"], row["aggregate_outstanding"]
+        memo, reads = main._VIEW_MEMO.set({"parent": "unchanged"}), request_context.begin_read()
+        parent_reads = request_context.reads()
+        try:
+            assert payment_claims.list_all("PENDING") == []
+            cached_parent = dict(parent_reads)
+            capacity.execute(text("insert into records.payment_claim "
+                "(uid,customer_uid,amount,paid_on,created_by,created_role,idempotency_key,state) "
+                "values('rebuild-pending',:u,1,'2026-10-23','synthetic','OWNER','rebuild-cash','PENDING')"), {"u": uid})
+            epoch = capacity.execute(text("insert into app.data_epoch(kind) values('synthetic-rebuild') returning id")).scalar_one()
+            key = read_projection.rebuild(capacity)
+            assert request_context.reads() is parent_reads and parent_reads == cached_parent
+            assert main._VIEW_MEMO.get() == {"parent": "unchanged"}
+            assert capacity.execute(text("select source_epoch from app.projection_generation where id=:g"), {"g": key}).scalar_one() == epoch
+            published = read_projection.workbook({})
+            pending = next(row for row in published["rows"] if row["customer"]["uid"] == uid)
+            assert pending["case"]["payment_status"] == "PENDING"
+            assert pending["case"]["payment_pending_amount"] == "1.00"
+            assert pending["aggregate_outstanding"] == outstanding
+            # A second source change in the same global command needs another
+            # fresh derivation, even when the claim cache version did not change.
+            capacity.execute(text("update records.payment_claim set state='CANCELLED' where uid='rebuild-pending'"))
+            read_projection.rebuild(capacity)
+            cleared = read_projection.workbook({})
+            restored = next(row for row in cleared["rows"] if row["customer"]["uid"] == uid)
+            assert restored["case"]["payment_status"] == "LATE"
+            assert restored["aggregate_outstanding"] == outstanding
+            fresh_memo, fresh_reads = main._VIEW_MEMO.set({}), request_context.begin_read()
+            try:
+                assert cleared["rows"] == _legacy_workbook()["rows"]
+            finally:
+                request_context.end_read(fresh_reads)
+                main._VIEW_MEMO.reset(fresh_memo)
+        finally:
+            request_context.end_read(reads)
+            main._VIEW_MEMO.reset(memo)
+
+
+def test_failed_rebuild_restores_parent_read_caches(capacity, monkeypatch):
+    from app import request_context
+    from app.production_unit import CURRENT
+    with unit(capacity, mutation=True):
+        memo, reads = main._VIEW_MEMO.set({"parent": "unchanged"}), request_context.begin_read()
+        parent_reads = request_context.reads()
+        parent_reads["parent"] = "unchanged"
+        try:
+            def interrupted(*args, **kwargs):
+                assert request_context.reads() is not parent_reads
+                assert main._VIEW_MEMO.get() != {"parent": "unchanged"}
+                raise RuntimeError("synthetic projection derivation failure")
+            monkeypatch.setattr(read_projection, "_save_rows", interrupted)
+            with pytest.raises(RuntimeError):
+                read_projection.rebuild(capacity)
+            assert request_context.reads() is parent_reads and parent_reads == {"parent": "unchanged"}
+            assert main._VIEW_MEMO.get() == {"parent": "unchanged"}
+            assert not CURRENT.get().get("seeding")
+        finally:
+            request_context.end_read(reads)
+            main._VIEW_MEMO.reset(memo)
+
+
 def test_case_etags_allow_other_customer_edits_but_reject_same_case_stale_write(capacity, pg_url, monkeypatch):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
