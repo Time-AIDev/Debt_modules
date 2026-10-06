@@ -1354,11 +1354,14 @@ def _identity_only_case_detail(cs, customer, customer_uid):
     them with the served reason and every money figure absent — None, never zero,
     because nothing is owed on a row that carries no money."""
     from .. import customer_contact
+    from .. import financial_evidence
+    evidence = financial_evidence.for_customer(customer_uid)
     sheet = getattr(customer, "sheet", {}) or {}
     order = sheet.get("order") or {}
     allowance = _contact_allowance(cs, customer_uid)
     return {
         "identity_only": True,
+        "financial_evidence": evidence,
         "reason": order.get("reason") or "no money row in Odoo",
         "case": None, "work_item": None, "risk_score": None,
         "contact_allowance": allowance,

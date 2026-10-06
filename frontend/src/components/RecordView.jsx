@@ -85,6 +85,98 @@ function Card({ title, extra, tip, children, className }) {
   )
 }
 
+function evidenceOf(data) {
+  return data.financial_evidence || data.case?.financial_evidence || null
+}
+
+/** Every received component stays visible; balances are always served by the API. */
+export function InvoicePaymentEvidence({ invoice, receipts = [] }) {
+  const { lang } = usePrefs()
+  const english = lang === 'en'
+  const components = invoice.payment_components !== undefined ? invoice.payment_components
+    : receipts.filter((receipt) => receipt.invoice_uid === invoice.uid).map((receipt) => ({
+      uid: receipt.uid, receipt_doc_no: receipt.ref, paid_on: receipt.received_on,
+      amount: receipt.amount, channel: receipt.channel, status: receipt.status || (receipt.is_allocated === false ? 'UNALLOCATED' : 'PAID'),
+    }))
+  if (!components?.length) {
+    const references = invoice.receipt_references || []
+    return references.length ? <span>{references.join(', ')}<small className="case__rowNote">
+      {english ? 'Reference only; dated payment details are unavailable.' : 'มีเลขอ้างอิง แต่ยังไม่มีรายละเอียดวันที่และเงินรับ'}</small></span> : '—'
+  }
+  return <ul className="case__stack" aria-label={english ? 'Dated invoice payments' : 'รายการรับเงินของใบแจ้งหนี้'}>
+    {[...components].sort((a, b) => String(a.paid_on || '').localeCompare(String(b.paid_on || ''))).map((component, index) => {
+      const cancelled = component.status === 'CANCELLED'
+      return <li key={component.uid || `${component.receipt_doc_no}:${index}`}>
+        <strong>{component.receipt_doc_no || '—'}</strong>
+        <div className="num">{fmtDate(component.paid_on)} · {english ? 'Received' : 'รับเข้า'} {money(component.amount)}</div>
+        <div>{english ? 'Channel' : 'ช่องทาง'}: {component.channel || (english ? 'Not recorded' : 'ไม่ระบุ')}</div>
+        {component.raw_components?.length > 1 ? <>
+          <small className="case__rowNote">{english ? 'Dated net receipt; source amounts and adjustments:' : 'เงินรับสุทธิในวันนี้ — ยอดและรายการปรับตามต้นทาง:'}</small>
+          <ul>{component.raw_components.map((raw, n) => <li key={raw.uid || n} className="num">
+            {fmtDate(raw.paid_on)} · {raw.is_adjustment ? (english ? 'Adjustment' : 'ปรับยอดรับ') : (english ? 'Received' : 'รับเข้า')} {money(raw.amount)} · {raw.channel || (english ? 'Not recorded' : 'ไม่ระบุ')}
+          </li>)}</ul>
+        </> : null}
+        {cancelled ? <StatusPill kind="problem">{english ? 'Cancelled — excluded from allocation' : 'ยกเลิกแล้ว — ไม่ใช้ตัดยอด'}</StatusPill>
+          : component.status === 'UNALLOCATED' ? <NeutralChip>{english ? 'Awaiting allocation' : 'รอจัดสรร'}</NeutralChip>
+            : <span className="case__rowNote num">{english ? 'Allocated to this invoice' : 'จัดสรรเข้าบิลนี้'}: {money(component.allocated_amount)}</span>}
+        {component.included_in_snapshot ? <small className="case__rowNote">{english
+          ? 'Already included in the dated invoice balance.' : 'เงินส่วนนี้รวมอยู่ในยอดตามวันที่ใบแจ้งหนี้แล้ว'}</small> : null}
+      </li>
+    })}
+  </ul>
+}
+
+export function FinancialEvidence({ evidence }) {
+  const { lang } = usePrefs()
+  const english = lang === 'en'
+  if (!evidence) return null
+  const reconciliation = evidence.reconciliation || {}
+  return <>
+    <Card title={english ? 'Payment source dates and reconciliation' : 'วันที่ข้อมูลรับชำระและการกระทบยอด'}>
+      <div className="card__body case__stack">
+        <p>{english ? 'Reconciliation version' : 'กระทบยอดรอบ'} {reconciliation.sequence ?? '—'} · {fmtDate(reconciliation.created_at)} {hhmm(reconciliation.created_at)}</p>
+        <p>{english ? 'Invoice balance snapshot' : 'ยอดใบแจ้งหนี้ ณ วันที่'}: {fmtDate(reconciliation.snapshot_as_of)}</p>
+        <p className="case__rowNote">{english
+          ? 'Invoice paid and outstanding balances come from reconciliation. Payment rows are evidence and are not added to the snapshot balance again.'
+          : 'ยอดชำระและยอดค้างของบิลมาจากการกระทบยอด รายการเงินรับเป็นหลักฐานและไม่ถูกบวกหรือหักซ้ำจากยอดเดิม'}</p>
+        {(evidence.sources || []).length ? <DataTable caption={english ? 'Source report dates' : 'วันที่รายงานต้นทาง'} rows={evidence.sources}
+          getKey={(source) => source.id} minWidth={600} columns={[
+            { key: 'source', label: english ? 'Report' : 'รายงาน', render: (source) => source.source_system === 'PEAK_RECEIPT'
+              ? (english ? 'PEAK receipts' : 'ใบเสร็จ PEAK') : (english ? 'PEAK invoices' : 'ใบแจ้งหนี้ PEAK') },
+            { key: 'asOf', label: english ? 'Data as of' : 'ข้อมูล ณ วันที่', render: (source) => fmtDate(source.report_as_of) },
+            { key: 'export', label: english ? 'Actually exported' : 'ส่งออกจริง', render: (source) => <span>{fmtDate(source.exported_at)} {hhmm(source.exported_at)}</span> },
+            { key: 'coverage', label: english ? 'Document coverage' : 'ช่วงเอกสาร', render: (source) => `${fmtDate(source.covers_from)} – ${fmtDate(source.covers_to)}` },
+          ]} /> : <p>{english ? 'Source freshness is unavailable.' : 'ยังไม่มีข้อมูลวันที่ส่งออกต้นทาง'}</p>}
+        {(evidence.limitations || []).map((limitation) => <p key={limitation.code} role="note" className="case__rowNote">{english
+          ? `Receipt details before ${fmtDate(limitation.before)} are not included in these exports. Historical dated invoice balances are retained; missing receipts do not mean unpaid debt.`
+          : `ชุดไฟล์นี้ไม่มีรายละเอียดใบเสร็จก่อน ${fmtDate(limitation.before)} ยอดเดิมตามวันที่ใบแจ้งหนี้ยังคงไว้ การไม่พบใบเสร็จเก่าไม่ได้หมายความว่ายังไม่ชำระ`}</p>)}
+      </div>
+    </Card>
+    <Card title={english ? 'All receipt components' : 'รายละเอียดเงินรับทุกใบเสร็จ'}>
+      <div className="card__body case__stack">
+        {(evidence.receipts || []).length ? <ul className="case__stack" aria-label={english ? 'Receipt payment components' : 'รายการส่วนรับชำระของใบเสร็จ'}>
+          {evidence.receipts.map((receipt) => <li key={receipt.doc_no}>
+            <strong>{receipt.doc_no}</strong>{receipt.invoice_ref ? ` · ${english ? 'References' : 'อ้างอิง'} ${receipt.invoice_ref}` : ''}
+            {receipt.status === 'CANCELLED' ? <p><StatusPill kind="problem">{english ? 'Cancelled — excluded from allocation' : 'ยกเลิกแล้ว — ไม่ใช้ตัดยอด'}</StatusPill></p> : null}
+            <ul className="case__stack">{(receipt.components || []).map((component, index) => <li key={component.uid || index}>
+              <span className="num">{fmtDate(component.paid_on)} · {component.is_adjustment ? (english ? 'Adjustment' : 'ปรับยอดรับ') : (english ? 'Received' : 'รับเข้า')} {money(component.amount)}</span>
+              <span> · {english ? 'Channel' : 'ช่องทาง'}: {component.channel || (english ? 'Not recorded' : 'ไม่ระบุ')}</span>
+              {receipt.status === 'CANCELLED' ? <div className="case__rowNote">{english ? 'No current allocation' : 'ไม่มีการตัดยอดปัจจุบัน'}</div> : null}
+            </li>)}</ul>
+            {receipt.status !== 'CANCELLED' ? (receipt.payment_groups || []).length ? <ul className="case__stack" aria-label={english ? 'Dated net receipt allocations' : 'การจัดสรรเงินรับสุทธิแต่ละวัน'}>
+              {receipt.payment_groups.map((group) => <li key={group.uid} className="num">
+                {fmtDate(group.paid_on)} · {english ? 'Net received' : 'รับสุทธิ'} {money(group.net_received)}
+                <div className="case__rowNote">{group.allocations.map((allocation, n) => <span key={n}>
+                  {n ? ' · ' : ''}{allocation.invoice_doc_no || (english ? 'Customer credit' : 'เครดิตลูกค้า')}: {money(allocation.amount)}</span>)}</div>
+              </li>)}
+            </ul> : <p className="case__rowNote">{english ? 'Not allocated to an invoice; review the match.' : 'ยังไม่จัดสรรเข้าบิล ต้องตรวจสอบการจับคู่'}</p> : null}
+          </li>)}
+        </ul> : <p>{english ? 'No dated receipt components in this reconciliation.' : 'รอบนี้ยังไม่มีรายละเอียดส่วนรับชำระของใบเสร็จ'}</p>}
+      </div>
+    </Card>
+  </>
+}
+
 /** A crm.lead customer with no money row: identity and order facts, no case. */
 function IdentityOnlyRecord({ data, mode, onClose }) {
   const { t, lang } = usePrefs()
@@ -126,7 +218,10 @@ function IdentityOnlyRecord({ data, mode, onClose }) {
       <div className="case__body">
         <Card title={t('record.identityTitle')}>
           <div className="card__body case__stack">
-            <p className="case__text">{lang === 'en' ? data.identity_note_en : data.identity_note_th}</p>
+            <p className="case__text">{evidenceOf(data) ? (lang === 'en'
+              ? 'PEAK source evidence is available, but this customer has no confirmed collection contract. Source receipts are shown separately below.'
+              : 'พบหลักฐานจาก PEAK แต่ยังไม่มีสัญญาเรียกเก็บที่ยืนยันแล้ว รายละเอียดเงินรับแสดงแยกด้านล่าง')
+              : lang === 'en' ? data.identity_note_en : data.identity_note_th}</p>
             {facts.length ? (
               <dl className="kv">
                 {facts.map(([label, value]) => (
@@ -140,6 +235,7 @@ function IdentityOnlyRecord({ data, mode, onClose }) {
           </div>
           <p className="card__note">{t('record.identityReason', { reason })}</p>
         </Card>
+        <FinancialEvidence evidence={evidenceOf(data)} />
       </div>
     </div>
   )
@@ -421,7 +517,6 @@ export function RecordView({
   const reviews = data.reviews || []
   const power = data.power || []
   const invoices = data.invoices || []
-  const receiptByInvoice = new Map((data.receipts || []).map((r) => [r.invoice_uid, r]))
   const allowance = data.contact_allowance || {}
   const none = issueStatus('NONE')
 
@@ -822,6 +917,7 @@ export function RecordView({
 
         {tab === 'invoices' && (
           <>
+            <FinancialEvidence evidence={evidenceOf(data)} />
             {data.pre_install && data.pipeline_item ? (
               <PreInstallCard item={data.pipeline_item} meta={data.pipeline_meta} onChanged={onChanged}
                               heading="preinstall.heading" evidenceOpen={false} />
@@ -844,7 +940,7 @@ export function RecordView({
                         {fmtDate(r.due_date)}{r.schedule_due_date && r.schedule_due_date !== r.due_date ? <small className="case__rowNote">{t('schedule.scheduleDate', { date: fmtDate(r.schedule_due_date) })}</small> : null}{r.service_deferral ? <small className="case__rowNote">
                           {t('deferral.collectionDue')}: {fmtDate(r.collection_due_date)}</small> : null}</span>,
                     },
-                    { key: 'confirmedPaid', label: t('record.invConfirmedPaid'), num: true, render: (r) => r.payment_evidence === 'UNCONFIRMED' ? '—' : money(r.confirmed_paid || 0) },
+                    { key: 'confirmedPaid', label: t('record.invConfirmedPaid'), num: true, render: (r) => r.payment_evidence === 'UNCONFIRMED' ? '—' : money(r.confirmed_paid) },
                     { key: 'pending', label: t('record.invPending'), num: true, render: (r) => money(r.pending_amount || 0) },
                     { key: 'outstanding', label: t('record.invOutstanding'), num: true, render: (r) => (r.payment_evidence === 'UNCONFIRMED' || r.liability_verified === false) ? '—' : money(r.confirmed_outstanding ?? r.outstanding) },
                     { key: 'change', label: t('record.invChange'), num: true,
@@ -855,13 +951,7 @@ export function RecordView({
                     { key: 'cycle', label: t('record.invCycle'), render: (r) => ('contract_cycle' in r ? (r.contract_cycle ? `M${r.contract_cycle}` : '—') : (r.month_index ? `M${r.month_index}` : '—')) },
                     {
                       key: 'receipt', label: t('record.invReceipt'),
-                      render: (r) => {
-                        const refs = r.receipt_references || []
-                        if (refs.length) return refs.join(', ')
-                        const rcp = receiptByInvoice.get(r.uid)
-                        if (!rcp) return '—'
-                        return `${rcp.ref || '—'} · ${rcp.received_on ? fmtDate(String(rcp.received_on).slice(0, 10)) : '—'}`
-                      },
+                      render: (r) => <InvoicePaymentEvidence invoice={r} receipts={data.receipts || []} />,
                     },
                     { key: 'review', label: t('invoiceReview.title'), render: (r) => <InvoiceReviews invoice={r} data={data} onChanged={onChanged} /> },
                   ]}

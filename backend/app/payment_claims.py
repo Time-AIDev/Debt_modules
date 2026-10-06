@@ -822,6 +822,13 @@ def decorate(customer_uid, case, invoices):
                           if r.get("is_due", True) and r.get("collection_included", True)), ZERO)
     pending_credit = sum((Decimal(str(r.get("credit_amount") or "0")) for r in active), ZERO)
     case_view = dict(case)
+    if db.configured():
+        from . import financial_evidence
+        evidence = financial_evidence.for_customer(customer_uid)
+        if evidence:
+            case_view["financial_evidence"] = evidence
+            for invoice in annotated:
+                invoice["payment_components"] = evidence["invoice_components"].get(_doc_no(invoice), [])
     base = case.get("payment_status_confirmed") or case.get("payment_status_system") or case.get("payment_status")
     case_view["payment_status_confirmed"] = base
     if active and base not in GOVERNED_PAYMENT_STATUSES:
