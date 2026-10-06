@@ -56,6 +56,17 @@ beforeEach(() => {
 })
 
 describe('แหล่งข้อมูล (design D)', () => {
+  it('shows the reviewed profile preview returned by the durable async worker', async () => {
+    setRole('MANAGER')
+    api.createImport.mockResolvedValue({ result: { result: { preview: {
+      uid: 'preview-worker', profile: 'debt_status', version: 'source-version', entries: [],
+    } } } })
+    const user = userEvent.setup()
+    renderScreen(<DataSources />)
+    await user.click(await screen.findByRole('button', { name: /^ไฟล์ชีต/ }))
+    await user.upload(screen.getByLabelText('เลือกไฟล์'), new File(['x'], 'new-order-master.xlsx'))
+    expect(await screen.findByRole('region', { name: 'ตรวจการจับคู่ก่อนบันทึก' })).toBeInTheDocument()
+  })
   it('disables Odoo pulls with a visible reason when the connector is not configured', async () => {
     const data = overview()
     data.integrations.odoo.configured = false

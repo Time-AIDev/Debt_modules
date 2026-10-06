@@ -41,15 +41,23 @@ async def run_once():
             lease.commit()
 
 
-async def serve():
+async def serve(probe_only=False):
+    if probe_only and (os.environ.get("ENV") not in ("stg", "staging")
+                       or os.environ.get("VOLT_RECOVERY_READ_ONLY") != "true"):
+        raise RuntimeError("Recovery probe worker is restricted to an explicit isolated staging restore")
     if os.environ.get("TASK_QUEUE_BACKEND") != "postgres":
         raise RuntimeError("Private local worker requires TASK_QUEUE_BACKEND=postgres")
     from . import main  # Validate production environment and configure authentication.
     from .durable_schedule import enqueue_due
+    if probe_only:
+        print(json.dumps({"event": "recovery_worker_probe", "business_jobs_enabled": False}), flush=True)
     cleanup_at = 0
     while True:
         try:
             heartbeat("idle")
+            if probe_only:
+                await asyncio.sleep(1)
+                continue
             enqueue_due()
             handled = await run_once()
             if time.monotonic() >= cleanup_at:
@@ -92,4 +100,4 @@ if __name__ == "__main__":
             sys.exit(0 if healthy() else 1)
         except Exception:
             sys.exit(1)
-    asyncio.run(serve())
+    asyncio.run(serve(probe_only="--probe-only" in sys.argv))

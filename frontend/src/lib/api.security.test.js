@@ -17,6 +17,30 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('production write transport', () => {
+  it('exports the complete filtered company with a plain reason and no page cursor', async () => {
+    const reply = response({}, 8)
+    reply.text = async () => 'customer,entity\nsynthetic,SPV\n'
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(reply)
+    await api.workbookExportGoverned({ reason: 'ตรวจยอดบริษัท', entity: 'SPV', product: 'LEASE', limit: 50, cursor: 'old-page' })
+    const [url, options] = fetch.mock.calls[0]
+    expect(url).toContain('entity=SPV')
+    expect(url).toContain('product=LEASE')
+    expect(url).not.toContain('cursor=')
+    expect(url).not.toContain('limit=')
+    expect(JSON.parse(options.body)).toEqual({ reason: 'ตรวจยอดบริษัท' })
+  })
+  it('clears the opaque case token after a foreground numeric fallback read', async () => {
+    const detail = response({ customer: { uid: 'customer' } }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce(response({ customer: { uid: 'customer' } }, 9))
+      .mockResolvedValueOnce(response({}, 10))
+    await api.caseDetail('customer')
+    await api.caseDetail('customer')
+    await api.addCaseNote('customer', { note: 'ตรวจหลัง fallback' })
+    expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('9')
+  })
   it('uses the case version for notes while other writes retain their numeric version', async () => {
     const detail = response({ customer: { uid: 'customer' } }, 7)
     detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'

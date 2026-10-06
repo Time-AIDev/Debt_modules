@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Local operational checks; failures appear in the systemd journal, not external alerts."""
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 import shutil
 import subprocess
@@ -10,6 +11,23 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, "/usr/local/lib/volt-debt-ops")
 from incident_alerts import AlertError, configured_notification
+
+
+def offsite_failures(config_path=Path("/etc/volt-debt/offsite.json"),
+                     status_path=Path("/var/lib/volt-debt-ops/offsite-status.json"), now=None):
+    if not config_path.exists():
+        return []
+    try:
+        data = json.loads(status_path.read_text())
+        current = now or datetime.now(timezone.utc)
+        captured = datetime.fromisoformat(data["captured_at_utc"].replace("Z", "+00:00"))
+        if data.get("status") == "failed":
+            return ["offsite backup job failed"]
+        if captured.tzinfo is None or not 0 <= (current - captured).total_seconds() <= 86400:
+            return ["encrypted offsite backup exceeds the 24-hour RPO"]
+        return []
+    except (OSError, ValueError, TypeError, KeyError):
+        return ["configured offsite backup has no verified recovery point"]
 
 
 def main():
@@ -55,6 +73,7 @@ def main():
             failures.append("no completed backup in the last 26 hours")
     except (OSError, ValueError, KeyError):
         failures.append("capacity or backup inspection failed")
+    failures.extend(offsite_failures())
     try:
         configured_notification(failures)
     except AlertError:

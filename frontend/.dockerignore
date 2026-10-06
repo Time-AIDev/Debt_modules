@@ -1,0 +1,8 @@
+node_modules
+dist
+coverage
+.test-artifacts
+.git
+.env
+.env.*
+*.log

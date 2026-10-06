@@ -172,6 +172,11 @@ function noteState(response, path) {
       && /^case:[A-Za-z0-9_.:-]{1,200}:\d{1,20}$/.test(token)
       && response.ok && !backgroundResponses.has(response)) {
     caseVersions.set(decodeURIComponent(scope[1]), token)
+  } else if (scope && /^\/v1\/cases\/by-customer\/[^/]+$/.test(path.split('?')[0])
+      && response.ok && !backgroundResponses.has(response)) {
+    // A successful fallback read has numeric versions; do not reuse an opaque
+    // token issued before customer scopes were disabled.
+    caseVersions.delete(decodeURIComponent(scope[1]))
   }
   const raw = response.headers?.get?.('x-volt-state-version')
   if (!/^\d+$/.test(String(raw))) return
@@ -508,7 +513,12 @@ async function postOperation(path, file, extraHeaders = {}, options = {}) {
 // Ruling 72 — the governed export. Same CSV-over-fetch shape as `exportCsv`
 // above, POSTed with a JSON body (the reason) instead of GET's bare query, and
 // carrying back the `X-Volt-Export-Uid` the server minted for the record.
-async function exportCsvPost(path, payload) {
+async function exportCsvPost(path, payload, filters) {
+  const query = new URLSearchParams()
+  Object.entries(filters || {}).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') query.set(key, String(value))
+  })
+  if (query.size) path += `${path.includes('?') ? '&' : '?'}${query}`
   const response = await mutationFetch('POST', path, JSON.stringify(payload || {}), {
     headers: { 'Content-Type': 'application/json' },
   })
@@ -816,7 +826,14 @@ export const api = {
          { enabled, interval_minutes: minutes }),
   imports: () => get('/v1/imports'),
   importRun: (uid) => get(`/v1/imports/${uid}`),
-  workbookExportGoverned: (reason) => exportCsvPost('/v1/workbook:export', { reason }),
+  workbookExportGoverned: (options) => {
+    const filters = typeof options === 'string' ? { reason: options } : { ...(options || {}) }
+    const reason = filters.reason
+    delete filters.reason
+    delete filters.limit
+    delete filters.cursor
+    return exportCsvPost('/v1/workbook:export', { reason }, filters)
+  },
   // `api.orders()` already exists below (line ~279) and is reused, not
   // redefined: its `source.data_source` is the fact the fallback chain
   // describes — which source is serving the order/loan book right now — and

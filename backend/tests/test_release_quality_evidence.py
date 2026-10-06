@@ -26,10 +26,12 @@ def run(vus=25, duration=120, **extra):
         metrics[name] = {"values": {stat: actual, "passes": 0, "fails": 10},
                          "thresholds": {expression: {"ok": True}}}
     metrics["http_reqs"] = {"values": {"count": 100}}
+    metrics["vus_max"] = {"values": {"max": vus}}
     return {"vus": vus, "duration_seconds": duration, "exit_code": 0,
             "customers": 500, "instalments_per_contract": 96, "unchanged_workload": True,
             "legacy_unpaged_today": True, "oom_observed": False, "restart_delta": 0,
-            "queue_growth": False, "summary": {"metrics": metrics}, **extra}
+            "queue_growth": False,
+            "summary": {"metrics": metrics, "state": {"testRunDurationMs": duration * 1000}}, **extra}
 
 
 def artifacts():
@@ -112,6 +114,9 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_read_ms"].update(thresholds={"p(95)<5000": {"ok": True}}),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["idempotency_replay_errors"]["values"].update(fails=0),
     lambda d: d["capacity"]["historical"][0].update(duration_seconds=30),
+    lambda d: d["capacity"]["historical"][0]["summary"]["state"].update(testRunDurationMs=1000),
+    lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["vus_max"]["values"].update(max=1),
+    lambda d: d["capacity"]["historical"][2].update(exit_code=False),
     lambda d: d["capacity"]["supplemental"][-1].update(duration_seconds=899),
     lambda d: d["capacity"]["supplemental"][-1].update(oom_observed=True),
     lambda d: d["financial"].update(cash_conserved=False),

@@ -28,7 +28,8 @@ def run(path, backup_root=Path('/srv/volt-debt-backups')):
     private_directory(status_path.parent, create=True)
     previous = read_json(status_path) if status_path.exists() else {}
     status = {'format': 'volt-offsite-job-v1', 'status': 'running', 'started_at_utc': started.isoformat(),
-              'last_success_at_utc': previous.get('last_success_at_utc'), 'stage': 'capture'}
+              'last_success_at_utc': previous.get('last_success_at_utc'),
+              'captured_at_utc': previous.get('captured_at_utc'), 'stage': 'capture'}
     write_json(status_path, status)
     log_path = status_path.parent/'offsite-job.log'
     with log_path.open('a') as log:

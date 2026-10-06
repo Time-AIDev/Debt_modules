@@ -57,6 +57,14 @@ def timestamp(value):
     return parsed.astimezone(timezone.utc)
 
 
+def rollback_image_for_schema(actual, previous_image, previous_schema, compatible_image, compatible_schema):
+    if actual == previous_schema:
+        return previous_image
+    if compatible_image and actual == compatible_schema:
+        return compatible_image
+    raise ReleaseError("No schema-compatible rollback image is available; maintenance remains enabled")
+
+
 def ensure_directory(path, *, private=False, create=False):
     path = Path(path)
     if not path.is_absolute():
@@ -481,6 +489,16 @@ class Release:
         preflight["public_transport"], _ = self.http("https://" + DOMAIN + "/")
         self.evidence["checks"]["preflight"] = preflight
         self.defaults, schema_version = production_defaults()
+        candidate_schema = self.image_schema_version(self.args.api_image)
+        previous_schema = self.image_schema_version(self.previous["api"]["image_id"])
+        self.evidence["previous_api_schema_version"] = previous_schema
+        self.evidence["candidate_api_schema_version"] = candidate_schema
+        if candidate_schema != schema_version:
+            raise ReleaseError("Candidate API schema differs from the shared runtime policy")
+        if self.args.rollback_api_image:
+            self.evidence["rollback_api_schema_version"] = self.image_schema_version(self.args.rollback_api_image)
+        if previous_schema != schema_version and self.evidence.get("rollback_api_schema_version") != schema_version:
+            raise ReleaseError("A schema-compatible fallback API image is required before this migration")
         self.evidence["expected_schema_version"] = schema_version
         self.checkpoint()
 
@@ -496,6 +514,26 @@ class Release:
             raise ReleaseError(str(exc)) from None
         self.evidence["checks"]["quality"] = outcome
 
+    def image_schema_version(self, image):
+        result = self.run_command(["docker", "run", "--rm", "--network", "none", "--read-only",
+                                   "--memory", "64m", "--entrypoint", "python", image, "-c",
+                                   "from app.runtime_policy import SCHEMA_VERSION; print(SCHEMA_VERSION)"],
+                                  capture=True, timeout=30)
+        try:
+            return int(result.stdout.decode().strip())
+        except (ValueError, UnicodeDecodeError):
+            raise ReleaseError("API image did not report a supported schema version") from None
+
+    def actual_schema_version(self):
+        result = self.run_command(["docker", "exec", "volt-debt-db-1", "sh", "-c",
+                                  'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -X -At -v ON_ERROR_STOP=1 '
+                                  '-c "select version from app.schema_version where singleton=true"'],
+                                  capture=True, timeout=30)
+        try:
+            return int(result.stdout.decode().strip())
+        except (ValueError, UnicodeDecodeError):
+            raise ReleaseError("Database schema could not be verified for rollback") from None
+
     def up(self, *services):
         self.compose("up", "--detach", "--no-deps", "--force-recreate", "--pull", "never",
                      "--wait", "--wait-timeout", "180", *services)
@@ -507,8 +545,14 @@ class Release:
         # A timed-out CLI must not leave its migration writing beside rollback.
         self.run_command(["docker", "stop", "--time", "30", self.migrate_name], timeout=45, check=False)
         self.compose("stop", "--timeout", "60", "api", "worker", timeout=90)
-        rollback_image = self.args.rollback_api_image or self.previous["api"]["image_id"]
-        atomic_write(CONFIG / "api.env", update_env(self.api_env, {"PROD_GO_LIVE_ENABLED": "false"}))
+        previous_image = self.previous["api"]["image_id"]
+        previous_schema = self.evidence.get("previous_api_schema_version")
+        compatible_schema = self.evidence.get("rollback_api_schema_version")
+        rollback_image = rollback_image_for_schema(self.actual_schema_version(), previous_image, previous_schema,
+                                                  self.args.rollback_api_image, compatible_schema)
+        atomic_write(CONFIG / "api.env", update_env(self.api_env, {"PROD_GO_LIVE_ENABLED": "false",
+                                                                "VOLT_INDEXED_READS_ENABLED": "false",
+                                                                "VOLT_CUSTOMER_SCOPES_ENABLED": "false"}))
         rollback_updates = {"API_IMAGE": rollback_image, "WEB_IMAGE": self.previous["web"]["image_id"]}
         for service,key in (("db","POSTGRES_IMAGE"),("scanner","SCANNER_IMAGE"),("edge","EDGE_IMAGE")):
             rollback_updates[key] = self.previous[service]["image_id"]

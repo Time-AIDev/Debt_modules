@@ -36,7 +36,8 @@ def test_readiness_rejects_old_migration_version(pg_url,monkeypatch):
         conn.execute(text('update app.schema_version set version=1 where singleton=true'))
     assert production_runtime.readiness() is False
     with db.connect() as conn,conn.begin():
-        conn.execute(text('update app.schema_version set version=2 where singleton=true'))
+        conn.execute(text('update app.schema_version set version=:version where singleton=true'),
+                     {"version": runtime_policy.SCHEMA_VERSION})
     assert production_runtime.readiness() is True
 
 

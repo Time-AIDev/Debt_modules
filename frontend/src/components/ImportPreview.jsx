@@ -99,7 +99,11 @@ export function ImportPreview({ preview, canApply, onApplied }) {
           </div>
           <small>{row.source_ref?.sheet} · {t('data.refusalRow', { n: row.source_ref?.row ?? '—' })} · {row.product || '—'} · {row.contract_uid || '—'}</small>
           <p>{t('supplement.statusChange')}: {row.source_status || t('supplement.unknown')} → {row.mapped_status || t('supplement.unknown')}</p>
-          {fields.length ? <p role="note">{t('supplement.unknownFields')}: {fields.join(' · ')}</p> : null}
+          {fields.length ? <p role="note">{t('supplement.unknownFields')}: {fields.map((field) => {
+            const label = t(`supplement.field.${field}`)
+            return label === `supplement.field.${field}`
+              ? (/^M\d+$/.test(field) ? field : t('supplement.unknown')) : label
+          }).join(' · ')}</p> : null}
           {row.monthly_cells?.length ? <details><summary>{t('supplement.monthEvidence')}</summary>
             {row.monthly_cells.map((cell, index) => <p key={`${cell.month}-${index}`}>
               {cell.month} · {cell.amount_field}: {cell.unknown || cell.amount == null ? t('supplement.unknown') : cell.amount}

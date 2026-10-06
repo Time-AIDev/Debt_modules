@@ -619,7 +619,8 @@ export function RecordView({
             {sheetStatus ? (
               <span>
                 {t('data.sheetStatusLine', { word: sheetStatus.word, month: sheetStatus.month || '—' })}
-                {sheetStatus.unknown ? ` · ${t('data.sheetStatusUnknown')}` : ''}
+                {sheetStatus.review_required ? ` · ${t('data.sheetStatusReview')}`
+                  : sheetStatus.unknown ? ` · ${t('data.sheetStatusUnknown')}` : ''}
               </span>
             ) : null}
             {disagreements.map((d) => (

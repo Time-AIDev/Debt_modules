@@ -10,7 +10,7 @@ import subprocess
 import tempfile
 
 SOURCE = Path(__file__).resolve().parent
-MODULES = ('healthcheck.py', 'incident_alerts.py', 'backup_evidence.py', 'backup-export.py',
+MODULES = ('healthcheck.py', 'incident_alerts.py', 'external-watchdog.py', 'backup_evidence.py', 'backup-export.py',
            'backup-prune.py', 'restore-drill.py', 'resume-writers.py', 'recovery_support.py',
            'package-release.py', 'cold-restore.py', 'restore-stack.py', 'offsite-backup.py', 'quality_evidence.py', 'backup.sh')
 ENTRYPOINTS = {'volt-debt-health': ('python3', 'healthcheck.py'),
@@ -24,7 +24,8 @@ ENTRYPOINTS = {'volt-debt-health': ('python3', 'healthcheck.py'),
               'volt-debt-offsite-backup': ('python3', 'offsite-backup.py')}
 UNITS = ('volt-debt-health.service', 'volt-debt-health.timer', 'volt-debt-backup.service',
          'volt-debt-backup.timer', 'volt-debt-resume-writers.service', 'volt-debt-resume-writers.timer',
-         'volt-debt-offsite.service', 'volt-debt-offsite.timer')
+         'volt-debt-offsite.service', 'volt-debt-offsite.timer',
+         'volt-debt-watchdog.service', 'volt-debt-watchdog.timer')
 
 
 def safe(path):

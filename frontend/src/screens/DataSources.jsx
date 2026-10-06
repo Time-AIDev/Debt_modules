@@ -262,6 +262,7 @@ export function DataSources() {
           : importStatus((peak.cand || 0) + (peak.unm || 0) ? 'REVIEW' : 'REPORT_APPLIED')
 
   const sr = sheet?.run
+  const sheetPreview = sr?.preview || sr?.result?.preview || sr?.result?.result?.preview
   // A PEAK-vs-sheet answer in words: a month is paid or late, the current row a payment status.
   const payWord = (code) => (code === 'PAID' ? t('status.cell.paid') : codeWord(t, 'pay.', code))
   // What installing the checked file would take out of the book (served by the check).
@@ -529,7 +530,7 @@ export function DataSources() {
               )}
               <FileInput inputRef={sheetRef} label={t('data.chooseFile')} disabled={!!busy} onFile={checkFile} />
               <Problem problem={sheetProblem} />
-              {sr?.preview ? <ImportPreview key={sr.preview.uid} preview={sr.preview} canApply={mgr}
+              {sheetPreview ? <ImportPreview key={sheetPreview.uid} preview={sheetPreview} canApply={mgr}
                 onApplied={() => { load(); refreshImports().catch(() => {}) }} /> : sr ? (
                 <section className="imp__box imp__box--flush">
                   <div className="imp__receiptHead">

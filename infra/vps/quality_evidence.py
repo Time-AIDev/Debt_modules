@@ -44,15 +44,23 @@ def require(condition, message):
         raise QualityError(message)
 
 
+def zero(value):
+    return type(value) is int and value == 0
+
+
 def local_machine_fingerprint():
     return hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
 
 
 def native_capacity(run, minimum_duration, minimum_vus):
-    require(run.get("exit_code") == 0, "k6 exited without passing its thresholds")
+    require(zero(run.get("exit_code")), "k6 exited without passing its thresholds")
     require(number(run.get("duration_seconds")) >= minimum_duration
             and number(run.get("vus")) >= minimum_vus, "k6 duration or VUs do not meet policy")
     metrics = run.get("summary", {}).get("metrics", {})
+    require(number(run.get("summary", {}).get("state", {}).get("testRunDurationMs")) >= minimum_duration * 1000,
+            "Native k6 elapsed duration is too short")
+    require(number(metrics.get("vus_max", {}).get("values", {}).get("max")) >= minimum_vus,
+            "Native k6 VU maximum is below policy")
     for name, (statistic, limit, expression) in LIMITS.items():
         metric = metrics.get(name, {})
         actual = number(metric.get("values", {}).get(statistic))
@@ -72,7 +80,7 @@ def native_capacity(run, minimum_duration, minimum_vus):
     replay = metrics["idempotency_replay_errors"]["values"]
     require(number(replay.get("passes")) + number(replay.get("fails")) > 0,
             "k6 did not exercise replay")
-    require(run.get("oom_observed") is False and run.get("restart_delta") == 0
+    require(run.get("oom_observed") is False and zero(run.get("restart_delta"))
             and run.get("queue_growth") is False, "k6 resource or queue stability failed")
 
 
@@ -108,14 +116,14 @@ def capacity(data):
 def validate_check(kind, data, now, production_fingerprint):
     require(data.get("status") == "passed", "Quality check is not passed: " + kind)
     if kind == "lint":
-        require(data.get("errors") == 0 and set(data.get("areas", [])) >= {"backend", "frontend"},
+        require(zero(data.get("errors")) and set(data.get("areas", [])) >= {"backend", "frontend"},
                 "Backend/frontend lint must pass")
     elif kind == "regression":
         for area in ("backend", "frontend"):
             result = data.get(area, {})
-            require(number(result.get("passed")) > 0 and result.get("failed") == 0
-                    and result.get("errors") == 0, "Final regression tests failed: " + area)
-        require(data.get("frontend_build_exit") == 0 and data.get("runtime_parity") is True,
+            require(number(result.get("passed")) > 0 and zero(result.get("failed"))
+                    and zero(result.get("errors")), "Final regression tests failed: " + area)
+        require(zero(data.get("frontend_build_exit")) and data.get("runtime_parity") is True,
                 "Build or runtime parity failed")
     elif kind == "capacity":
         capacity(data)
@@ -123,15 +131,16 @@ def validate_check(kind, data, now, production_fingerprint):
         for key in ("staging_isolated", "actual_input_files", "rows_accounted", "cash_conserved",
                     "snapshot_cash_not_double_counted", "duplicate_import_once", "book_preserved"):
             require(data.get(key) is True, "Financial validation is incomplete: " + key)
-        require(data.get("unexplained_differences") == 0 and data.get("tests_failed") == 0,
+        require(zero(data.get("unexplained_differences")) and zero(data.get("tests_failed")),
                 "Unexplained financial differences remain")
         sources = data.get("input_files", [])
-        require(len(sources) == 3 and all(re.fullmatch(r"[a-f0-9]{64}", str(x.get("sha256", "")))
+        require(len(sources) == 3 and len({x.get("sha256") for x in sources}) == 3
+                and all(re.fullmatch(r"[a-f0-9]{64}", str(x.get("sha256", "")))
                                        for x in sources), "Actual workbook provenance is missing")
     elif kind == "usability":
         require(data.get("method") == "simulated_debt_team" and data.get("score") == 10
-                and data.get("critical") == 0 and data.get("high") == 0
-                and data.get("unexercised") == 0 and number(data.get("feature_count")) > 0,
+                and zero(data.get("critical")) and zero(data.get("high"))
+                and zero(data.get("unexercised")) and number(data.get("feature_count")) > 0,
                 "Debt-team usability estimate has not reached the agreed checkpoints")
         dimensions = data.get("dimensions", {})
         require(set(dimensions) == {"completion", "navigation", "financial_clarity", "recovery", "accessibility"}
