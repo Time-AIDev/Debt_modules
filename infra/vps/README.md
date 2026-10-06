@@ -147,3 +147,25 @@ recipient and a passed restore. Export verifies remote bytes and binds its proof
 to this backup's manifests. Pruning defaults to preview and only removes old
 verified-offsite backups; it preserves a minimum recovery set. An external backup
 recipient/destination and incident receiver are still operator configuration.
+
+### Installing the reviewed operational helpers
+
+`install-operations.py` inspects by default. `--apply` copies the health script,
+`incident_alerts.py`, backup/recovery helpers and their Python dependencies into
+`/usr/local/lib/volt-debt-ops` with private modes, installs explicit entrypoints
+under `/usr/local/sbin`, verifies source bytes/modes, and reloads systemd. This
+avoids deploying a newer health entrypoint with an older or missing alert helper.
+It does not create provider credentials or claim successful delivery.
+
+```sh
+python3 infra/vps/install-operations.py
+python3 infra/vps/install-operations.py --apply --activate
+```
+
+After real S3 and age recipient configuration is in place, the separate
+`--activate-offsite` flag enables the twice-daily offsite timer. Read
+[BACKUPS.md](BACKUPS.md#encrypted-offsite-recovery-points) before configuring or
+running it. Keep the incident JSON receiver configuration private; verify real
+incident and recovery acknowledgments plus the external watchdog before go-live.
+Unit command simulations establish guard behavior, not actual offsite restoration
+or alert delivery.

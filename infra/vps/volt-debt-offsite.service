@@ -1,0 +1,20 @@
+[Unit]
+Description=Volt Debt coordinated encrypted offsite recovery point
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+ExecStart=/usr/local/sbin/volt-debt-offsite-backup
+TimeoutStartSec=4h
+StateDirectory=volt-debt-ops
+StateDirectoryMode=0700
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+NoNewPrivileges=true
+

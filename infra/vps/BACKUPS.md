@@ -164,3 +164,99 @@ database, and extract objects/configuration into that replacement only. Preserve
 root-only config permissions and object ownership, validate authentication and
 workflows with public traffic disabled, then switch traffic after validation.
 Do not restore over a primary containing newer writes.
+
+## Encrypted offsite recovery points
+
+The implementation supports S3 through a named `rclone` remote and `age` public-key
+encryption. Configuration is required before an offsite transfer can succeed. Keep
+the age decryption identity on the independent recovery host, outside this VPS.
+Use Python 3.12+, Docker, Git, age and rclone on the relevant operations hosts.
+No remote bucket, credentials, encryption recipient, or recovery machine is
+generated or assumed by these commands.
+
+`package-release.py` requires a clean committed source revision, the matching API
+and web image labels, and immutable IDs for PostgreSQL 16, scanner and edge. It
+captures a running scanner's signature database so recovery does not need a
+Freshclam download. The private release directory contains a Git source archive,
+all five saved Docker images, scanner signatures, and checksum-bound manifests.
+Application images must include the staging-only worker `--probe-only` support.
+
+```sh
+umask 077
+install -d -m 0700 /srv/volt-debt-backups/release-bundles
+python3 infra/vps/package-release.py \
+  --source /srv/volt-debt-platform --revision FULL_COMMIT_SHA \
+  --api-image sha256:API_ID --web-image sha256:WEB_ID \
+  --db-image sha256:POSTGRES16_ID --scanner-image sha256:SCANNER_ID \
+  --edge-image sha256:EDGE_ID \
+  --output /srv/volt-debt-backups/release-bundles/release-FULL_COMMIT_SHA
+python3 infra/vps/backup-export.py --backup /srv/volt-debt-backups/COMPLETED_BACKUP \
+  --release-bundle /srv/volt-debt-backups/release-bundles/release-FULL_COMMIT_SHA
+```
+
+The export requires `BACKUP_REMOTE`, `BACKUP_AGE_RECIPIENT`, and a private rclone
+configuration. Existing exports without `--release-bundle` retain their transfer
+verification behavior. A complete recovery point additionally requires S3, a
+writers-stopped backup, matching backup/source/database image identities, and a
+passed local restore. Its RPO timestamp conservatively uses snapshot start.
+The archive is encrypted before upload; a download must reproduce its SHA256.
+Only then are immutable recovery-point metadata and `latest-recovery-point.json`
+uploaded. An accepted upload or downloaded checksum alone is not a cold restore.
+
+For recurring capture, create `/etc/volt-debt/offsite.json` mode 0600 with these
+operator-supplied fields (the JSON contains a public recipient, not a private key):
+
+```json
+{
+  "remote": "offsite:volt-debt",
+  "recipient": "AGE_PUBLIC_RECIPIENT",
+  "rclone_config": "/etc/volt-debt/rclone.conf",
+  "source": "/srv/volt-debt-platform",
+  "bundle_root": "/srv/volt-debt-backups/release-bundles",
+  "status_path": "/var/lib/volt-debt-ops/offsite-status.json"
+}
+```
+
+The separate offsite timer runs at 03:45 and 15:45 Bangkok time with at most five
+minutes randomized delay. It coordinates a fresh local capture, local restore
+check, reusable immutable release bundle, and encrypted S3 transfer. Only its
+explicit installer activation flag enables it. Missing settings or tools fail;
+the private status marker records actual success/failure and last success. No
+automatic deletion policy is added.
+
+## Independent cold restore
+
+Run `cold-restore.py` on a separate recovery host. Supply the trusted production
+machine fingerprint, final source revision, and exact API/web IDs. A matching
+machine fingerprint is refused before downloads or container changes. The private
+age identity must already exist on that recovery host; it is never copied into a
+container or recovery evidence. The remote rclone configuration must independently
+authorize reading the same S3 prefix.
+
+```sh
+umask 077
+install -d -m 0700 /srv/volt-debt-recovery
+python3 infra/vps/cold-restore.py --remote offsite:volt-debt \
+  --identity /root/recovery-secrets/volt.agekey \
+  --production-fingerprint PRODUCTION_MACHINE_SHA256 \
+  --revision FULL_COMMIT_SHA --api-image sha256:API_ID --web-image sha256:WEB_ID \
+  --work-root /srv/volt-debt-recovery \
+  --evidence /srv/volt-debt-recovery/offsite-recovery.json
+```
+
+Recovery verifies ciphertext, age decryption, bounded link-free archives, backup
+and source manifests, Git archive identity, and loaded image IDs/labels. It restores
+PostgreSQL 16, all private object bytes, and original configuration into a private
+workspace. The application uses separate database/session credentials, disabled
+external connector credentials, `ENV=stg`, and `PROD_GO_LIVE_ENABLED=false`.
+API, probe-only worker, offline scanner, web, and an isolated plain-HTTP edge proxy
+must actually become ready on an internal Docker network without published ports.
+Queued jobs and business-record fingerprints must remain unchanged. Public TLS,
+Google sign-in, outbound PEAK, DNS cutover, and resumed job execution are separate
+release checks, not claimed by this isolated recovery.
+
+Evidence records observed start/end, conservative RPO, RTO, counts, checksums,
+source/image identity and readiness. RPO over 24 hours or RTO over four hours fails.
+Only labeled containers/volumes/network created by this run are removed; downloaded
+images and private diagnostics stay available on the recovery host. A failed or
+simulated test cannot satisfy the `offsite_recovery` production quality gate.

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backup_evidence import REMOTE_BACKENDS, hashes, sha
+from recovery_support import NAME, fingerprint, release_bundle, timestamp, write_json
 
 
 def remote_backend(destination):
@@ -61,7 +62,7 @@ def remote_backend(destination):
     return kind
 
 
-def export(backup):
+def export(backup, bundle=None):
     backup = Path(backup)
     recipient = os.environ.get('BACKUP_AGE_RECIPIENT', '')
     destination = os.environ.get('BACKUP_REMOTE', '')
@@ -73,12 +74,32 @@ def export(backup):
         raise ValueError('A passed restore drill is required')
     backend = remote_backend(destination)
     proof = hashes(backup)
+    release = release_bundle(bundle) if bundle else None
+    if release:
+        bundle = Path(bundle).resolve(strict=True)
+        if backend != 's3' or not NAME.fullmatch(backup.name) or not NAME.fullmatch(bundle.name) or backup.name == bundle.name:
+            raise ValueError('Cold recovery requires S3 and distinct safe archive roots')
+        manifest = dict(line.split('=', 1) for line in (backup/'manifest.txt').read_text().splitlines())
+        if manifest.get('source_commit') != release['revision'] or (backup/'database-image-id.txt').read_text().strip() != release['images']['db']:
+            raise ValueError('Backup source/database image differs from the release bundle')
+        if release['production_host_fingerprint'] != fingerprint():
+            raise ValueError('Release bundle was not captured on this backup source host')
+        if manifest.get('consistency') != 'database-and-objects_writers-stopped':
+            raise ValueError('Cold recovery requires a coordinated database/object snapshot')
+        # Use the earlier snapshot start for a conservative recovery-point age.
+        captured = timestamp(manifest['started_at_utc'])
+        age = (datetime.now(timezone.utc)-captured).total_seconds()
+        if not 0 <= age <= 86400:
+            raise ValueError('Recovery point must satisfy the 24-hour RPO')
     subprocess.run(['sha256sum','--check','--status','SHA256SUMS'],cwd=backup,check=True,timeout=120)
     with tempfile.TemporaryDirectory(prefix='volt-backup-export-',dir=backup.parent) as tmp:
         encrypted = Path(tmp)/(backup.name+'.tar.age')
         # Streaming avoids copying a growing database archive into memory.
         with encrypted.open('wb') as output:
-            archive = subprocess.Popen(['tar','-C',str(backup.parent),'-cf','-',backup.name],stdout=subprocess.PIPE)
+            arguments = ['tar','-C',str(backup.parent),'-cf','-',backup.name]
+            if bundle:
+                arguments += ['-C',str(bundle.parent),bundle.name]
+            archive = subprocess.Popen(arguments,stdout=subprocess.PIPE)
             try:
                 result = subprocess.run(['age','-r',recipient],stdin=archive.stdout,stdout=output,check=True,timeout=1800)
                 archive.stdout.close()
@@ -95,11 +116,31 @@ def export(backup):
         downloaded = Path(tmp)/'download-verification.tar.age'
         subprocess.run(['rclone','copyto',remote,str(downloaded)],check=True,timeout=1800)
         if sha(downloaded) != digest: raise RuntimeError('off-server checksum mismatch')
+        if release:
+            if hashes(backup) != proof or release_bundle(bundle) != release:
+                raise RuntimeError('Recovery source evidence changed during transfer')
+            recovery = {'format':'volt-debt-recovery-point-v1','backup':backup.name,
+                        'release_bundle':bundle.name,'archive':encrypted.name,'archive_sha256':digest,
+                        'release_manifest_sha256':sha(bundle/'manifest.json'),
+                        'backup_manifest_sha256':proof['manifest_sha256'],
+                        'captured_at_utc':captured.isoformat(),'revision':release['revision'],
+                        'images':release['images'],'production_host_fingerprint':fingerprint(),
+                        'verified_at_utc':datetime.now(timezone.utc).isoformat(),
+                        'encrypted':True,'remote_backend':'s3'}
+            metadata = Path(tmp)/(backup.name+'.recovery-point.json')
+            write_json(metadata,recovery)
+            subprocess.run(['rclone','copyto',str(metadata),destination.rstrip('/')+'/'+metadata.name],check=True,timeout=60)
+            # Update latest only after immutable payload upload and download verification.
+            subprocess.run(['rclone','copyto',str(metadata),destination.rstrip('/')+'/latest-recovery-point.json'],check=True,timeout=60)
+            write_json(backup/'recovery-point.json',recovery)
     if hashes(backup) != proof:
         raise RuntimeError('Backup evidence changed during off-server export')
     evidence = {'status':'verified','backup':backup.name,'sha256':digest,
                 'verified_at_utc':datetime.now(timezone.utc).isoformat(),'encrypted':True,
                 'remote_backend':backend, **proof}
+    if release:
+        evidence.update(release_manifest_sha256=recovery['release_manifest_sha256'],
+                        revision=release['revision'],source_images_packaged=True)
     (backup/'offsite-evidence.json').write_text(json.dumps(evidence,indent=2)+'\n')
     print('Encrypted off-server backup transfer verified')
 
@@ -107,8 +148,9 @@ def export(backup):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--backup',type=Path,required=True)
+    parser.add_argument('--release-bundle',type=Path)
     args=parser.parse_args()
-    export(args.backup.resolve())
+    export(args.backup.resolve(),args.release_bundle)
 
 
 if __name__=='__main__':main()
