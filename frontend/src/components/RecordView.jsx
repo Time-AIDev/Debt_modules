@@ -98,12 +98,25 @@ export function InvoicePaymentEvidence({ invoice, receipts = [] }) {
       uid: receipt.uid, receipt_doc_no: receipt.ref, paid_on: receipt.received_on,
       amount: receipt.amount, channel: receipt.channel, status: receipt.status || (receipt.is_allocated === false ? 'UNALLOCATED' : 'PAID'),
     }))
-  if (!components?.length) {
+  const sourceComponents = invoice.source_invoice_components || []
+  if (!components?.length && !sourceComponents.length) {
     const references = invoice.receipt_references || []
     return references.length ? <span>{references.join(', ')}<small className="case__rowNote">
       {english ? 'Reference only; dated payment details are unavailable.' : 'มีเลขอ้างอิง แต่ยังไม่มีรายละเอียดวันที่และเงินรับ'}</small></span> : '—'
   }
-  return <ul className="case__stack" aria-label={english ? 'Dated invoice payments' : 'รายการรับเงินของใบแจ้งหนี้'}>
+  return <>
+    {sourceComponents.length ? <section aria-label={english ? 'Invoice report payment evidence' : 'หลักฐานรับเงินจากรายงานใบแจ้งหนี้'}>
+      <small className="case__rowNote">{english ? 'Invoice report evidence; these observations are not additional allocations.' : 'หลักฐานจากรายงานใบแจ้งหนี้ เป็นข้อมูลประกอบยอดเดิม ไม่ใช่การตัดชำระเพิ่ม'}</small>
+      <ul className="case__stack">{sourceComponents.map((part, index) => <li key={part.uid || index}>
+        <strong>{part.receipt_doc_no || '—'}</strong>
+        <div className="num">{fmtDate(part.paid_on)} · {english ? 'Reported received' : 'ต้นทางระบุรับ'} {money(part.amount)}</div>
+        <div>{english ? 'Channel' : 'ช่องทาง'}: {part.channel || (english ? 'Not recorded' : 'ไม่ระบุ')}</div>
+        <small className="case__rowNote">{part.included_in_snapshot
+          ? english ? 'Included in the dated invoice snapshot.' : 'รวมอยู่ในยอดตามวันที่รายงานใบแจ้งหนี้'
+          : english ? 'Verify this date against the invoice snapshot.' : 'ต้องตรวจวันรับเงินเทียบกับวันที่รายงานใบแจ้งหนี้'}</small>
+      </li>)}</ul>
+    </section> : null}
+    {components?.length ? <ul className="case__stack" aria-label={english ? 'Dated invoice payments' : 'รายการรับเงินของใบแจ้งหนี้'}>
     {[...components].sort((a, b) => String(a.paid_on || '').localeCompare(String(b.paid_on || ''))).map((component, index) => {
       const cancelled = component.status === 'CANCELLED'
       return <li key={component.uid || `${component.receipt_doc_no}:${index}`}>
@@ -123,7 +136,8 @@ export function InvoicePaymentEvidence({ invoice, receipts = [] }) {
           ? 'Already included in the dated invoice balance.' : 'เงินส่วนนี้รวมอยู่ในยอดตามวันที่ใบแจ้งหนี้แล้ว'}</small> : null}
       </li>
     })}
-  </ul>
+  </ul> : null}
+  </>
 }
 
 export function FinancialEvidence({ evidence }) {
@@ -152,6 +166,11 @@ export function FinancialEvidence({ evidence }) {
           : `ชุดไฟล์นี้ไม่มีรายละเอียดใบเสร็จก่อน ${fmtDate(limitation.before)} ยอดเดิมตามวันที่ใบแจ้งหนี้ยังคงไว้ การไม่พบใบเสร็จเก่าไม่ได้หมายความว่ายังไม่ชำระ`}</p>)}
       </div>
     </Card>
+    {Object.values(evidence.source_invoice_components || {}).some((parts) => parts.length) ? <Card title={english ? 'Historical invoice payment evidence' : 'หลักฐานรับเงินเดิมจากใบแจ้งหนี้'}>
+      <div className="card__body case__stack">{Object.entries(evidence.source_invoice_components).filter(([, parts]) => parts.length).map(([doc, parts]) => <section key={doc}>
+        <strong>{doc}</strong><InvoicePaymentEvidence invoice={{ payment_components: [], source_invoice_components: parts }} />
+      </section>)}</div>
+    </Card> : null}
     <Card title={english ? 'All receipt components' : 'รายละเอียดเงินรับทุกใบเสร็จ'}>
       <div className="card__body case__stack">
         {(evidence.receipts || []).length ? <ul className="case__stack" aria-label={english ? 'Receipt payment components' : 'รายการส่วนรับชำระของใบเสร็จ'}>

@@ -839,6 +839,7 @@ def decorate(customer_uid, case, invoices):
             case_view["financial_evidence"] = evidence
             for invoice in annotated:
                 invoice["payment_components"] = evidence["invoice_components"].get(_doc_no(invoice), [])
+                invoice['source_invoice_components'] = evidence.get('source_invoice_components', {}).get(_doc_no(invoice), [])
     base = case.get("payment_status_confirmed") or case.get("payment_status_system") or case.get("payment_status")
     case_view["payment_status_confirmed"] = base
     if active and base not in GOVERNED_PAYMENT_STATUSES:
@@ -1053,6 +1054,8 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
                         if r["status"] == "ACTIVE" for m in r["moves"] if m.get("invoice_doc_no")}
     invoice_as_of = conn.execute(text("select meta->>'report_as_of' from landing.import_run where id=:r"),
                                  {"r": invoice_run}).scalar() if invoice_run else None
+    invoice_source_payments = conn.execute(text("select meta->'payment_components' from landing.import_run where id=:r"),
+                                          {'r': invoice_run}).scalar() if invoice_run else {}
     for row in invoice_rows:
         served_no, _ = peak_writer._serves(row)
         if not served_no:
@@ -1069,6 +1072,7 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
             "service_adjusted": uid_by_no.get(no) in adjusted,
             "collection_due_date": collection_dates.get(row["doc_no"]),
             "snapshot_as_of": invoice_as_of,
+            'source_payments': (invoice_source_payments or {}).get(row['doc_no'], []),
         })
     receipts = []
     for row in receipt_rows:

@@ -30,6 +30,16 @@ const evidence = {
 }
 
 describe('complete payment evidence in the case', () => {
+  it('discloses every invoice-only historical observation without claiming a new allocation', () => {
+    renderScreen(<InvoicePaymentEvidence invoice={{ payment_components: [], source_invoice_components: [
+      { uid: 'source-1', receipt_doc_no: 'RE-OLD', paid_on: '2025-01-01', amount: '40.00', channel: 'Bank A', included_in_snapshot: true },
+      { uid: 'source-2', receipt_doc_no: 'RE-OLD', paid_on: '2025-01-01', amount: '40.00', channel: 'Bank A', included_in_snapshot: true },
+    ] }} />)
+    const region = screen.getByRole('region', { name: 'หลักฐานรับเงินจากรายงานใบแจ้งหนี้' })
+    expect(within(region).getAllByText('RE-OLD')).toHaveLength(2)
+    expect(within(region).getAllByText(/รวมอยู่ในยอดตามวันที่รายงาน/)).toHaveLength(2)
+    expect(screen.queryByText(/จัดสรรเข้าบิลนี้/)).not.toBeInTheDocument()
+  })
   it('keeps every legacy receipt for one invoice instead of selecting the last', () => {
     renderScreen(<InvoicePaymentEvidence invoice={{ uid: 'IV-1' }} receipts={[
       { uid: 'one', invoice_uid: 'IV-1', ref: 'RE-1', received_on: '2026-09-10', amount: '40.00', channel: 'Bank A' },

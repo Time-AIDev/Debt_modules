@@ -32,6 +32,18 @@ def test_read_dto_preserves_split_dates_channels_without_changing_balance_rules(
     assert payment_claims.reconcile_receipts(data[0], data[1]) == before
 
 
+def test_invoice_only_historical_components_remain_visible_without_allocating_cash():
+    invoices = [{'doc_no': 'IV-OLD', 'customer_uid': 'C1', 'customer_no': 'C1', 'amount': '80',
+                 'outstanding': '0', 'snapshot_as_of': '2026-09-14', 'source_payments': [
+                     {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '40.00', 'channel': 'Bank A'},
+                     {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '40.00', 'channel': 'Bank A'}]}]
+    evidence = financial_evidence.build(invoices, [], [], {'snapshot_as_of': '2026-09-14'}, [])
+    parts = evidence['source_invoice_components']['IV-OLD']
+    assert len(parts) == 2 and parts[0]['uid'] != parts[1]['uid']
+    assert all(part['included_in_snapshot'] and part['allocated_amount'] is None for part in parts)
+    assert evidence['invoice_components'] == {} and evidence['receipts'] == []
+
+
 def test_read_dto_does_not_deduplicate_legitimate_identical_components():
     data = inputs([{'on': '2026-09-20', 'amount': '40', 'channel': 'Bank A'},
                    {'on': '2026-09-20', 'amount': '40', 'channel': 'Bank A'}], snapshot=None)

@@ -62,6 +62,16 @@ def build(invoices, receipts, sources, reconciliation, component_allocations=Non
                                                 for key, group in payment_groups.items() if key[0] == receipt["doc_no"]],
                              "source_run_id": receipt.get("run_id"), "exported_at": receipt.get("exported_at"),
                              "report_as_of": receipt.get("report_as_of")})
+    source_invoice_components = {}
+    for invoice in invoices:
+        doc = invoice['doc_no']
+        source_invoice_components[doc] = [{
+            'uid': 'invoice-source:%s:%d' % (doc, index), 'receipt_doc_no': part.get('receipt_no'),
+            'paid_on': part.get('on'), 'amount': str(part['amount']) if part.get('amount') is not None else None,
+            'channel': part.get('channel'), 'source_system': 'PEAK', 'allocated_amount': None,
+            'included_in_snapshot': bool(part.get('on') and invoice.get('snapshot_as_of') and
+                str(part['on'])[:10] <= str(invoice['snapshot_as_of'])[:10]),
+        } for index, part in enumerate(invoice.get('source_payments') or [])]
     for values in invoice_components.values():
         values.sort(key=lambda row: (str(row.get("paid_on") or ""), row["uid"]))
     receipt_rows.sort(key=lambda row: row["doc_no"])
@@ -73,7 +83,8 @@ def build(invoices, receipts, sources, reconciliation, component_allocations=Non
         limitations.append({"code": "RECEIPT_HISTORY_BEFORE_COVERAGE_UNAVAILABLE", "before": receipt_start,
                             "invoice_covers_from": invoice_start})
     return {"read_only": True, "reconciliation": reconciliation, "sources": sources,
-            "receipts": receipt_rows, "invoice_components": invoice_components, "limitations": limitations}
+            "receipts": receipt_rows, "invoice_components": invoice_components,
+            'source_invoice_components': source_invoice_components, "limitations": limitations}
 
 
 def customer_payloads(inputs, outputs, sources, reconciliation):
@@ -125,6 +136,12 @@ def publish(conn, reconciliation_id, input_payload, output_payload):
                             "from records.payment_reconciliation_version where sequence=:sequence"),
                        {"sequence": reconciliation_id}).mappings().one()
     sources = _sources(conn, row["invoice_run_id"], input_payload.get("receipts") or [])
+    if row['invoice_run_id']:
+        source_payments = conn.execute(text("select meta->'payment_components' from landing.import_run where id=:run"),
+                                      {'run': row['invoice_run_id']}).scalar() or {}
+        input_payload = dict(input_payload, invoices=[dict(invoice,
+            source_payments=invoice.get('source_payments', source_payments.get(invoice['doc_no'], [])))
+            for invoice in input_payload.get('invoices') or []])
     batch = []
     written = 0
     for uid, payload in customer_payloads(input_payload, output_payload, sources, _reconciliation(row)):
