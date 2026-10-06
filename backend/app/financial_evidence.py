@@ -76,6 +76,71 @@ def build(invoices, receipts, sources, reconciliation, component_allocations=Non
             "receipts": receipt_rows, "invoice_components": invoice_components, "limitations": limitations}
 
 
+def customer_payloads(inputs, outputs, sources, reconciliation):
+    """Partition one immutable version once, without customer × book rescanning."""
+    from .payment_claims import reconcile_receipts
+    grouped = {}
+    for key in ("invoices", "receipts"):
+        for row in inputs.get(key) or []:
+            uid = row.get("customer_uid")
+            if uid:
+                grouped.setdefault(uid, {"invoices": [], "receipts": [], "components": []})[key].append(row)
+    components = outputs.get("component_allocations")
+    if components is None:
+        # One global replay for a legacy version, never one replay per customer.
+        components = reconcile_receipts(inputs.get("invoices") or [], inputs.get("receipts") or []).get("component_allocations", [])
+    for row in components:
+        uid = row.get("customer_uid")
+        if uid in grouped:
+            grouped[uid]["components"].append(row)
+    for uid, rows in grouped.items():
+        yield uid, build(rows["invoices"], rows["receipts"], sources, reconciliation, rows["components"])
+
+
+def _sources(conn, invoice_run_id, receipts):
+    run_ids = {receipt.get("run_id") for receipt in receipts if receipt.get("run_id")}
+    if invoice_run_id:
+        run_ids.add(invoice_run_id)
+    latest_receipt_run = conn.execute(text("select id from landing.import_run "
+        "where source_system='PEAK_RECEIPT' and status='OK' and meta ? 'applied' "
+        "order by coalesce(meta->>'exported_at',meta->>'report_as_of','') desc,id desc limit 1")).scalar()
+    if latest_receipt_run:
+        run_ids.add(latest_receipt_run)
+    if not run_ids:
+        return []
+    return [dict(row) for row in conn.execute(text("select id,source_system,meta->>'report_as_of' as report_as_of, "
+        "meta->>'exported_at' as exported_at,meta->>'covers_from' as covers_from,meta->>'covers_to' as covers_to "
+        "from landing.import_run where id=any(:ids) order by source_system,id"), {"ids": sorted(run_ids)}).mappings()]
+
+
+def _reconciliation(row):
+    reconciled = clock.to_local(row["created_at"])
+    return {"sequence": row["sequence"], "created_at": reconciled.isoformat(), "reason": row["reason"],
+            "snapshot_as_of": str(row["snapshot_as_of"]) if row["snapshot_as_of"] else None}
+
+
+def publish(conn, reconciliation_id, input_payload, output_payload):
+    """Publish customer evidence atomically with the version; INSERT-only and replayable."""
+    row = conn.execute(text("select sequence,created_at,reason,invoice_run_id,snapshot_as_of "
+                            "from records.payment_reconciliation_version where sequence=:sequence"),
+                       {"sequence": reconciliation_id}).mappings().one()
+    sources = _sources(conn, row["invoice_run_id"], input_payload.get("receipts") or [])
+    batch = []
+    written = 0
+    for uid, payload in customer_payloads(input_payload, output_payload, sources, _reconciliation(row)):
+        batch.append({"sequence": reconciliation_id, "uid": uid, "payload": json.dumps(payload, ensure_ascii=False)})
+        if len(batch) == 100:
+            conn.execute(text("insert into records.customer_payment_evidence(sequence,customer_uid,payload) "
+                "values(:sequence,:uid,cast(:payload as jsonb)) on conflict(sequence,customer_uid) do nothing"), batch)
+            written += len(batch)
+            batch.clear()
+    if batch:
+        conn.execute(text("insert into records.customer_payment_evidence(sequence,customer_uid,payload) "
+            "values(:sequence,:uid,cast(:payload as jsonb)) on conflict(sequence,customer_uid) do nothing"), batch)
+        written += len(batch)
+    return {"sequence": reconciliation_id, "customers": written}
+
+
 def for_customer(customer_uid):
     if not db.configured():
         return None
@@ -83,6 +148,16 @@ def for_customer(customer_uid):
     try:
         if not conn.execute(text("select to_regclass('records.payment_reconciliation_version')")).scalar():
             return None
+        if conn.execute(text("select to_regclass('records.customer_payment_evidence')")).scalar():
+            indexed = conn.execute(text("select version.sequence,evidence.payload,exists("
+                "select 1 from records.customer_payment_evidence published where published.sequence=version.sequence) as published "
+                "from (select sequence from records.payment_reconciliation_version order by sequence desc limit 1) version "
+                "left join records.customer_payment_evidence evidence on evidence.sequence=version.sequence "
+                "and evidence.customer_uid=:uid"), {"uid": customer_uid}).mappings().first()
+            if indexed is None:
+                return None
+            if indexed["published"]:
+                return indexed["payload"]
         # SQL selects only this customer's arrays from the latest immutable version.
         # The complete book-sized inputs never travel through the case request.
         row = conn.execute(text("select sequence,created_at,reason,trigger_run_id,invoice_run_id,snapshot_as_of, "
@@ -95,23 +170,7 @@ def for_customer(customer_uid):
             {"vars": json.dumps({"uid": customer_uid})}).mappings().first()
         if row is None or not (row["invoices"] or row["receipts"]):
             return None
-        run_ids = {receipt.get("run_id") for receipt in row["receipts"] if receipt.get("run_id")}
-        if row["invoice_run_id"]:
-            run_ids.add(row["invoice_run_id"])
-        latest_receipt_run = conn.execute(text("select id from landing.import_run "
-            "where source_system='PEAK_RECEIPT' and status='OK' and meta ? 'applied' "
-            "order by coalesce(meta->>'exported_at',meta->>'report_as_of','') desc,id desc limit 1")).scalar()
-        if latest_receipt_run:
-            run_ids.add(latest_receipt_run)
-        sources = []
-        if run_ids:
-            for source in conn.execute(text("select id,source_system,meta->>'report_as_of' as report_as_of, "
-                "meta->>'exported_at' as exported_at,meta->>'covers_from' as covers_from,meta->>'covers_to' as covers_to "
-                "from landing.import_run where id=any(:ids) order by source_system,id"), {"ids": sorted(run_ids)}).mappings():
-                sources.append(dict(source))
-        reconciled = clock.to_local(row["created_at"])
-        reconciliation = {"sequence": row["sequence"], "created_at": reconciled.isoformat(),
-                          "reason": row["reason"], "snapshot_as_of": str(row["snapshot_as_of"]) if row["snapshot_as_of"] else None}
-        return build(row["invoices"], row["receipts"], sources, reconciliation, row["component_allocations"])
+        sources = _sources(conn, row["invoice_run_id"], row["receipts"])
+        return build(row["invoices"], row["receipts"], sources, _reconciliation(row), row["component_allocations"])
     finally:
         conn.close()
