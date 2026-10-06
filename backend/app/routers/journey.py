@@ -1354,7 +1354,7 @@ def list_npl_cases():
                         else row.get("contract_uid"))
         found = journey.contract_by_uid(contract_uid) if contract_uid else None
         contract = found[1] if found else None
-        npv = journey.remaining_npv(contract) if contract else None
+        npv, quote_problem = _npv_for_read(contract)
         rec = state.recovery_cases.get(row.get("recovery_uid"))
         status_label_th, status_label_en = (recovery_status_label(state, rec) if rec
                                             else ("ยังไม่เลือกแนวทาง", "No path chosen yet"))
@@ -1365,6 +1365,7 @@ def list_npl_cases():
             "volt_id": getattr(customer, "volt_id", None) if customer else None,
             "aggregate_overdue": str(total),
             "remaining_npv": str(npv) if npv is not None else None,
+            "quote_problem": quote_problem,
             "risk_score": journey.risk_score_for_customer(customer),
             "recovery_paths": _recovery_paths_for(contract) if contract else None,
             # F08 / TASK-113: the row's column on the strategy board — the OPEN
@@ -1462,6 +1463,18 @@ def recovery_status_label(state, rec):
     return ("กำลังดำเนินการ", "In progress")
 
 
+def _npv_for_read(contract):
+    if contract is None:
+        return None, None
+    try:
+        return journey.remaining_npv(contract), None
+    except errors.Problem as problem:
+        if problem.code not in ("npv_payment_evidence_unconfirmed", "allocation_rule_pending"):
+            raise
+        return None, {"code": problem.code, "status": problem.status,
+                      "message_th": problem.message_th, "detail": problem.detail}
+
+
 def _recovery_payload(state, rec):
     """One recovery case as every route serves it: the SOP's steps (REC-14), the
     case's remaining NPV, the declared commercial rate and its estimate (REC-9/11),
@@ -1470,7 +1483,7 @@ def _recovery_payload(state, rec):
     every figure says so in rate_basis_*."""
     found = journey.contract_by_uid(rec["contract_uid"])
     contract = found[1] if found else None
-    npv = journey.remaining_npv(contract) if contract else None
+    npv, quote_problem = _npv_for_read(contract)
     rate = journey.RECOVERY_RATE_PCT.get(rec["strategy"])
     expected = (npv * rate / Decimal("100")).quantize(Decimal("0.01")) \
         if npv is not None and rate is not None else None
@@ -1490,6 +1503,7 @@ def _recovery_payload(state, rec):
         "next_steps": sop.RECOVERY_NEXT_STEPS.get(rec["strategy"], []),
         "next_steps_note_th": note_th, "next_steps_note_en": note_en,
         "remaining_npv": str(npv) if npv is not None else None,
+        "quote_problem": quote_problem,
         "remaining_npv_basis_th": pct_note_th,
         "remaining_npv_basis_en": pct_note_en,
         "remaining_npv_pending_decision": "OQ-31" if npv is not None else None,
@@ -1506,7 +1520,7 @@ def _recovery_paths_for(contract):
     """The path cards before one is chosen: each strategy with the same declared
     rate and its estimate against THIS case's remaining NPV. The interface never
     multiplies — the server owns the number (api.js's own rule)."""
-    npv = journey.remaining_npv(contract) if contract else None
+    npv, quote_problem = _npv_for_read(contract)
     paths = []
     for strategy in journey.RECOVERY_STRATEGIES:
         rate = journey.RECOVERY_RATE_PCT.get(strategy)
@@ -1527,7 +1541,8 @@ def _recovery_paths_for(contract):
             "next_steps": sop.RECOVERY_NEXT_STEPS.get(strategy, []),
             "next_steps_note_th": note_th, "next_steps_note_en": note_en,
         })
-    return {"remaining_npv": str(npv) if npv is not None else None, "paths": paths}
+    return {"remaining_npv": str(npv) if npv is not None else None,
+            "quote_problem": quote_problem, "paths": paths}
 
 
 @router.post("/v1/npl-cases/{uid}/recovery", status_code=201)

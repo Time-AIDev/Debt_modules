@@ -60,6 +60,8 @@ function RecoveryOpen({ rec, reload }) {
     <div className="glist__open">
       <dl className="kv nplcase__kv">
         <dt>{t('recovery.remaining')}</dt><dd className="num">{money(rec.remaining_npv)}</dd>
+        {rec.quote_problem ? <><dt>{t('supplement.reviewNeeded')}</dt><dd role="status">
+          {rec.quote_problem.message_th || rec.quote_problem.detail}</dd></> : null}
         <dt>{t('recovery.recovered')}</dt><dd className="num">{money(rec.recovered_total)}</dd>
         <dt>{t('recovery.rateLabel')}</dt>
         <dd className="nplrec__rate">
