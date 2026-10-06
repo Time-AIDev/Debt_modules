@@ -2,7 +2,6 @@
 import importlib.util
 import json
 from pathlib import Path
-import sys
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -75,12 +74,94 @@ def test_full_score_requires_completed_checkpoints_and_no_open_defects(tmp_path)
     evidence = fixture(tmp_path)
     valid = {"revision": REV, "execution_status": "completed", "score": 10,
              "passed": 91, "failed": 0, "skipped": 0, "unexecuted": 0,
-             "open_defects": 0, "checkpoints_total": 33, "checkpoints_passed": 33}
+             "open_defects": 0, "feature_count": 19, "checkpoints_total": 33, "checkpoints_passed": 33,
+             "roles_observed": ["OFFICER", "MANAGER", "OPS"],
+             "dimensions": {name: 2 for name in report.UX_DIMENSIONS}}
     assert report.build_aggregate(evidence, REV, qa_execution=valid)["ux"]["usability_estimate_score"] == 10
     for change in ({"failed": 1}, {"failed": False}, {"skipped": 1}, {"open_defects": 1}, {"passed": 0},
-                   {"checkpoints_passed": 32}, {"checkpoints_total": 1}):
+                   {"checkpoints_passed": 32}, {"checkpoints_total": 1},
+                   {"checkpoints_total": 19, "checkpoints_passed": 19}, {"feature_count": 18},
+                   {"roles_observed": ["OFFICER", "MANAGER"]}, {"roles_observed": "OFFICER MANAGER OPS"},
+                   {"dimensions": None}, {"dimensions": {**valid["dimensions"], "navigation": 1}},
+                   {"dimensions": {**valid["dimensions"], "navigation": True}},
+                   {"dimensions": {**valid["dimensions"], "PRIVATE-TOKEN": 2}}):
         actual = report.build_aggregate(evidence, REV, qa_execution={**valid, **change})
         assert actual["ux"]["usability_estimate_score"] is None
+        assert "PRIVATE-TOKEN" not in json.dumps(actual)
+
+
+def source_manifest(revision=REV, checksum="c" * 64, **extra):
+    return {"revision": revision, "tracked_sha256": checksum, "tracked_clean": True,
+            "untracked_code_files": 0, "notes": "PRIVATE-NOTE", **extra}
+
+
+def test_component_results_keep_source_binding_without_promoting_focused_or_old_runs(tmp_path):
+    evidence = fixture(tmp_path)
+    summary = tmp_path / "summary.json"
+    manifest = source_manifest()
+    data = {"backend": {"tests": 41, "passed": 41, "failed": 0, "skipped": 0},
+            "source_before": manifest, "source_after": manifest, "source_unchanged": True,
+            "backend_selection": ["tests/test_capacity_projection.py"],
+            "private_env": "PRIVATE-TOKEN"}
+    write(summary, data)
+    current = report.build_aggregate(evidence, REV, test_summaries=[summary])["tests"][0]
+    assert current["binding"] == "MATCHING_REPORT_REVISION"
+    assert current["source_unchanged"] is True and current["matching_report_revision"] is True
+    assert current["source_bound_for_report_revision"] is True
+    assert current["source_before"]["tracked_sha256"] == "c" * 64
+    assert current["source_after"]["revision"] == REV
+    assert current["final_regression_certified"] is False
+    assert "PRIVATE-" not in json.dumps(current)
+    old = source_manifest(OLD)
+    write(summary, {**data, "source_before": old, "source_after": old})
+    previous = report.build_aggregate(evidence, REV, test_summaries=[summary])["tests"][0]
+    assert previous["binding"] == "OLDER_REVISION"
+    assert previous["matching_report_revision"] is False
+    assert previous["source_bound_for_report_revision"] is False
+    assert previous["final_regression_certified"] is False
+    assert "not final regression evidence" in previous["scope"]
+
+
+def test_dirty_changed_or_untracked_source_cannot_become_final_regression_evidence(tmp_path):
+    summary = tmp_path / "summary.json"
+    clean = source_manifest()
+    for before, after, unchanged in (
+        (source_manifest(tracked_clean=False), source_manifest(tracked_clean=False), False),
+        (clean, source_manifest(checksum="d" * 64), False),
+        (clean, source_manifest(checksum="d" * 64), True),
+        (source_manifest(untracked_code_files=1), source_manifest(untracked_code_files=1), True),
+        ({}, {}, True),
+    ):
+        write(summary, {"source_before": before, "source_after": after, "source_unchanged": unchanged,
+                        "backend": {"tests": 21, "passed": 21, "failed": 0, "skipped": 0}})
+        actual = report.test_aggregate(summary, REV)
+        assert actual["source_bound_for_report_revision"] is False
+        assert actual["final_regression_certified"] is False
+        assert actual["components"]["backend"]["passed"] == 21
+        assert "not final regression evidence" in actual["scope"]
+
+
+def test_docx_displays_mutable_source_and_qa_completion_with_only_whitelisted_fields(tmp_path):
+    evidence = fixture(tmp_path)
+    summary = tmp_path / "summary.json"
+    dirty = source_manifest(tracked_clean=False)
+    write(summary, {"source_before": dirty, "source_after": dirty, "source_unchanged": False,
+                    "backend": {"tests": 21, "passed": 21, "failed": 0, "skipped": 0}})
+    execution = {"revision": REV, "execution_status": "completed", "score": 8.5,
+                 "passed": 10, "failed": 1, "skipped": 3, "unexecuted": 0,
+                 "feature_count": 10, "checkpoints_total": 33, "checkpoints_passed": 10,
+                 "open_defects": 1, "roles_observed": ["OFFICER", "PRIVATE-NAME"],
+                 "dimensions": {"completion": 1, "PRIVATE-NAME": 2}}
+    data = report.build_aggregate(evidence, REV, qa_execution=execution, test_summaries=[summary])
+    assert data["ux"]["usability_estimate_score"] == 8.5
+    assert data["ux"]["execution_completion"]["checkpoints_passed"] == 10
+    docx = tmp_path / "result.docx"
+    report.render_docx(data, docx)
+    with zipfile.ZipFile(docx) as archive:
+        xml = archive.read("word/document.xml").decode()
+        assert "MUTABLE_SOURCE" in xml and "not final regression evidence" in xml
+        assert "source unchanged=False" in xml and "Observed flows: 10; checkpoints: 10/33" in xml
+        assert "PRIVATE-" not in xml
 
 
 def test_staged_financial_report_preserves_counts_without_leaking_rows_or_promoting_old_runtime(tmp_path):

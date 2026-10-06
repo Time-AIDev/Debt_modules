@@ -28,6 +28,7 @@ SUPPLEMENTAL = {"paged": {"capacity_page_ms": "p(95)<2000", "capacity_page_error
 INPUTS = ("S3 configuration", "age recipient/key custodian", "recovery host", "independent load generator",
           "HTTP JSON webhook configuration", "Git write credentials")
 ROLES = {"OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"}
+UX_DIMENSIONS = {"completion", "navigation", "financial_clarity", "recovery", "accessibility"}
 
 
 def read_json(path):
@@ -128,6 +129,14 @@ def qa_aggregate(matrix, scenarios, execution, revision):
         state = flow.get("status")
         statuses[state if state in allowed else "inventory_only"] += 1
     scenarios = scenarios if isinstance(scenarios, list) else []
+    execution = execution if isinstance(execution, dict) else {}
+    observed_dimensions = execution.get("dimensions")
+    observed_dimensions = observed_dimensions if isinstance(observed_dimensions, dict) else {}
+    dimensions = {name: number(observed_dimensions.get(name)) for name in sorted(UX_DIMENSIONS)}
+    observed_roles = execution.get("roles_observed")
+    roles = sorted(role for role in ROLES if isinstance(observed_roles, list) and role in observed_roles)
+    completion = {key: number(execution.get(key), integer=True) for key in (
+        "feature_count", "checkpoints_total", "checkpoints_passed", "open_defects")}
     score = None
     executed = bool(execution and execution.get("execution_status") == "completed"
                     and execution.get("revision") == revision)
@@ -140,9 +149,12 @@ def qa_aggregate(matrix, scenarios, execution, revision):
                 and number(execution.get("skipped"), integer=True) == 0
                 and number(execution.get("open_defects"), integer=True) == 0
                 and (number(execution.get("passed"), integer=True) or 0) > 0
-                and number(execution.get("checkpoints_total"), integer=True) is not None
-                and execution["checkpoints_total"] >= 19
-                and execution.get("checkpoints_passed") == execution["checkpoints_total"]
+                and (completion["feature_count"] or 0) >= 19
+                and (completion["checkpoints_total"] or 0) >= 33
+                and completion["checkpoints_passed"] == completion["checkpoints_total"]
+                and set(observed_dimensions) == UX_DIMENSIONS
+                and all(value == 2 for value in dimensions.values())
+                and set(roles) >= {"OFFICER", "MANAGER", "OPS"}
             ):
                 score = None
     counts = {key: number((execution or {}).get(key), integer=True) if executed else None
@@ -155,11 +167,14 @@ def qa_aggregate(matrix, scenarios, execution, revision):
             "mutation_observed_flows": sum(flow.get("mutation_observed") is True for flow in valid_flows),
             "inventory_status_counts": dict(statuses), "execution_verified_for_report_revision": executed,
             "execution_counts": counts, "usability_estimate_score": score,
+            "execution_completion": completion if executed else None,
+            "execution_dimensions": dimensions if executed else None,
+            "roles_observed": roles if executed else [],
             "score_scope": "Revision-bound estimate, not human approval" if score is not None else "Not scored: execution evidence incomplete",
             "inventory_is_execution": False}
 
 
-def test_aggregate(path):
+def test_aggregate(path, revision):
     data = read_json(path) or {}
     components = {}
     for name in ("backend", "frontend"):
@@ -167,7 +182,27 @@ def test_aggregate(path):
         if not isinstance(value, dict):
             continue
         components[name] = {key: number(value.get(key), integer=True) for key in ("tests", "passed", "failed", "skipped")}
+    def manifest(value):
+        value = value if isinstance(value, dict) else {}
+        return {"revision": identifier(value.get("revision"), REVISION),
+                "tracked_sha256": identifier(value.get("tracked_sha256"), SHA),
+                "tracked_clean": value.get("tracked_clean") if isinstance(value.get("tracked_clean"), bool) else None,
+                "untracked_code_files": number(value.get("untracked_code_files"), integer=True)}
+    before, after = (manifest(data.get(key)) for key in ("source_before", "source_after"))
+    unchanged = data.get("source_unchanged") if isinstance(data.get("source_unchanged"), bool) else None
+    verified = (unchanged is True and before == after and before["revision"] is not None
+                and before["tracked_sha256"] is not None and before["tracked_clean"] is True
+                and before["untracked_code_files"] == 0)
+    matching = before["revision"] == revision and after["revision"] == revision
+    binding = ("MATCHING_REPORT_REVISION" if verified and matching else "OLDER_REVISION" if verified else
+               "MUTABLE_SOURCE" if unchanged is False or before["tracked_clean"] is False or after["tracked_clean"] is False
+               else "UNBOUND")
     return {"components": components, "production_used": data.get("production_used") is True,
+            "source_before": before, "source_after": after, "source_unchanged": unchanged,
+            "matching_report_revision": matching, "source_bound_for_report_revision": bool(verified and matching),
+            "binding": binding, "final_regression_certified": False,
+            "scope": "Source-bound component execution; whole-suite acceptance requires final regression gates"
+                if verified and matching else "Older, mutable or unbound execution; not final regression evidence",
             "counts_are_not_summed_across_overlapping_suites": True}
 
 
@@ -268,7 +303,7 @@ def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test
                           expected_api_image=progress.get("candidate_api_image") if progress.get("candidate_revision") == revision else None)},
         "ux": qa_aggregate(read_json(evidence / "qa/feature-matrix.json"),
                            read_json(evidence / "qa/scenarios.template.json"), qa_execution, revision),
-        "tests": [test_aggregate(path) for path in test_summaries]}
+        "tests": [test_aggregate(path, revision) for path in test_summaries]}
 
 
 def table(doc, columns, rows):
@@ -350,12 +385,25 @@ def render_docx(data, output):
     doc.add_paragraph("Browser-observed flows: %s; mutation-observed flows: %s. คะแนน usability estimate: %s" %
                       (ux["browser_observed_flows"], ux["mutation_observed_flows"], ux["usability_estimate_score"] if ux["usability_estimate_score"] is not None else "ยังไม่ให้คะแนน"))
     table(doc, ("Passed", "Failed", "Skipped", "Unexecuted"), [[ux["execution_counts"][key] for key in ("passed", "failed", "skipped", "unexecuted")]])
+    if ux["execution_completion"]:
+        completion = ux["execution_completion"]
+        doc.add_paragraph("Observed flows: %s; checkpoints: %s/%s; open defects: %s; roles: %s" %
+            (completion["feature_count"], completion["checkpoints_passed"], completion["checkpoints_total"],
+             completion["open_defects"], ", ".join(ux["roles_observed"])))
+        table(doc, ("Usability dimension", "Observed score"), list(ux["execution_dimensions"].items()))
     doc.add_heading("การทดสอบ component ที่มีหลักฐาน execution", 1)
     rows = []
     for index, suite in enumerate(data["tests"], 1):
         for component, counts in suite["components"].items():
             rows.append((index, component, counts["tests"], counts["passed"], counts["failed"], counts["skipped"]))
     table(doc, ("Evidence set", "Component", "Tests", "Passed", "Failed", "Skipped"), rows)
+    for index, suite in enumerate(data["tests"], 1):
+        doc.add_paragraph("Evidence set %s: %s; source unchanged=%s; matching report revision=%s. %s" %
+            (index, suite["binding"], suite["source_unchanged"], suite["matching_report_revision"], suite["scope"]))
+        for side in ("source_before", "source_after"):
+            manifest = suite[side]
+            doc.add_paragraph("%s: revision %s; tracked SHA256 %s; tracked clean=%s; untracked code files=%s" %
+                (side, manifest["revision"], manifest["tracked_sha256"], manifest["tracked_clean"], manifest["untracked_code_files"]))
     doc.add_paragraph("ไม่บวกจำนวนจากหลาย suite เป็น tests ไม่ซ้ำ เพราะชุดทดสอบอาจทับซ้อนกัน; ช่องว่างหมายถึงไม่มีหลักฐานตัวเลข")
     doc.add_heading("สิ่งที่ยังต้องยืนยันก่อน go-live", 1)
     for item in data["pending_external_inputs"]:
