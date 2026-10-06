@@ -1617,6 +1617,7 @@ def case_detail(customer_uid: str):
                      "field_sources": getattr(customer, "field_sources", None),
                      "field_notes_th": getattr(customer, "field_notes_th", None),
                      "field_notes_en": getattr(customer, "field_notes_en", None),
+                     "contract_product_review": getattr(customer, "contract_product_review", None),
                      # Delta-100 D2a/T-15: the record's own figures ride the
                      # customer object too, so one screen has one read path.
                      "risk_score": risk_score, "contact_allowance": allowance},
@@ -2041,6 +2042,9 @@ def log_case_contact(customer_uid: str, body: dict = Body(...), x_volt_role: str
     """The contact log row (REQ-COL-072). The Act's daily slot is enforced by the
     existing POST /v1/contacts; the interface calls that first for a counting
     result and then this with counted=true. Both are recorded here."""
+    if body.get("ptp"):
+        from ..production_permissions import role_required
+        role_required({"role": role_of(x_volt_role)}, {"OFFICER", "SUPERVISOR", "MANAGER", "OWNER"})
     cs = cases_domain.for_current()
     case = _case_or_404(cs, customer_uid)
     try:

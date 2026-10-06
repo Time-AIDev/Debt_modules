@@ -18,6 +18,33 @@ def test_unassigned_case_is_not_an_officers_write_permission():
         production_permissions.require_assignment({"role": "OFFICER", "officer": "thip"}, None)
 
 
+def test_ops_cannot_create_a_promise_embedded_in_an_otherwise_allowed_contact():
+    template = "/v1/cases/by-customer/{customer_uid}/contacts"
+    with pytest.raises(errors.Problem) as refused:
+        production_permissions._role_gate(template, {"role": "OPS"}, {"ptp": {"amount": "100", "date": "2026-10-24"}})
+    assert refused.value.status == 403
+    production_permissions._role_gate(template, {"role": "OPS"}, {"issue": {"summary": "Service inspection"}})
+
+
+@pytest.mark.parametrize("role", ["OPS", "OFFICER", "SUPERVISOR", "MANAGER", "OWNER"])
+def test_contact_promise_uses_the_same_roles_as_standalone_promises(role):
+    from fastapi.testclient import TestClient
+    from app import cases, main
+    from app.config import settings
+    from datetime import timedelta
+    uid = next(uid for uid, case in cases.for_current().cases.items() if not case.get("open_ptp_uid"))
+    body = {"result": "REACHED_PTP", "ptp": {"amount": "100", "date": str(settings.business_date + timedelta(days=1))}}
+    before = len(cases.for_current().ptps)
+    with TestClient(main.app) as client:
+        response = client.post("/v1/cases/by-customer/" + uid + "/contacts", json=body,
+                               headers={"X-Volt-Role": role})
+        state = client.get("/v1/cases/by-customer/" + uid).json()
+    assert response.status_code == (403 if role == "OPS" else 201)
+    assert len(state["ptps"]) == (0 if role == "OPS" else 1)
+    if role == "OPS":
+        assert len(cases.for_current().ptps) == before
+
+
 @pytest.mark.parametrize("path", ["/v1/case-ptps/child:close", "/v1/contacts/child:correct",
                                    "/v1/reviews/child:answer", "/v1/case-issues/child:close",
                                    "/v1/power-restrictions/child:restore"])

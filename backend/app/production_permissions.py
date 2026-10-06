@@ -54,6 +54,8 @@ def _role_gate(template, actor, fields):
                                               "/v1/recovery-cases", "/v1/npl-cases", "/v1/receipts", "/v1/credit-notes"))
     financial_action = financial_action or any(part in template for part in (
         "/payment-claims", "/payment-reminders", "/payment-status", ":advance", ":set-stage", ":terminate"))
+    financial_action = financial_action or (
+        template == "/v1/cases/by-customer/{customer_uid}/contacts" and bool(fields.get("ptp")))
     if role == "OPS" and financial_action:
         role_required(actor, SUPERVISORY | {"OFFICER"})
     if auth.current_config().reauth_seconds and privileged:

@@ -185,7 +185,7 @@ def test_peak_service_month_is_preserved_from_invoice_description():
     from app.pipelines.peak_report import _invoice, COLUMNS
     row = dict.fromkeys(COLUMNS.values(), '')
     row.update(doc_no='IV-1', status='PAID', description='Service month Oct 2025 M1/48',
-               due_on='2025-12-25', amount_awaiting='0', amount_total='100')
+               due_on='2025-12-25', amount_awaiting='0', amount_total='100', sheet_row=11)
     inv = _invoice([row])
     assert inv['service_month'] == '2025-10'
 

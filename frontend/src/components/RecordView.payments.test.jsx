@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { screen, within } from '@testing-library/react'
+import { act, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderScreen } from '../test-utils.jsx'
 import { FinancialEvidence, InvoicePaymentEvidence, RecordView } from './RecordView.jsx'
@@ -30,6 +30,12 @@ const evidence = {
 }
 
 describe('complete payment evidence in the case', () => {
+  it('names a source product conflict while preserving the reviewed contract entity', async () => {
+    await act(async () => { renderScreen(<RecordView data={{ ...CASE, customer: { ...CASE.customer,
+      contract_product_review: { source_product: 'CASH', contract_product: 'LEASE', review_required: true },
+    } }} onChanged={() => {}} onLogContact={() => {}} />) })
+    expect(screen.getByText('ต้นทางระบุ EPC แต่สัญญาที่ตรวจแล้วเป็น SPV ใช้สัญญาที่ตรวจแล้วคำนวณยอด และส่งความต่างให้ผู้จัดการตรวจ')).toBeInTheDocument()
+  })
   it('discloses every invoice-only historical observation without claiming a new allocation', () => {
     renderScreen(<InvoicePaymentEvidence invoice={{ payment_components: [], source_invoice_components: [
       { uid: 'source-1', receipt_doc_no: 'RE-OLD', paid_on: '2025-01-01', amount: '40.00', channel: 'Bank A', included_in_snapshot: true },

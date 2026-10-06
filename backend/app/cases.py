@@ -663,6 +663,10 @@ def _seed(state: CaseState, customers=None):
                 blocking=False,
             )
             case["npl_review_uid"] = review["uid"]
+        if getattr(customer, "contract_product_review", None) and not case.get("review_uid"):
+            request_review(state, case, "OTHER",
+                           "ประเภทสินค้าจากต้นทางขัดกับสัญญาที่ตรวจแล้ว — ตรวจข้อมูลประเภทและบริษัทรับชำระ",
+                           by="SYSTEM", question_en="Source product conflicts with the reviewed contract; verify product and collection entity")
 
 
 def open_collection_cases(state):

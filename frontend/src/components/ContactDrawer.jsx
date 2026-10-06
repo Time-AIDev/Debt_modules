@@ -106,7 +106,9 @@ export function ContactDrawer({ open, onClose, customer, businessDate, summary, 
   const actionOptions = active(nextActions)
   const hidden = HIDE_BY_CHANNEL[channel] || new Set()
   const filteredOptions = options.filter((o) => !hidden.has(o.code))
+  const allowedOptions = filteredOptions.filter((o) => identity.role !== 'OPS' || !['REACHED_PTP', 'PROMISED'].includes(o.code))
   const showPtp = result === 'REACHED_PTP' || result === 'PROMISED'
+  const ptpForbidden = identity.role === 'OPS' && showPtp
   const reschedule = Boolean(promise) && showPtp
 
   // A fresh form when the drawer opens or the customer changes — never on a reload of
@@ -128,18 +130,18 @@ export function ContactDrawer({ open, onClose, customer, businessDate, summary, 
   }, [open, customer?.uid])
 
   useEffect(() => {
-    if (filteredOptions.length && !result) setResult(filteredOptions[0].code)
-  }, [filteredOptions, result])
+    if (allowedOptions.length && (!result || ptpForbidden)) setResult(allowedOptions[0].code)
+  }, [allowedOptions, result, ptpForbidden])
   // Channel switch keeps a PTP as a PTP: phone promise <-> LINE promise.
   // Any other hidden result falls back to the first visible option.
   useEffect(() => {
     if (!result) return
     if (!hidden.has(result)) return
     const counterpart = PTP_COUNTERPART[result]
-    if (counterpart && filteredOptions.some((o) => o.code === counterpart)) {
+    if (counterpart && allowedOptions.some((o) => o.code === counterpart)) {
       setResult(counterpart)
-    } else if (filteredOptions.length) {
-      setResult(filteredOptions[0].code)
+    } else if (allowedOptions.length) {
+      setResult(allowedOptions[0].code)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [channel])
@@ -269,10 +271,10 @@ export function ContactDrawer({ open, onClose, customer, businessDate, summary, 
   const missingPtp = showPtp && (!ptpAmount || !ptpDate)
   const missingReason = reschedule && !rescheduleReason.trim()
   const missingNext = !nextAction || !nextOn
-  const saveDisabled = busy || !result || missingNext || missingPtp || missingReason
+  const saveDisabled = busy || !result || missingNext || missingPtp || missingReason || ptpForbidden
   // The disabled Save says what is missing (the server's own sentence for a promise);
   // the enabled one carries the rule the officer needs at the moment of saving.
-  const saveTitle = missingPtp ? t('drawer.needPtp') : missingReason ? t('drawer.needReason')
+  const saveTitle = ptpForbidden ? t('drawer.ptpRoleRequired') : missingPtp ? t('drawer.needPtp') : missingReason ? t('drawer.needReason')
     : missingNext ? t('drawer.needNext') : t('drawer.countsToday')
 
   const alternatives = (lockedAlternatives || []).filter((a) => a.code === 'INBOUND_NOT_COUNTED' || a.code === 'SECOND_CONTACT_NOT_COUNTED')
@@ -322,10 +324,12 @@ export function ContactDrawer({ open, onClose, customer, businessDate, summary, 
         <label>
           <span className="eyebrow">{t('drawer.result')}<span className="req" aria-hidden="true">*</span></span>
           <select className="field" value={result} aria-required="true" onChange={(e) => setResult(e.target.value)}>
-            {filteredOptions.map((o) => <option key={o.code} value={o.code}>{labelFor(options, o.code, lang)}</option>)}
+            {filteredOptions.map((o) => <option key={o.code} value={o.code}
+              disabled={identity.role === 'OPS' && ['REACHED_PTP', 'PROMISED'].includes(o.code)}>{labelFor(options, o.code, lang)}</option>)}
           </select>
         </label>
       </div>
+      {identity.role === 'OPS' ? <p className="contact__hint">{t('drawer.ptpRoleRequired')}</p> : null}
       {/* F01 / F01b / F01c (TASK-010(b)(e)): a promise result carries its amount and
           date; when one is already open the same fields move it instead. */}
       {showPtp ? (

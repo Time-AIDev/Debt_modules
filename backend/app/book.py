@@ -364,7 +364,11 @@ def _build(as_of: date = None):
     confirmations = schedule_confirmation.active()
     customers, skipped = [], []
     for i, rec in enumerate(data["customers"]):
-        product = rec["product"]
+        # An approved financial supplement owns its contract classification.
+        # Q7 display-field decisions stay on the source record; a later invoice
+        # product label cannot discard that contract or rebuild it as another entity.
+        supplement_product = (rec.get("contract_supplement") or {}).get("product")
+        product = supplement_product if supplement_product in ("LEASE", "CASH") else rec["product"]
         no = rec["customer_no"] or "row%d" % i
         # The uid must not come from the row's POSITION when the row carries an
         # identifier of its own. `row%d` used the enumeration index, so a re-pull
@@ -440,6 +444,9 @@ def _build(as_of: date = None):
         fixture.sales_lead = rec.get("sales_lead")
         fixture.sheet = rec  # the whole imported record travels for cases.py and the migration screen
         fixture.product = product
+        fixture.contract_product_review = ({"source_product": rec["product"], "contract_product": product,
+                                            "review_required": True, "reason": "SOURCE_PRODUCT_CONFLICT"}
+                                           if supplement_product in ("LEASE", "CASH") and rec["product"] != product else None)
         # The Odoo lead this row is, when the crm.lead merge recorded one. The sheet's
         # own crm_id is the Freshworks deal id and must never become a crm.lead link.
         fixture.odoo_lead_id = rec.get("odoo_lead_id")

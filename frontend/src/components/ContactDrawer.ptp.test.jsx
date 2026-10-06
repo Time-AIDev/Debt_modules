@@ -4,6 +4,7 @@ import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderScreen } from '../test-utils.jsx'
 import { ContactDrawer, contactSummary } from './ContactDrawer.jsx'
+import { setRole } from '../lib/identity.jsx'
 
 vi.mock('../lib/api.js', () => ({
   api: new Proxy({}, {
@@ -49,6 +50,7 @@ function drawer(over = {}) {
 
 beforeEach(() => {
   window.localStorage.clear()
+  setRole('OFFICER')
   vi.clearAllMocks()
   api.dictionary.mockImplementation(async (name) => (name === 'CONTACT_RESULT' ? RESULTS : NEXT))
   api.logContact.mockResolvedValue({ counted: true })
@@ -57,6 +59,27 @@ beforeEach(() => {
 })
 
 describe('the contact drawer promise fields (F01, F01c)', () => {
+  it('keeps OPS service contacts available but disables financial promise results', async () => {
+    setRole('OPS')
+    renderScreen(drawer())
+    expect(await screen.findByRole('option', { name: 'ติดต่อได้ (โทรศัพท์) - นัดชำระ' })).toBeDisabled()
+    expect(screen.getByRole('option', { name: 'ติดต่อได้ - รับสาย' })).not.toBeDisabled()
+    expect(screen.getByText('นัดชำระต้องให้เจ้าหน้าที่ติดตามหนี้หรือผู้มีสิทธิ์ดำเนินการ')).toBeInTheDocument()
+    expect(api.logContact).not.toHaveBeenCalled()
+    expect(api.logCaseContact).not.toHaveBeenCalled()
+  })
+  it('switches OPS to an allowed LINE result and saves O&M contact without a promise', async () => {
+    setRole('OPS')
+    const user = userEvent.setup()
+    renderScreen(drawer())
+    await user.selectOptions(await screen.findByLabelText(/^ช่องทาง/), 'LINE')
+    await waitFor(() => expect(screen.getByLabelText(/^ผลการติดต่อ/)).toHaveValue('LINE_READ'))
+    expect(screen.getByRole('option', { name: 'ติดต่อได้ (LINE) - นัดชำระ' })).toBeDisabled()
+    expect(screen.queryByLabelText(/จำนวนเงินนัดชำระ/)).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'บันทึก' }))
+    await waitFor(() => expect(api.logCaseContact).toHaveBeenCalled())
+    expect(api.logCaseContact.mock.calls[0][1]).not.toHaveProperty('ptp')
+  })
   it('shows the amount and date only for a promise result', async () => {
     const user = userEvent.setup()
     renderScreen(drawer())

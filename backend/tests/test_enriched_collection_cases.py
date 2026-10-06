@@ -63,3 +63,26 @@ def test_real_contract_cannot_be_reported_as_an_identity_without_a_money_row(mon
     assert payload["contracts"][0]["paid_through"] == 0
     assert payload["case"]["npl_assessment"]["actual_dpd"] >= 90
     assert payload["case"]["payment_status"] != "NPL"
+
+
+def test_reviewed_supplement_keeps_its_contract_when_peak_display_product_conflicts(monkeypatch):
+    record = {"customer_no": "SYNTHETIC-ENRICHED", "volt_id": "SYNTHETIC-ENRICHED-ID", "product": "CASH",
+              "name_roman": "Synthetic Enriched Customer", "cash": None,
+              "leasing": {"pmt_inc_vat": "1000", "term_original": 12, "first_payment_date": "2026-01-10",
+                          "financial_evidence_only": True, "months": []},
+              "contract_supplement": {"product": "LEASE"}, "field_sources": {"product": "PEAK"}}
+    monkeypatch.setattr(book, "load_sheet", lambda: {"customers": [record], "source": {"blocks": {}}})
+    book.invalidate()
+    customers, _ = book.build(date(2026, 10, 23))
+    assert len(customers) == 1
+    customer = customers[0]
+    assert customer.product == "LEASE" and customer.contracts[0].entity == "SPV"
+    assert customer.sheet["product"] == "CASH" and customer.field_sources["product"] == "PEAK"
+    assert customer.contract_product_review == {"source_product": "CASH", "contract_product": "LEASE",
+                                                "review_required": True, "reason": "SOURCE_PRODUCT_CONFLICT"}
+    monkeypatch.setattr(main, "CUSTOMERS", customers)
+    monkeypatch.setattr(main, "BY_CUSTOMER", {customer.uid: customer})
+    state = cases.CaseState()
+    cases.open_collection_cases(state)
+    assert state.cases[customer.uid]["review_uid"] is not None
+    assert state.reviews[state.cases[customer.uid]["review_uid"]]["reason"] == "OTHER"

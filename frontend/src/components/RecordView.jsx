@@ -729,6 +729,12 @@ export function RecordView({
             })}
           </p>
         ) : null}
+        {customer.contract_product_review?.review_required ? (
+          <p className="case__rowNote" role="status">{t('record.contractProductReview', {
+            source: customer.contract_product_review.source_product === 'LEASE' ? 'SPV' : 'EPC',
+            contract: customer.contract_product_review.contract_product === 'LEASE' ? 'SPV' : 'EPC',
+          })}</p>
+        ) : null}
         {sheetStatus || disagreements.length ? (
           <div className="case__idRow case__sheetRow">
             {sheetStatus ? (
