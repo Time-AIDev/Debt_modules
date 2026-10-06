@@ -76,7 +76,7 @@ beforeEach(() => {
   api.lots.mockResolvedValue({ lots: [LOT] })
   api.recoveryBoard.mockResolvedValue({ columns: [] })
   api.serviceBilling.mockResolvedValue({ accounts: [], meta: {} })
-  api.caseDetail.mockResolvedValue(CASE)
+  api.caseDetail.mockImplementation(async (uid) => ({ ...CASE, customer: { ...CASE.customer, uid } }))
 })
 
 const rowButton = (name) => screen.getByRole('button', { name: new RegExp(`^${name}`) })
