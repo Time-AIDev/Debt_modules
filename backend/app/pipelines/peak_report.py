@@ -295,7 +295,7 @@ def _money(text):
         raise Unreadable("amount_unreadable", text) from None
 
 
-def group_documents(lines, build, rejected):
+def group_documents(lines, build, rejected, diagnostics=None):
     """One record per document from its lines (first appearance kept), each built by
     `build(lines)`. A document with a cell that does not parse sends every one of its
     lines to `rejected`, the way an unknown status rejects its line. Returns the
@@ -308,7 +308,16 @@ def group_documents(lines, build, rejected):
         try:
             records.append(build(own))
         except Unreadable as exc:
-            rejected.extend({"row": ln["sheet_row"], "code": exc.code, "value": exc.value} for ln in own)
+            rejected.extend({"row": ln["sheet_row"], "code": exc.code, "value": exc.value}
+                            for ln in own)
+            if diagnostics is not None:
+                diagnostics.extend({"row": ln["sheet_row"], "doc_no": ln["doc_no"],
+                             "code": exc.code, "value": exc.value,
+                             "observation": {key: ln.get(key) for key in (
+                                 "status_th", "issued_on", "contact_code", "amount_due",
+                                 "paid_on", "paid_amount", "invoice_ref", "system_invoice_ref",
+                                 "reference", "system_reference")}}
+                                  for ln in own)
             continue
         kept.extend(own)
     return records, kept
@@ -363,7 +372,12 @@ def payment_components(lines):
             if None in per_item.values():
                 raise Unreadable("payment_component_incomplete", "paid_amount")
             component["amount"] = str(sum((Decimal(value) for value in per_item.values()), Decimal(0)))
-        result.append(component)
+        occurrences = {}
+        for item, _value in rows:
+            occurrences[item] = occurrences.get(item, 0) + 1
+        # Across items, repeated payment cells are one payment; within an item,
+        # equal source occurrences remain distinct cash components.
+        result.extend(dict(component) for _ in range(max(occurrences.values())))
     return sorted(result, key=lambda value: (value["on"] or "", value["receipt_no"] or ""))
 
 

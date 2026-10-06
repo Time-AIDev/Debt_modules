@@ -347,9 +347,12 @@ def odoo_phone_rows(conn):
 
 
 def _payment(r, receipt_no):
-    return {"on": _iso(r["paid_on"]), "channel": r["paid_channel"],
+    payment = {"on": _iso(r["paid_on"]), "channel": r["paid_channel"],
             "amount": str(r["paid_amount"]) if r["paid_amount"] is not None else None,
             "receipt_no": receipt_no}
+    if r.get('component_index') is not None:
+        payment['component_index'] = r['component_index']
+    return payment
 
 
 # The register's normaliser: peak_match.normalise_code (all whitespace, upper case) in SQL.
@@ -503,12 +506,16 @@ def write_receipts(conn, parsed, verdicts, door="upload", filename=None, on_prog
                    run_id=None, fingerprint=None):
     """The receipt run's write — the same contract as write(): verdicts are the ladder
     WITH the link register, one per receipt, in parse order."""
+    if len(verdicts) != len(parsed['receipts']):
+        raise ValueError('Receipt verdict count must match source document count')
     covers_from, covers_to = report_range(filename)
     meta = {"report_as_of": (parsed.get("meta") or {}).get("report_as_of"),
             "exported_at": (parsed.get("meta") or {}).get("exported_at"),
             "covers_from": covers_from, "covers_to": covers_to,
             "door": door, "filename": filename, "fingerprint": fingerprint,
             "schema": (parsed.get("meta") or {}).get("schema"),
+            "source_read": (parsed.get("meta") or {}).get("source_read"),
+            "rejected_documents": (parsed.get("meta") or {}).get("rejected_documents") or [],
             "payment_components": {rec["doc_no"]: rec["payments"] for rec in parsed["receipts"]
                                    if rec.get("payments")},
             "source_rows": {rec["doc_no"]: rec.get("source_rows") or [] for rec in parsed["receipts"]}}
@@ -622,12 +629,14 @@ def _overlay_receipts(conn, out, invoice_as_of):
     rows = conn.execute(text(
         "select p.doc_no, p.doc_kind, p.issued_on, p.invoice_ref, p.contact_code, p.cycle_n, p.cycle_of, "
         "p.amount_total, p.amount_due, p.paid_on, p.paid_channel, p.paid_amount, p.verdict, p.rule, "
-        "p.customer_no, p.invoice_doc_no, null as ladder_verdict, l.customer_no as linked_no "
+        "p.customer_no, p.invoice_doc_no, null as ladder_verdict, l.customer_no as linked_no, "
+        "component_run.meta->'payment_components'->p.doc_no as payment_components "
         "from (select distinct on (pr.doc_no) pr.* from landing.peak_receipt pr "
         "join landing.import_run ir on ir.id=pr.import_run_id "
         "where ir.status='OK' and ir.source_system=:source and ir.meta ? 'applied' "
         "order by pr.doc_no, coalesce(nullif(ir.meta->>'exported_at',''), "
         "nullif(ir.meta->>'report_as_of',''),'') desc, ir.id desc) p "
+        "join landing.import_run component_run on component_run.id=p.import_run_id "
         "left join records.identity_link l "
         "on l.retired_at is null and l.source = 'PEAK_LINK' and l.contact_code = %s "
         "where p.status = 'PAID' order by p.paid_on, p.doc_no" % (_NORM % "p.contact_code")),
@@ -651,21 +660,42 @@ def _overlay_receipts(conn, out, invoice_as_of):
     if conn.execute(text("select to_regclass('records.payment_reconciliation_version')")).scalar():
         balance_version = conn.execute(text(
             "select invoice_run_id,outputs->'invoices' as balances, "
+            "outputs->'component_allocations' as component_allocations, "
             "jsonb_path_query_array(inputs, '$.receipts[*] ? (@.status == \"CANCELLED\").doc_no') as cancelled "
             "from records.payment_reconciliation_version "
             "order by sequence desc limit 1")).mappings().first()
     balances = (balance_version["balances"] or {}) if balance_version else {}
     cancelled = set(balance_version["cancelled"] or []) if balance_version else set()
-    if ledger:
+    source_rows = rows
+    if ledger or balance_version:
         receipt_by_doc = {row["doc_no"]: row for row in rows}
         allocated_rows = []
-        for allocation in ledger:
+        for allocation in (balance_version['component_allocations']
+                           if balance_version and balance_version.get('component_allocations') is not None else ledger):
+            if allocation['invoice_doc_no'] is None:
+                continue
             receipt = receipt_by_doc.get(allocation["receipt_doc_no"])
             if receipt is None:
                 continue
             allocated_rows.append(dict(receipt, invoice_doc_no=allocation["invoice_doc_no"],
-                                       paid_amount=allocation["amount"]))
+                                       paid_amount=allocation["amount"],
+                                       paid_on=allocation.get('paid_on') or receipt['paid_on'],
+                                       paid_channel=allocation.get('channel') or receipt['paid_channel'],
+                                       component_index=allocation.get('component_index')))
         rows = allocated_rows
+        known_invoices = {invoice['doc_no'] for block in out.values() for invoice in block['invoices']}
+        # Verified customer links can still display real receipt source evidence
+        # when its invoice is missing. This is review evidence, not allocated cash.
+        rows += [dict(receipt, receipt_needs_review=True) for receipt in source_rows
+                 if (receipt.get('invoice_doc_no') or receipt.get('invoice_ref') or '').strip() not in known_invoices]
+    elif not balance_version:
+        # Compatibility runs have no allocation ledger yet; source components
+        # still retain their own dates and multiplicity rather than a last-date
+        # aggregate. Monetary reconciliation remains the authoritative path.
+        rows = [dict(receipt, paid_on=part['on'], paid_amount=part['amount'],
+                     paid_channel=part.get('channel') or receipt['paid_channel'], component_index=index)
+                for receipt in rows
+                for index, part in enumerate(receipt.get('payment_components') or [_payment(receipt, receipt['doc_no'])])]
     by_invoice = {}
     for r in rows:
         ref = (r["invoice_doc_no"] or r["invoice_ref"] or "").strip()
@@ -736,6 +766,7 @@ def _overlay_receipts(conn, out, invoice_as_of):
         block["invoices"].append({
             "doc_no": r["doc_no"], "doc_kind": r["doc_kind"], "status": "PAID",
             "receipt_only": True, "issued_on": _iso(r["issued_on"]), "due_on": None,
+            "receipt_needs_review": bool(r.get('receipt_needs_review')),
             "cycle": cycle,
             "amount_total": str(r["amount_total"]) if r["amount_total"] is not None else None,
             "amount_due": str(r["amount_due"]) if r["amount_due"] is not None else None,
@@ -745,6 +776,8 @@ def _overlay_receipts(conn, out, invoice_as_of):
             "note_th": RECEIPT_ONLY_TH, "note_en": RECEIPT_ONLY_EN,
         })
     for key, block in out.items():
+        block['invoice_report_as_of'] = invoice_as_of
+        block['receipt_report_as_of'] = receipt_as_of
         if invoice_as_of or receipt_as_of:
             block["report_as_of"] = max(x for x in (invoice_as_of, receipt_as_of) if x)
         block["invoices"].sort(key=lambda i: (i.get("due_on") or "", i["doc_no"]))

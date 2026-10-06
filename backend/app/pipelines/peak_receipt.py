@@ -71,14 +71,17 @@ def parse(raw, filename=None):
         status_th = _cell(row, col["status_th"])
         status = STATUS_MAP.get(status_th)
         lines.append({key: _cell(row, i) for key, i in col.items()} | {"status": status, "sheet_row": n})
-    receipts, lines = group_documents(lines, _receipt, rejected)
+    source_read = len(lines)
+    diagnostics = []
+    receipts, lines = group_documents(lines, _receipt, rejected, diagnostics)
     covers_from, covers_to = report_range(filename)
     return {
         "receipts": receipts,
         "meta": {"report_as_of": report_as_of(filename),
                  "exported_at": invoice_report.export_timestamp(filename),
                  "covers_from": covers_from, "covers_to": covers_to,
-                 "read": len(lines), "rejected": rejected, "schema": schema},
+                 "read": len(lines), "source_read": source_read,
+                 "rejected": rejected, "rejected_documents": diagnostics, "schema": schema},
     }
 
 
@@ -101,8 +104,18 @@ def _receipt(lines):
         if component["amount"] is None and not component["on"]:
             continue
         key = tuple(component.values())
-        payments[key] = component
-    components = sorted(payments.values(), key=lambda value: (value["on"] or "", value["channel"] or ""))
+        # PEAK repeats each payment for different document items. Equal payments
+        # repeated within the same item are separate source occurrences; a tuple
+        # set would silently discard legitimate identical cash components.
+        item = str(line.get("line_no") or "1")
+        payments.setdefault(key, {}).setdefault(item, []).append(component)
+    components = [dict(values[0], component_index=index)
+                  for by_item in payments.values()
+                  for values in [max(by_item.values(), key=len)]
+                  for index in range(len(values))]
+    components.sort(key=lambda value: (value["on"] or "", value["channel"] or ""))
+    for index, component in enumerate(components):
+        component['component_index'] = index
     doc = first["doc_no"]
     cycle = invoice_report._cycle(first["description"], first["product_name"])
     prefix = doc.split("-")[0] if "-" in doc else doc
@@ -129,7 +142,7 @@ def _receipt(lines):
         "payments": components,
     }
     if rec["status"] == "PAID" and (not components or any(
-            not value["on"] or value["amount"] is None or invoice_report.Decimal(value["amount"]) <= 0
+            not value["on"] or value["amount"] is None
             for value in components)):
         raise invoice_report.Unreadable("payment_component_incomplete", "paid_amount_or_date")
     if components:
@@ -138,6 +151,11 @@ def _receipt(lines):
         rec["paid_amount"] = str(sum((invoice_report.Decimal(value["amount"]) for value in components),
                                     invoice_report.Decimal(0)).quantize(invoice_report.Decimal("0.01")))
         rec["paid_on"] = components[-1]["on"]
+        if rec['status'] == 'PAID' and invoice_report.Decimal(rec['paid_amount']) <= 0:
+            raise invoice_report.Unreadable('payment_component_incomplete', 'paid_amount_or_date')
+        if (rec["status"] == "PAID" and rec["amount_due"] is not None
+                and invoice_report.Decimal(rec["paid_amount"]) != invoice_report.Decimal(rec["amount_due"])):
+            raise invoice_report.Unreadable("payment_component_total_conflict", "amount_due")
     seen_items = set()
     for ln in lines:
         try:

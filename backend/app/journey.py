@@ -1215,15 +1215,19 @@ def _restable(mapping, record, uid):
 
 
 def _seed_peak_invoices(state, customer, peak, bd):
-    note_th = "จากรายงานใบแจ้งหนี้ PEAK ณ %s" % (peak.get("report_as_of") or "—")
-    note_en = "From the PEAK invoice report as of %s" % (peak.get("report_as_of") or "—")
+    invoice_as_of = peak.get('invoice_report_as_of') or peak.get('report_as_of')
+    note_th = "จากรายงานใบแจ้งหนี้ PEAK ณ %s" % (invoice_as_of or "—")
+    note_en = "From the PEAK invoice report as of %s" % (invoice_as_of or "—")
     for row in peak["invoices"]:
         # feedback round 2 / Q6 (TASK-204): a receipt whose invoice is not in the
         # applied report is money without an invoice row. The case shows the receipt,
         # never a phantom invoice with no cycle.
         if row.get("receipt_only"):
-            pay = row.get("payment")
-            if pay and pay.get("amount") and pay.get("on"):
+            if row.get('receipt_needs_review'):
+                continue
+            for pay in (row.get('payments') if 'payments' in row else [row.get('payment')]):
+                if not (pay and pay.get("amount") and pay.get("on")):
+                    continue
                 contract, _resolved = _peak_contract_for(customer, row)
                 entity = contract.entity or ("SPV" if contract.product == "LEASE" else "EPC")
                 rcp = make_receipt(state, contract.uid, entity, pay["amount"], pay["on"],
@@ -1231,6 +1235,7 @@ def _seed_peak_invoices(state, customer, peak, bd):
                 rcp["source"] = RECEIPT_SOURCE
                 rcp["ref"] = pay.get("receipt_no")
                 rcp["channel"] = pay.get("channel")
+                rcp['payment_component_index'] = pay.get('component_index')
                 _restable(state.receipts, rcp,
                           _stable_uid(state.receipts, "rcp-pk-", pay.get("receipt_no") or row["doc_no"]))
             continue
@@ -1248,7 +1253,7 @@ def _seed_peak_invoices(state, customer, peak, bd):
                            amount, due_on, state_code, scenario="PEAK",
                            issued_on=_date_or(row.get("issued_on"), due_on))
         inv["source"] = "PEAK_REPORT"
-        inv["report_as_of"] = peak.get("report_as_of")
+        inv["report_as_of"] = invoice_as_of
         inv["peak_number"] = row["doc_no"]
         inv["peak_state"] = "APPROVED_IN_PEAK"
         inv["peak_state_note_th"] = note_th
@@ -1277,6 +1282,7 @@ def _seed_peak_invoices(state, customer, peak, bd):
             rcp["source"] = pay.get("source") or row.get("payment_source") or "PEAK_REPORT"
             rcp["ref"] = pay.get("receipt_no")
             rcp["channel"] = pay.get("channel")
+            rcp['payment_component_index'] = pay.get('component_index')
             if settings.peak_report_allocates:      # design F3
                 rcp["is_allocated"], rcp["exception_raised"], rcp["pending_decision"] = True, False, None
             _restable(state.receipts, rcp,

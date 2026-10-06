@@ -39,11 +39,11 @@ def test_receipt_split_channels_are_components_not_document_conflicts():
     assert receipt["paid_amount"] == "8399.00" and len(receipt["payments"]) == 2
 
 
-def test_repeated_receipt_item_rows_keep_one_cash_amount_and_all_source_rows():
-    parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line()]))
+def test_repeated_different_receipt_items_keep_one_cash_amount_and_all_source_rows():
+    parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line(**{"รายการที่": "2"})]))
     [receipt] = parsed["receipts"]
     assert receipt["paid_amount"] == "8399.00"
-    assert len(receipt["lines"]) == 1 and len(receipt["source_rows"]) == 2
+    assert len(receipt["lines"]) == 2 and len(receipt["source_rows"]) == 2
 
 
 def test_unknown_status_on_one_row_quarantines_other_rows_of_same_document():
@@ -65,8 +65,79 @@ def test_paid_receipt_word_without_cached_cash_and_date_is_quarantined():
 
 
 def test_component_money_equivalent_formatting_is_not_a_false_conflict():
-    parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line(**{"จำนวนเงิน": "8399.00"})]))
+    parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line(**{"รายการที่": "2", "จำนวนเงิน": "8399.00"})]))
     assert len(parsed["receipts"]) == 1
+
+
+def test_identical_same_item_cash_components_preserve_multiplicity_and_document_total():
+    part = receipt_line(**{"จำนวนเงิน": "40", "ต้องชำระ": "80", "ทั้งหมด": "80"})
+    parsed = peak_receipt.parse(receipt_report([part, part]))
+    [receipt] = parsed['receipts']
+    assert receipt['paid_amount'] == '80.00'
+    assert [part['amount'] for part in receipt['payments']] == ['40.00', '40.00']
+    assert [part['component_index'] for part in receipt['payments']] == [0, 1]
+
+
+def test_duplicate_cash_cannot_be_guessed_away_when_document_total_conflicts():
+    parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line()]))
+    assert parsed['receipts'] == []
+    assert {row['code'] for row in parsed['meta']['rejected']} == {'payment_component_total_conflict'}
+
+
+def test_invoice_identical_same_item_payment_occurrences_are_preserved():
+    part = invoice_line(**{"จำนวนเงิน": "40", "ต้องชำระ": "80", "มูลค่ารอรับชำระ": "0"})
+    parsed = peak_report.parse(invoice_report([part, part]))
+    [invoice] = parsed['invoices']
+    assert [part['amount'] for part in invoice['payments']] == ['40.00', '40.00']
+
+
+def test_signed_bank_adjustments_are_preserved_and_net_to_receipt_document():
+    common = {'ต้องชำระ': '99', 'ทั้งหมด': '99'}
+    parsed = peak_receipt.parse(receipt_report([
+        receipt_line(**common, **{'จำนวนเงิน': '100'}),
+        receipt_line(**common, **{'จำนวนเงิน': '-1'}),
+    ]))
+    [receipt] = parsed['receipts']
+    assert receipt['paid_amount'] == '99.00'
+    assert [part['amount'] for part in receipt['payments']] == ['100.00', '-1.00']
+
+
+def test_signed_components_net_only_on_their_own_date_across_snapshot():
+    from app.payment_claims import reconcile_receipts
+    invoice = {'doc_no': 'IV-1', 'customer_no': 'C1', 'amount': '100', 'outstanding': '1',
+               'due_on': '2026-09-01', 'snapshot_as_of': '2026-09-14'}
+    receipt = {'doc_no': 'RE-1', 'invoice_ref': 'IV-1', 'customer_no': 'C1', 'status': 'PAID',
+               'paid_on': '2026-09-20', 'paid_amount': '100', 'exported_at': '2026-09-30',
+               'payments': [{'on': '2026-09-10', 'amount': '100'}, {'on': '2026-09-10', 'amount': '-1'},
+                            {'on': '2026-09-20', 'amount': '1'}]}
+    result = reconcile_receipts([invoice], [receipt, receipt])
+    assert result['invoices']['IV-1']['confirmed_outstanding'] == '0.00'
+    assert result['allocations'][0]['amount'] == '100.00'
+    assert [(row['paid_on'], row['amount'], row['component_indices']) for row in result['component_allocations']] == [
+        ('2026-09-10', '99.00', [0, 1]), ('2026-09-20', '1.00', [2])]
+    assert result['exceptions'] == [] and result['credit_by_customer'] == {}
+
+
+def test_negative_net_on_a_separate_date_requires_review_without_cash_allocation():
+    from app.payment_claims import reconcile_receipts
+    receipt = {'doc_no': 'RE-1', 'invoice_ref': 'IV-1', 'customer_no': 'C1', 'status': 'PAID',
+               'paid_on': '2026-09-20', 'paid_amount': '99',
+               'payments': [{'on': '2026-09-10', 'amount': '100'}, {'on': '2026-09-20', 'amount': '-1'}]}
+    result = reconcile_receipts([], [receipt])
+    assert result['allocations'] == []
+    assert result['exceptions'][0]['reason'] == 'PAYMENT_COMPONENT_NET_NEGATIVE'
+
+
+def test_cancellation_reverses_net_signed_historical_cash_once():
+    from app.payment_claims import reconcile_receipts
+    invoice = {'doc_no': 'IV-1', 'customer_no': 'C1', 'amount': '100', 'outstanding': '1',
+               'due_on': '2026-09-01', 'snapshot_as_of': '2026-09-14'}
+    receipt = {'doc_no': 'RE-1', 'invoice_ref': 'IV-1', 'customer_no': 'C1', 'status': 'CANCELLED',
+               'paid_on': '2026-09-10', 'paid_amount': '99', 'exported_at': '2026-09-30',
+               'payments': [{'on': '2026-09-10', 'amount': '100'}, {'on': '2026-09-10', 'amount': '-1'}]}
+    result = reconcile_receipts([invoice], [receipt])
+    assert result['invoices']['IV-1']['confirmed_outstanding'] == '100.00'
+    assert result['allocations'] == [] and result['component_allocations'] == []
 
 
 def test_different_customer_identity_inside_receipt_cannot_be_auto_matched():

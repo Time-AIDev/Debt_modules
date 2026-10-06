@@ -227,7 +227,14 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
             if not historical:
                 continue
             receipt["payments"] = historical
-            receipt["paid_amount"] = _fmt(sum((_money(part["amount"]) for part in historical), ZERO))
+            try:
+                amounts = [Decimal(str(part['amount'])).quantize(CENT) for part in historical]
+                if any(not amount.is_finite() for amount in amounts):
+                    raise ValueError
+                receipt["paid_amount"] = _fmt(sum(amounts, ZERO))
+            except (InvalidOperation, ValueError, TypeError, KeyError):
+                exceptions.append({'receipt_doc_no': receipt['doc_no'], 'reason': 'CANCELLATION_EVIDENCE_MISSING'})
+                continue
             receipt["paid_on"] = max(part["on"] for part in historical)
         try:
             _money(receipt.get("paid_amount"), pointer="/paid_amount")
@@ -277,17 +284,40 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
             continue
         try:
             if (not isinstance(components, list) or not components or
-                    sum((_money(part.get("amount")) for part in components), ZERO) !=
+                    any(not Decimal(str(part.get('amount'))).is_finite() for part in components) or
+                    sum((Decimal(str(part.get('amount'))).quantize(CENT) for part in components), ZERO) !=
                     _money(receipt.get("paid_amount"))):
                 raise ValueError()
             for part in components:
                 _iso_date(part.get("on"))
-        except (errors.Problem, ValueError, TypeError):
+        except (errors.Problem, InvalidOperation, ValueError, TypeError):
             exceptions.append({"receipt_doc_no": receipt.get("doc_no"), "reason": "PAYMENT_COMPONENTS_INVALID"})
             continue
-        active.extend(dict(receipt, paid_on=part["on"], paid_amount=part["amount"], payments=None)
-                      for part in components)
+        by_date = {}
+        for index, part in enumerate(components):
+            by_date.setdefault(_iso_date(part['on']), []).append((index, part))
+        effective = []
+        invalid = False
+        for paid_on, parts in by_date.items():
+            if any(Decimal(str(part['amount'])) < ZERO for _index, part in parts):
+                net = sum((Decimal(str(part['amount'])).quantize(CENT) for _index, part in parts), ZERO)
+                if net < ZERO:
+                    invalid = True
+                    break
+                if net > ZERO:
+                    effective.append(dict(receipt, paid_on=paid_on, paid_amount=_fmt(net), payments=None,
+                        component_index=parts[0][0], component_indices=[index for index, _part in parts],
+                        component_channel=parts[0][1].get('channel')))
+            else:
+                effective.extend(dict(receipt, paid_on=paid_on, paid_amount=part['amount'], payments=None,
+                    component_index=index, component_indices=[index], component_channel=part.get('channel'))
+                    for index, part in parts if Decimal(str(part['amount'])) > ZERO)
+        if invalid:
+            exceptions.append({'receipt_doc_no': receipt.get('doc_no'), 'reason': 'PAYMENT_COMPONENT_NET_NEGATIVE'})
+            continue
+        active.extend(effective)
     active.sort(key=lambda row: (str(row.get("paid_on") or ""), str(row.get("doc_no") or "")))
+    component_allocations = []
     for receipt in active:
         status = str(receipt.get("status") or "").upper()
         if status != "PAID":
@@ -358,6 +388,10 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
                 "order": allocation_order,
                 "source_run_id": receipt.get("run_id") or receipt.get("source_run_id"),
             })
+            component_allocations.append(dict(allocations[-1], paid_on=receipt['paid_on'],
+                                             component_index=receipt.get('component_index', 0),
+                                             component_indices=receipt.get('component_indices', [0]),
+                                             channel=receipt.get('component_channel') or receipt.get('paid_channel')))
         if left > ZERO:
             customer_key = str(invoice.get("customer_uid") or invoice_customer)
             credit_by_customer[customer_key] = credit_by_customer.get(customer_key, ZERO) + left
@@ -369,6 +403,10 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
                 "order": allocation_order + 1,
                 "source_run_id": receipt.get("run_id") or receipt.get("source_run_id"),
             })
+            component_allocations.append(dict(allocations[-1], paid_on=receipt['paid_on'],
+                                             component_index=receipt.get('component_index', 0),
+                                             component_indices=receipt.get('component_indices', [0]),
+                                             channel=receipt.get('component_channel') or receipt.get('paid_channel')))
 
     # The current allocation projection has one receipt/invoice key. Multiple
     # channels/dates conserve their combined cash without overwriting that key.
@@ -394,6 +432,7 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
                                         confirmed_outstanding=_fmt(left), state=state, status=state)
     return {
         "allocations": allocations, "invoices": reconciled_invoices,
+        "component_allocations": component_allocations,
         "credit_by_customer": {key: _fmt(value) for key, value in credit_by_customer.items()},
         "exceptions": exceptions, "active_receipts": len(active_docs),
     }

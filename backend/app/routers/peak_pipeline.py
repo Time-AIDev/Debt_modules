@@ -508,6 +508,19 @@ def receipt_run_rows(run_id: int, verdict: str = Query(default=None),
         conn.close()
 
 
+@router.get(PREFIX_RECEIPT + "/landing-runs/{run_id}/rejected-documents")
+def receipt_rejected_documents(run_id: int, limit: int = Query(default=50, ge=1, le=200),
+                               offset: int = Query(default=0, ge=0)):
+    from ..pipelines import rejected_diagnostics
+    _require_db()
+    with db.connect() as conn:
+        run = landing.get_run(conn, run_id)
+    if not run or run.get("source_system") != peak_writer.RECEIPT_SOURCE:
+        raise errors.not_found("PEAK receipt run")
+    meta = run.get("meta") or {}
+    return rejected_diagnostics.documents(meta.get("rejected_documents", meta.get("rejected")), limit, offset)
+
+
 @router.post(PREFIX_RECEIPT + "/landing-runs/{run_id}:apply")
 def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
                       x_volt_officer: str = Header(default=None)):
