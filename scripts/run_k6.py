@@ -186,6 +186,8 @@ def arguments(argv=None):
     parser.add_argument("--dataset-file", required=True, type=Path)
     parser.add_argument("--vus", type=int, default=10)
     parser.add_argument("--duration", default="120s")
+    parser.add_argument("--profile", choices=("historical", "paged"), default="historical",
+                        help="Historical unchanged workload, or historical plus paged Today")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-container")
@@ -222,13 +224,15 @@ def main(argv=None):
         if not binary:
             raise ValueError("Installed k6 executable is unavailable")
         version = subprocess.run([binary, "version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
+        script = SCRIPT if args.profile == "historical" else ROOT / "tests/load/capacity.js"
         roles = actor_roles(args.base_url, users)
         meta = {"timestamp_utc": now(), "run_id": args.run_id, "vus": args.vus,
                 "duration": args.duration, "duration_seconds": args.duration_seconds,
                 "dataset": {key: dataset[key] for key in ("synthetic", "customers", "contracts", "instalments_per_contract")},
                 "actors": 25, "actor_roles": roles, "k6_version": version, "target": args.base_url,
-                "generator_co_located": True, "workload_script": "tests/load/production.js",
-                "workload_sha256": hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
+                "generator_co_located": True, "workload_script": str(script.relative_to(ROOT)), "profile": args.profile,
+                "workload_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+                "historical_workload_sha256": hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
                 "read_write_mix": {"primary_reads": {"workbook": 40, "today": 30, "case": 20, "monthly": 10},
                                    "write_every_iterations": 5, "write": "synthetic case note", "replay_on_success": True},
                 "summary_file": str(paths["summary"]), "resources_file": str(paths["resources"]),
@@ -259,7 +263,7 @@ def main(argv=None):
         code, raw_code = 1, None
         try:
             with paths["log"].open("xb") as log:
-                process = subprocess.Popen([binary, "run", str(SCRIPT)], cwd=output, env=environment,
+                process = subprocess.Popen([binary, "run", str(script)], cwd=output, env=environment,
                                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
                 try:
                     raw_code = process.wait(timeout=args.duration_seconds + 180)

@@ -11,6 +11,63 @@ from decimal import Decimal
 
 from sqlalchemy import text
 
+PARTITIONED_STORES = frozenset({"cases.state", "journey.state"})
+
+
+class ScopedList(list):
+    """A customer-owned sequence with database identities for dirty row writes."""
+    def __init__(self, values=(), identities=()):
+        super().__init__(values)
+        self.identities = list(identities)
+
+
+def _unit():
+    from .production_unit import CURRENT
+    return CURRENT.get() or {}
+
+
+def next_domain_id(prefix, fallback_counter=None):
+    """Complete prefixed UID in a durable unit; None for prototype/test factories.
+
+    Seed factories must keep their deterministic legacy IDs. Only an explicit
+    mutation allocates from the sequence; transaction rollback can leave a gap.
+    """
+    unit = _unit()
+    if not unit.get("capacity") or not unit.get("mutation") or unit.get("seeding"):
+        return None
+    value = unit["conn"].execute(text("select nextval('app.domain_identifier_seq')")).scalar_one()
+    return "%s-%010d" % (prefix, value)
+
+
+def _owners(value):
+    """Resolve ownership from committed domain identifiers, never user claims."""
+    from . import main
+    by_uid = {}
+    mappings = value.values() if isinstance(value, dict) else vars(value).values() if hasattr(value, "__dict__") else ()
+    children = []
+    for collection in mappings:
+        children.extend(collection.values() if isinstance(collection, dict) else collection if isinstance(collection, list) else ())
+    def owner(row, key=None):
+        if not isinstance(row, dict):
+            return key if key in main.BY_CUSTOMER else None
+        uid = row.get("customer_uid")
+        if uid:
+            return str(uid)
+        contract = main.BY_CONTRACT.get(row.get("contract_uid"))
+        if contract:
+            return contract[0].uid
+        for reference in ("case_uid", "recovery_uid", "invoice_uid", "ptp_uid"):
+            if row.get(reference) in by_uid:
+                return by_uid[row[reference]]
+        return key if key in main.BY_CUSTOMER else None
+    for _ in range(3):
+        for row in children:
+            if isinstance(row, dict) and row.get("uid"):
+                found = owner(row)
+                if found:
+                    by_uid[row["uid"]] = found
+    return owner
+
 ALLOWED_TYPES = {
     "app.config.Settings", "app.config.PendingRule", "app.config.DecidedRule",
     "app.criteria.Criteria",
@@ -40,7 +97,7 @@ def encode(value):
         items = [encode(v) for v in value]
         if isinstance(value, (set, frozenset)):
             items.sort(key=lambda v: json.dumps(v, sort_keys=True))
-        return {"t": type(value).__name__, "v": items}
+        return {"t": "list" if isinstance(value, list) else type(value).__name__, "v": items}
     name = type(value).__module__ + "." + type(value).__name__
     if name not in ALLOWED_TYPES:
         raise ValueError("unsupported business record type")
@@ -102,6 +159,8 @@ def records(value):
 
 
 def load(conn, key):
+    if _unit().get("capacity") and key in PARTITIONED_STORES:
+        return _load_partitioned(conn, key)
     found = conn.execute(text("select record_key, payload, schema_version from app.business_record "
                               "where store_key=:k"), {"k": key}).fetchall()
     if not found:
@@ -121,6 +180,8 @@ def load(conn, key):
 
 
 def save(conn, key, value):
+    if _unit().get("capacity") and key in PARTITIONED_STORES:
+        return _save_partitioned(conn, key, value)
     current = records(value)
     previous = {r.record_key: canonical(r.payload) for r in conn.execute(text(
         "select record_key, payload from app.business_record where store_key=:k"), {"k": key})}
@@ -138,4 +199,129 @@ def save(conn, key, value):
         changed = True
         conn.execute(text("delete from app.business_record where store_key=:s and record_key=:r"),
                      {"s": key, "r": removed})
+    return changed
+
+
+def _load_partitioned(conn, key):
+    unit = _unit()
+    owner = unit.get("customer_uid")
+    predicate = " and (customer_uid=:u or customer_uid is null)" if owner else ""
+    found = conn.execute(text("select record_key,payload,schema_version,customer_uid from app.business_record "
+                              "where store_key=:k" + predicate), {"k": key, "u": owner}).fetchall()
+    if not found:
+        return None, False
+    if any(r.schema_version != 1 for r in found):
+        raise ValueError("unsupported business record schema")
+    rows = {r.record_key: r.payload for r in found}
+    sequences = {}
+    def expand(node):
+        if isinstance(node, dict):
+            if set(node) == {"record"}:
+                return expand(rows[node["record"]])
+            if node.get("t") == "mapping_records":
+                attribute = node["v"]["attribute"]
+                prefix = attribute + "/"
+                return {"t": node["v"]["kind"], "v": [
+                    [json.loads(path[len(prefix):]), expand(payload)]
+                    for path, payload in rows.items() if path.startswith(prefix)]}
+            if node.get("t") == "list_records":
+                attribute = node["v"]
+                entries = conn.execute(text(
+                    "select id,payload from app.business_list_record where store_key=:k and attribute=:a" +
+                    (" and (customer_uid=:u or customer_uid is null)" if owner else "") + " order by id"),
+                    {"k": key, "a": attribute, "u": owner}).fetchall()
+                sequences[attribute] = [row.id for row in entries]
+                return {"t": "list", "v": [row.payload for row in entries]}
+            return {k: expand(v) for k, v in node.items()}
+        if isinstance(node, list):
+            return [expand(v) for v in node]
+        return node
+    value = decode(expand(rows["@root"]))
+    for attribute, identities in sequences.items():
+        target = value if isinstance(value, dict) else vars(value)
+        target[attribute] = ScopedList(target[attribute], identities)
+    unit.setdefault("record_baselines", {})[key] = {k: canonical(v) for k, v in rows.items()}
+    unit.setdefault("owner_baselines", {})[key] = {row.record_key: getattr(row, "customer_uid", None) for row in found}
+    return value, True
+
+
+def _save_partitioned(conn, key, value):
+    unit = _unit()
+    scoped = unit.get("customer_uid")
+    owners = _owners(value)
+    current = records(value)
+    attributes = value if isinstance(value, dict) else vars(value) if hasattr(value, "__dict__") else {}
+    list_values = {}
+    for attribute, child in attributes.items():
+        if isinstance(child, dict):
+            current[attribute] = {"t": "mapping_records", "v": {
+                "attribute": attribute, "kind": "ordered" if isinstance(child, OrderedDict) else "dict"}}
+        elif isinstance(child, list):
+            list_values[attribute] = child
+            current[attribute] = {"t": "list_records", "v": attribute}
+    previous = unit.get("record_baselines", {}).get(key)
+    if previous is None:
+        previous_rows = conn.execute(text("select record_key,payload,customer_uid from app.business_record where store_key=:k" +
+            (" and (customer_uid=:u or customer_uid is null)" if scoped else "")), {"k": key, "u": scoped}).all()
+        previous = {row.record_key: canonical(row.payload) for row in previous_rows}
+        unit.setdefault("owner_baselines", {})[key] = {row.record_key: row.customer_uid for row in previous_rows}
+    previous_owners = unit.get("owner_baselines", {}).get(key, {})
+    changed = False
+    upserts = []
+    for path, payload in current.items():
+        # A scoped unit owns child entries only. Global manifests/counters cannot
+        # be replaced with the customer's partial graph.
+        if scoped and (path == "@root" or path in attributes):
+            continue
+        raw = canonical(payload)
+        attr, _, encoded_key = path.partition("/")
+        child = attributes.get(attr)
+        entry_key = decode(json.loads(encoded_key)) if encoded_key else None
+        row_value = child.get(entry_key) if isinstance(child, dict) else None
+        customer_uid = owners(row_value, entry_key) if encoded_key else None
+        if previous.get(path) == raw and previous_owners.get(path) == (customer_uid or scoped):
+            continue
+        if scoped and customer_uid not in (None, scoped):
+            raise ValueError("record is outside the customer transaction")
+        upserts.append({"s": key, "r": path, "p": raw, "u": customer_uid or scoped})
+        changed = True
+    if upserts:
+        statement = text("insert into app.business_record(store_key,record_key,payload,customer_uid) "
+            "values(:s,:r,cast(:p as jsonb),:u) on conflict(store_key,record_key) do update set "
+            "payload=excluded.payload,customer_uid=excluded.customer_uid,"
+            "version=app.business_record.version+1,updated_at=now()")
+        for start in range(0, len(upserts), 500):
+            conn.execute(statement, upserts[start:start + 500])
+    for removed in previous.keys() - current.keys():
+        if scoped and "/" not in removed:
+            continue
+        conn.execute(text("delete from app.business_record where store_key=:s and record_key=:r" +
+                          (" and customer_uid=:u" if scoped else "")), {"s": key, "r": removed, "u": scoped})
+        changed = True
+    for attribute, values in list_values.items():
+        existing = conn.execute(text(
+            "select id,payload from app.business_list_record where store_key=:k and attribute=:a" +
+            (" and (customer_uid=:u or customer_uid is null)" if scoped else "") + " order by id"),
+            {"k": key, "a": attribute, "u": scoped}).fetchall()
+        ids = values.identities if isinstance(values, ScopedList) else [row.id for row in existing]
+        old = {row.id: canonical(row.payload) for row in existing}
+        for index, row_value in enumerate(values):
+            raw = canonical(encode(row_value))
+            row_id = ids[index] if index < len(ids) else None
+            if row_id is not None and old.get(row_id) == raw:
+                continue
+            customer_uid = owners(row_value) or scoped
+            if scoped and customer_uid not in (None, scoped):
+                raise ValueError("sequence is outside the customer transaction")
+            if row_id is None:
+                conn.execute(text("insert into app.business_list_record(store_key,attribute,customer_uid,payload) "
+                                  "values(:k,:a,:u,cast(:p as jsonb))"),
+                             {"k": key, "a": attribute, "u": customer_uid, "p": raw})
+            else:
+                conn.execute(text("update app.business_list_record set payload=cast(:p as jsonb),version=version+1 "
+                                  "where id=:i"), {"p": raw, "i": row_id})
+            changed = True
+        if len(values) < len(ids):
+            conn.execute(text("delete from app.business_list_record where id=any(:ids)"), {"ids": ids[len(values):]})
+            changed = True
     return changed

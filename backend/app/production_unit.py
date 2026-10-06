@@ -26,6 +26,24 @@ CURRENT = ContextVar("production_unit", default=None)
 LOCK_KEY = 0x564F4C54505244
 
 
+def customer_scope(scope):
+    """Only audited customer-owned routes may use the partitioned write model."""
+    path = scope.get("path", "")
+    if os.environ.get("VOLT_CUSTOMER_SCOPES_ENABLED", "true") != "true":
+        return None
+    match = re.fullmatch(r"/v1/cases/by-customer/([^/]+)(?:/(invoices|peak-codes|notes))?", path)
+    if not match:
+        return None
+    method = scope.get("method")
+    if method in ("GET", "HEAD") or (method == "POST" and match[2] == "notes"):
+        return match[1]
+    return None
+
+
+def case_token(customer_uid, version):
+    return 'case:%s:%d' % (customer_uid, version)
+
+
 class _StoreTemplates:
     """Bounded committed graphs, copied into each request; never response/auth data."""
     def __init__(self):
@@ -150,6 +168,19 @@ def store_key(key):
 def restore(key, factory):
     unit = CURRENT.get()
     conn, saved_key = unit["conn"], store_key(key)
+    if unit.get("capacity") and saved_key in business_records.PARTITIONED_STORES:
+        value, found = business_records.load(conn, saved_key)
+        if found:
+            return value
+        previous = unit.get("seeding")
+        unit["seeding"] = True
+        try:
+            return factory()
+        finally:
+            if previous is None:
+                unit.pop("seeding", None)
+            else:
+                unit["seeding"] = previous
     cached_key = None
     size = 0
     if os.environ.get("PROD_STORE_CACHE_ENABLED", "true") == "true" and getattr(conn, "engine", None):
@@ -187,6 +218,11 @@ def flush():
             changed = business_records.save(unit["conn"], store_key(store.key),
                                              store._by_session[session.current()]) or changed
     if changed:
+        if unit.get("capacity") and unit.get("customer_uid"):
+            # The portfolio version is a short commit fence, not a lock held
+            # while decoding/recalculating this customer's entire response.
+            unit["business_changed"] = True
+            return True
         unit["version"] = unit["conn"].execute(text(
             "update app.business_version set version=version+1 where singleton=true returning version")).scalar_one()
     return changed
@@ -223,7 +259,19 @@ class ProductionUnitMiddleware:
         # Their independent request slot is cleaned without touching another slot.
         if scope.get("path", "").startswith("/v1/operation-runs/"):
             return await self._request(scope, receive, send, queued, 0)
-        mode = "read" if scope.get("method") in ("GET", "HEAD") else "write"
+        scoped_customer = customer_scope(scope)
+        projection_read = scope.get("method") in ("GET", "HEAD") and scope.get("path") in (
+            "/v1/workbook", "/v1/today", "/v1/reports/monthly")
+        if projection_read:
+            result = await self._request(scope, receive, send, queued, 0, book_exclusive=False)
+            if result is not _REFRESH_EXCLUSIVE:
+                return result
+            # Cold generation/old-schema publication uses the existing exclusive
+            # retry; release the first snapshot before acquiring the book lease.
+            scoped_customer = None
+        # Customer edits own private request graphs. Their lease protects global
+        # book publication only; it does not exclude other customer readers/writers.
+        mode = "write" if projection_read else "read" if scope.get("method") in ("GET", "HEAD") or scoped_customer else "write"
         while True:
             try:
                 with anyio.fail_after(float(os.environ.get("PROD_LOCK_WAIT_SECONDS", "15"))):
@@ -260,19 +308,36 @@ class ProductionUnitMiddleware:
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
             control_request = scope.get("path", "").startswith("/v1/operation-runs/")
-            if mutation_request and not control_request:
-                await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
-            elif not mutation_request:
+            if not mutation_request:
                 await run_in_threadpool(conn.execute, text("set transaction isolation level repeatable read"))
+            capacity = bool(await run_in_threadpool(lambda: conn.execute(text(
+                "select to_regclass('app.projection_current') is not null and "
+                "coalesce((select version from app.schema_version where singleton),0)>=3")).scalar_one()))
+            scoped_customer = customer_scope(scope) if capacity else None
+            if mutation_request and not control_request:
+                if scoped_customer:
+                    await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock_shared(:k)"), {"k": LOCK_KEY})
+                    await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(hashtextextended(:uid,0))"),
+                                             {"uid": "volt-customer:" + scoped_customer})
+                else:
+                    await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
             version = await run_in_threadpool(lambda: conn.execute(text(
                 "select version from app.business_version where singleton=true")).scalar_one())
             from . import auth
             auth_session = await run_in_threadpool(auth.resolve_session, scope) if auth.current_config().on else None
-            unit = {"conn": conn, "version": version, "subject": (auth_session or {}).get("sub", "anonymous")}
+            unit = {"conn": conn, "version": version, "subject": (auth_session or {}).get("sub", "anonymous"),
+                    "capacity": capacity, "mutation": mutation_request, "book_exclusive": book_exclusive}
+            if scoped_customer:
+                unit["customer_uid"] = scoped_customer
+                if mutation_request:
+                    await run_in_threadpool(conn.execute, text("insert into app.customer_version(customer_uid) "
+                        "values(:u) on conflict do nothing"), {"u": scoped_customer})
+                unit["customer_version"] = await run_in_threadpool(lambda: conn.execute(text(
+                    "select version from app.customer_version where customer_uid=:u"), {"u": scoped_customer}).scalar() or 0)
             unit_token = CURRENT.set(unit)
             session_token = session.CURRENT.set(slot)
             touched_token = session.TOUCHED.set(set())
-            if not mutation_request:
+            if not mutation_request or scoped_customer:
                 # The legacy session middleware is bypassed in shared-state mode.
                 # Preserve its request-scoped money memo and row indexes here;
                 # otherwise a workbook rescans all invoices for every customer.
@@ -285,7 +350,20 @@ class ProductionUnitMiddleware:
                 auth_session.get("role") not in ("OPS", "OWNER") and
                 auth_session.get("sub") not in os.environ.get("PROD_CANDIDATE_TEST_SUBJECTS", "").split(",")):
                 raise self.problem("production_maintenance", 503)
-            if auth_session and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
+            if capacity and scoped_customer and (auth_session or not auth.current_config().on):
+                from . import read_projection
+                await run_in_threadpool(read_projection.current, conn)
+                # A cold full generation seeded complete stores. Restore a fresh
+                # customer slice for the route, never keep that full graph.
+                for store in session.REGISTRY:
+                    if store.key in business_records.PARTITIONED_STORES:
+                        store._by_session.pop(slot, None)
+                        (session.TOUCHED.get() or set()).discard(store)
+                unit.pop("record_baselines", None)
+                unit.pop("owner_baselines", None)
+            projection_read = capacity and os.environ.get("VOLT_INDEXED_READS_ENABLED", "true") == "true" and not mutation_request and scope["path"] in (
+                "/v1/workbook", "/v1/today", "/v1/reports/monthly")
+            if auth_session and not projection_read and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
                 from .production_runtime import prepare_book
                 await run_in_threadpool(prepare_book, exclusive=book_exclusive)
                 from .production_runtime import book_marker as marker
@@ -359,7 +437,11 @@ class ProductionUnitMiddleware:
                 not path.startswith("/v1/auth/") and not scope.get("volt_worker") and
                 os.environ.get("REQUIRE_STATE_VERSION") == "true" and not headers.get(b"if-match")):
                 raise self.problem("state_version_required", 428)
-            if mutation and headers.get(b"if-match") not in (None, str(version).encode(), ('"%s"' % version).encode()):
+            allowed_versions = (None, str(version).encode(), ('"%s"' % version).encode())
+            if scoped_customer:
+                token = case_token(scoped_customer, unit["customer_version"]).encode()
+                allowed_versions += (token, b'"' + token + b'"')
+            if mutation and headers.get(b"if-match") not in allowed_versions:
                 raise self.problem("state_conflict", 409)
             await self.app(scope, receive, capture)
             start = next(m for m in messages if m["type"] == "http.response.start")
@@ -393,11 +475,29 @@ class ProductionUnitMiddleware:
                 if unit.get("rollback_requested"):
                     raise RuntimeError("domain requested rollback")
                 if mutation and not control_request: await run_in_threadpool(flush)
+                if mutation and not control_request and capacity and not path.startswith("/v1/auth/"):
+                    from . import read_projection
+                    await run_in_threadpool(read_projection.finish_write, conn)
+                    if scoped_customer:
+                        unit["customer_version"] = await run_in_threadpool(lambda: conn.execute(text(
+                            "update app.customer_version set version=version+1 where customer_uid=:u returning version"),
+                            {"u": scoped_customer}).scalar_one())
                 if mutation and not control_request and not path.startswith("/v1/auth/") and unit["version"] == version:
-                    unit["version"] = await run_in_threadpool(lambda: conn.execute(text(
-                        "update app.business_version set version=version+1 where singleton=true returning version")).scalar_one())
+                    numeric_match = headers.get(b"if-match", b"").strip(b'"')
+                    conditional = bool(scoped_customer and re.fullmatch(rb"[0-9]+", numeric_match))
+                    sql = "update app.business_version set version=version+1 where singleton=true"
+                    if conditional:
+                        sql += " and version=:expected"
+                    committed_version = await run_in_threadpool(lambda: conn.execute(text(sql + " returning version"),
+                        {"expected": int(numeric_match) if conditional else version}).scalar())
+                    if committed_version is None:
+                        raise self.problem("state_conflict", 409)
+                    unit["version"] = committed_version
                 start["headers"] = [(k, v) for k, v in start.get("headers", []) if k.lower() != b"cache-control"] + [
                     (b"cache-control", b"no-store"), (b"x-volt-state-version", str(unit["version"]).encode())]
+                if scoped_customer:
+                    token = case_token(scoped_customer, unit["customer_version"]).encode()
+                    start["headers"] += [(b"etag", b'"' + token + b'"'), (b"x-volt-case-version", token)]
                 if idem:
                     await run_in_threadpool(conn.execute, text(
                         "insert into app.request_result(subject,key,fingerprint,status,headers,body) "

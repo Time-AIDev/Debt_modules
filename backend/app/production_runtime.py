@@ -117,3 +117,40 @@ def prepare_book(exclusive=True):
     # authoritative snapshot before session healing; production rechecks SQL.
     data_epoch._cache.update(value=epoch, at=time.monotonic())
     import_sync.ensure_current()
+
+
+def warm_projections():
+    """Complete indexed state before readiness/traffic, with no auth impersonation.
+
+    The system owns a durable transaction under the same global writer barrier
+    as imports. Only seed/projection state is initialized; source/financial facts
+    are neither imported nor reconciled here.
+    """
+    if not db.configured() or not shared_state_enabled():
+        return False
+    from . import main, read_projection, request_context, session
+    from .production_unit import CURRENT, LOCK_KEY
+    import uuid
+    with db.connect() as conn, conn.begin():
+        version = conn.execute(text("select version from app.schema_version where singleton")).scalar_one()
+        if version < 3:
+            return False
+        conn.execute(text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
+        unit = {"conn": conn, "capacity": True, "mutation": False, "seeding": True,
+                "subject": "system-projection", "version": conn.execute(text(
+                    "select version from app.business_version where singleton")).scalar_one()}
+        slot = "projection-startup:" + uuid.uuid4().hex
+        tokens = (CURRENT.set(unit), session.CURRENT.set(slot), session.TOUCHED.set(set()),
+                  main._VIEW_MEMO.set({}), request_context.begin_read())
+        try:
+            read_projection.current(conn)
+        finally:
+            for store in session.REGISTRY:
+                store._by_session.pop(slot, None)
+                store._written.pop(slot, None)
+            request_context.end_read(tokens[4])
+            main._VIEW_MEMO.reset(tokens[3])
+            session.TOUCHED.reset(tokens[2])
+            session.CURRENT.reset(tokens[1])
+            CURRENT.reset(tokens[0])
+    return True

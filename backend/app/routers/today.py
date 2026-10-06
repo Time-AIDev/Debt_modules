@@ -273,7 +273,36 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
           dc_status: str = Query(default=None), product: str = Query(default=None),
           entity: str = Query(default=None),
           q: str = Query(default=None), unassigned: str = Query(default=None),
+          limit: int = Query(default=None, ge=1, le=200), cursor: str = Query(default=None),
           x_volt_role: str = Header(default="OFFICER"), x_volt_officer: str = Header(default=None)):
+    from .. import read_projection
+    if read_projection.enabled():
+        rung = _valid_rung(ladder_indicative)
+        tier = _valid_choice("tier", tier, today_domain.TIERS, "ไม่รู้จักลำดับความสำคัญที่ระบุ")
+        payment_status = _valid_choice("payment_status", payment_status, cases_domain.PAYMENT_STATUSES, "ไม่รู้จักสถานะการชำระ")
+        product = _valid_choice("product", product, today_domain.PRODUCTS, "รับเฉพาะ LEASE หรือ CASH")
+        entity = _valid_choice("entity", entity, ("EPC", "SPV"), "รับเฉพาะ EPC หรือ SPV")
+        if unassigned and officer:
+            raise errors.validation_failed([{"pointer": "/unassigned", "code": "filter_conflict",
+                                             "message": "Unassigned cannot be combined with an officer",
+                                             "message_th": "เลือกงานที่ยังไม่มอบหมายพร้อมเจ้าหน้าที่ไม่ได้"}])
+        if cursor and limit is None:
+            raise read_projection._problem("today")
+        # Validate vocabularies without restoring a whole CaseState graph.
+        conn = read_projection._unit()["conn"]
+        pointer = read_projection.current(conn)
+        from sqlalchemy import text
+        known = [row[0] for row in conn.execute(text("select distinct officer from app.customer_projection "
+                                                   "where generation=:g and officer is not null"), {"g": pointer["generation"]})]
+        known += [row["uid"] for row in officers.registry()]
+        if x_volt_officer:
+            known.append(x_volt_officer)
+        officer = _valid_choice("officer", officer, known, "ไม่รู้จักเจ้าหน้าที่ที่ระบุ")
+        dc_status = _valid_choice("dc_status", dc_status, [row["code"] for row in dictionaries.for_current().list("DC_STATUS")],
+                                  "ไม่รู้จักสถานะติดตามที่ระบุ")
+        return _json(read_projection.today({"officer": officer, "ladder_indicative": rung, "tier": tier,
+            "payment_status": payment_status, "dc_status": dc_status, "product": product, "entity": entity,
+            "q": q, "unassigned": bool(unassigned)}, limit, cursor))
     cs = cases_domain.for_current()
     # Feedback Round 1 / B2: every filter is validated BEFORE the broken-PTP sweep or any
     # row is built. A filter that matched everything — or nothing — on a typo would be
@@ -608,11 +637,11 @@ def workbook(product: str = Query(default=None), payment_status: str = Query(def
              tier: str = Query(default=None), q: str = Query(default=None),
              sort: str = Query(default="aggregate_overdue"), dir: str = Query(default="desc"),
              ladder_indicative: str = Query(default=None), position: str = Query(default=None),
-             identities: str = Query(default=None),
+             identities: str = Query(default=None), entity: str = Query(default=None),
              limit: int = Query(default=None, ge=1, le=200), cursor: str = Query(default=None)):
     with perf.phase("workbook_build"):
         result = _workbook(product, payment_status, dc_status, officer, tier, q, sort, dir,
-                           ladder_indicative, position, identities, limit, cursor)
+                           ladder_indicative, position, identities, limit, cursor, entity=entity)
     return _json(result)
 
 
@@ -653,7 +682,24 @@ def _workbook_source():
 
 def _workbook(product=None, payment_status=None, dc_status=None, officer=None, tier=None, q=None,
               sort="aggregate_overdue", dir="desc", ladder_indicative=None, position=None,
-              identities=None, limit=None, cursor=None):
+              identities=None, limit=None, cursor=None, entity=None):
+    from .. import read_projection
+    entity = _valid_choice("entity", entity, ("EPC", "SPV"), "รับเฉพาะ EPC หรือ SPV")
+    if read_projection.enabled():
+        ladder_indicative = _valid_rung(ladder_indicative)
+        position = _valid_position(position)
+        if cursor and limit is None:
+            raise errors.workbook_cursor_invalid("A cursor requires a page limit")
+        return read_projection.workbook({"product": product, "payment_status": payment_status, "dc_status": dc_status,
+            "officer": officer, "tier": tier, "q": (q or "").strip() or None, "ladder_indicative": ladder_indicative,
+            "position": position, "identities": _truthy(identities), "entity": entity}, sort, dir, limit, cursor)
+    return _legacy_workbook(product, payment_status, dc_status, officer, tier, q, sort, dir,
+                            ladder_indicative, position, identities, limit, cursor, entity=entity)
+
+
+def _legacy_workbook(product=None, payment_status=None, dc_status=None, officer=None, tier=None, q=None,
+                     sort="aggregate_overdue", dir="desc", ladder_indicative=None, position=None,
+                     identities=None, limit=None, cursor=None, entity=None, _projection_all=False):
     """Plain function behind /v1/workbook so the CSV export can share the filters.
     Round-1 UAT (judge J-16): the export called the route and received Query objects."""
     ladder_indicative = _valid_rung(ladder_indicative)
@@ -669,6 +715,7 @@ def _workbook(product=None, payment_status=None, dc_status=None, officer=None, t
         "officer": officer, "tier": tier, "q": q or "",
         "sort": sort, "dir": dir, "ladder_indicative": ladder_indicative,
         "position": position, "identities": _truthy(identities),
+        "entity": entity,
     }
     offset = workbook_cursor.decode(cursor, epoch, cursor_query) if cursor else 0
     data = today_domain.build(ladder_indicative=ladder_indicative)
@@ -709,6 +756,8 @@ def _workbook(product=None, payment_status=None, dc_status=None, officer=None, t
         ))
     if product:
         rows = [r for r in rows if r["case"]["sheet"] and (("LEASE" if r["entity"] == "SPV" else "CASH") == product)]
+    if entity:
+        rows = [row for row in rows if row.get("entity") == entity]
     if payment_status:
         rows = [r for r in rows if r["case"]["payment_status"] == payment_status]
     if position:
@@ -735,7 +784,7 @@ def _workbook(product=None, payment_status=None, dc_status=None, officer=None, t
     # once one is typed — and the count is served so the note can say "N of M".
     identities_total = sum(1 for r in rows if r.get("identity_only"))
     identities_shown = 0
-    if identities_total and not paged:
+    if identities_total and not paged and not _projection_all:
         identities_shown = min(identities_total, IDENTITY_PAGE if q else IDENTITY_FIRST)
         kept, seen = [], 0
         for r in rows:
