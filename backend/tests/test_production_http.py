@@ -32,6 +32,22 @@ def test_production_empty_database_never_seeds_demo_customers(production):
     assert response.json()["rows"] == []
 
 
+def test_authentication_and_business_reads_share_one_leased_connection(production, pg_url, monkeypatch):
+    from sqlalchemy import create_engine
+    api, headers = production
+    db.reset()
+    engine = create_engine(pg_url, pool_size=1, max_overflow=0, pool_timeout=0.1,
+                           future=True, hide_parameters=True)
+    monkeypatch.setattr(db, '_engine', engine)
+    try:
+        actor = headers('owner@volt.co.th', 'OWNER', 'owner')
+        for path in ('/api/v1/auth/me', '/api/v1/workbook'):
+            response = api.get(path, headers=actor)
+            assert response.status_code == 200, response.text
+    finally:
+        db.reset()
+
+
 def test_odoo_missing_config_refuses_before_creating_a_job(production):
     from sqlalchemy import text
     api, headers = production

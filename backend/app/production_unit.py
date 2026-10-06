@@ -370,10 +370,12 @@ class ProductionUnitMiddleware:
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
             version = await run_in_threadpool(lambda: conn.execute(text(
                 "select version from app.business_version where singleton=true")).scalar_one())
+            unit = {"conn": conn, "version": version, "subject": "anonymous",
+                    "capacity": capacity, "mutation": mutation_request, "book_exclusive": book_exclusive}
+            unit_token = CURRENT.set(unit)
             from . import auth
             auth_session = await run_in_threadpool(auth.resolve_session, scope) if auth.current_config().on else None
-            unit = {"conn": conn, "version": version, "subject": (auth_session or {}).get("sub", "anonymous"),
-                    "capacity": capacity, "mutation": mutation_request, "book_exclusive": book_exclusive}
+            unit["subject"] = (auth_session or {}).get("sub", "anonymous")
             if scoped_customer:
                 unit["customer_uid"] = scoped_customer
                 if mutation_request:
@@ -381,7 +383,6 @@ class ProductionUnitMiddleware:
                         "values(:u) on conflict do nothing"), {"u": scoped_customer})
                 unit["customer_version"] = await run_in_threadpool(lambda: conn.execute(text(
                     "select version from app.customer_version where customer_uid=:u"), {"u": scoped_customer}).scalar() or 0)
-            unit_token = CURRENT.set(unit)
             session_token = session.CURRENT.set(slot)
             touched_token = session.TOUCHED.set(set())
             if not mutation_request or scoped_customer:
@@ -520,15 +521,15 @@ class ProductionUnitMiddleware:
                                            failed_problem.get("status", 503))
                 await run_in_threadpool(append_audit_tail, conn, unit, refused, fresh=True)
                 if failed_run:
-                    borrowed = CURRENT.set(None)
-                    try:
+                    # Persist operational failure/retry state on this same leased
+                    # socket after rollback; a second checkout can starve the pool.
+                    with conn.begin():
                         problem = failed_run.get("problem") or {}
                         transient = failed_run["state"] == "failed" and (problem.get("retryable") or problem.get("status", 500) >= 500)
                         if transient:
                             await run_in_threadpool(runs.progress, failed_run["uid"], phase="queued", problem=problem, committed=False)
                         else:
                             await run_in_threadpool(runs.fail, failed_run["uid"], problem)
-                    finally: CURRENT.reset(borrowed)
                     if transient: raise self.problem("job_execution_unavailable", 503)
             else:
                 if unit.get("rollback_requested"):
