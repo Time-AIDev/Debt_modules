@@ -16,7 +16,7 @@ def for_contract(contract, field_of=None):
     if not getattr(contract, "requires_installation_confirmation", False) and not getattr(
             contract, "requires_schedule_confirmation", False):
         return {"eligible": True, "state": "LEGACY_ENGINE", "reason": None}
-    confirmation = debt_imports.installation_for(contract.uid)
+    confirmation = debt_imports.installation_for(contract.uid) or debt_imports.pipeline_installation_for(contract)
     if not confirmation or confirmation.get("state") != "CONFIRMED":
         return {"eligible": False, "state": "UNCONFIRMED", "reason": "INSTALLATION_UNCONFIRMED"}
     return {"eligible": True, "state": "CONFIRMED", "reason": None, "confirmation": confirmation}

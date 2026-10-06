@@ -114,3 +114,28 @@ def test_database_preview_reads_canonical_identity_without_a_business_store(dura
     preview = debt_imports.stage(workbook(lease=[lease()]), "synthetic.xlsx", "debt_status", "Manager")
     assert preview["counts"]["matched"] == 1
     assert preview["entries"][0]["customer_uid"] == customer().uid
+
+
+def test_canonical_pipeline_person_proof_qualifies_only_its_supplement_without_store_reads(durable, monkeypatch):
+    from types import SimpleNamespace
+    from app import business_records, collection_eligibility, session
+    preview = stage("contract_supplement")
+    debt_imports.apply(preview["uid"], command(preview), "Manager", "MANAGER")
+    stored = next(iter(debt_imports.supplements().values()))
+    item = {"uid": "pipeline-proof", "customer_uid": stored["customer_uid"], "product": "LEASE",
+            "install_outcome": "INSTALLED", "actual_install_on": "2026-09-01",
+            "history": [{"act": "INSTALL_INSTALLED", "by": "Operator"}]}
+    durable.execute(text("insert into app.business_record(store_key,record_key,payload) "
+        "values('invoice_pipeline.state','items/\"pipeline-proof\"',cast(:payload as jsonb))"),
+        {"payload": json.dumps(business_records.encode(item))})
+    durable.commit()
+    def forbidden_store(_self):
+        raise AssertionError("Proof readers must not instantiate a mutable business Store")
+    monkeypatch.setattr(session.Store, "for_current", forbidden_store)
+    contract = SimpleNamespace(uid=stored["contract_uid"], customer_uid=stored["customer_uid"],
+                               product="LEASE", status="ACTIVE", requires_installation_confirmation=True)
+    proof = debt_imports.pipeline_installation_for(contract)
+    assert proof["source"] == "PIPELINE_PERSON_OUTCOME"
+    assert collection_eligibility.for_contract(contract)["eligible"]
+    other = SimpleNamespace(uid="OTHER", customer_uid=stored["customer_uid"], product="LEASE")
+    assert debt_imports.pipeline_installation_for(other) is None

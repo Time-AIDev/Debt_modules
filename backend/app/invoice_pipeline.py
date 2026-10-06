@@ -84,6 +84,8 @@ def for_current() -> PipelineState:
 
 def reset():
     _store.reset()
+    from . import debt_imports
+    debt_imports.reset_pipeline_outcomes()
 
 
 AWAITS_INSTALL = "Order - EPC Installation"   # tab x's Order Status for an order not yet installed
@@ -697,6 +699,8 @@ def install_outcome(state, item, outcome, on=None, new_install_on=None, by=None)
             item["installed_uninvoiced_note_en"] = (
                 "Recorded as installed on %s — invoice not yet released" % _thai_date(item["actual_install_on"]))
     item["history"].append({"act": "INSTALL_" + outcome, "on": on, "new_install_on": new_install_on if outcome == "POSTPONED" else None, "by": by})
+    from . import debt_imports
+    debt_imports.publish_pipeline_outcome(item)
     return item
 
 

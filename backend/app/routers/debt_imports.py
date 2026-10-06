@@ -36,5 +36,5 @@ def installation_status(contract_uid: str):
     found = journey.contract_by_uid(contract_uid)
     if not found:
         raise domain.problem("not_found", "ไม่พบสัญญา", 404)
-    return {"confirmation": domain.installation_for(contract_uid),
+    return {"confirmation": domain.installation_for(contract_uid) or domain.pipeline_installation_for(found[1]),
             "eligibility": collection_eligibility.for_contract(found[1], cases.contract_field_of)}

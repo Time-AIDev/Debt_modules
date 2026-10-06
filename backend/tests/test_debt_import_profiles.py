@@ -214,3 +214,31 @@ def test_expensive_profile_parse_precedes_any_publication_transaction(monkeypatc
     monkeypatch.setattr(debt_imports, "transaction", guarded)
     monkeypatch.setattr(debt_imports, "_profile_rows", outside_transaction)
     assert staged(lease=[lease()])["state"] == "STAGED"
+
+
+def test_existing_person_installed_outcome_is_additional_proof_with_exact_scope():
+    item = {"uid": "pipeline-test", "customer_uid": "source-customer", "install_outcome": "INSTALLED",
+            "actual_install_on": "2026-09-01", "planned_install_on": "2026-08-01",
+            "history": [{"act": "INSTALL_INSTALLED", "by": "Operator"}]}
+    proof = debt_imports.pipeline_installation_evidence([item], "source-customer", "K-source",
+                                                       sole_contract_uid="K-source")
+    assert proof["source"] == "PIPELINE_PERSON_OUTCOME"
+    assert proof["completed_on"] == "2026-09-01"
+    assert debt_imports.pipeline_installation_evidence([item], "other-customer", "K-source",
+                                                       sole_contract_uid="K-source") is None
+    assert debt_imports.pipeline_installation_evidence([item], "source-customer", "K-other") is None
+    assert debt_imports.pipeline_installation_evidence([dict(item, product="CASH")], "source-customer", "K-source",
+        sole_contract_uid="K-source", product="LEASE") is None
+
+
+@pytest.mark.parametrize("change", [
+    {"install_outcome": "POSTPONED"}, {"install_outcome": "CANCELLED"},
+    {"actual_install_on": None}, {"actual_install_on": "2099-01-01"},
+    {"history": []}, {"history": [{"act": "INSTALL_INSTALLED", "by": "SYSTEM"}]},
+])
+def test_planned_unknown_future_or_seeded_pipeline_dates_are_not_installation_proof(change):
+    item = {"uid": "pipeline-test", "customer_uid": "source-customer", "install_outcome": "INSTALLED",
+            "actual_install_on": "2026-09-01", "confirmed_install_on": "2026-09-01",
+            "history": [{"act": "INSTALL_INSTALLED", "by": "Operator"}], **change}
+    assert debt_imports.pipeline_installation_evidence([item], "source-customer", "K-source",
+                                                       sole_contract_uid="K-source") is None

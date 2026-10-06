@@ -237,7 +237,7 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     fixture.financial_evidence_only = evidence_only
     if evidence_only:
         from . import debt_imports
-        installation = debt_imports.installation_for(uid)
+        installation = debt_imports.installation_for(uid) or debt_imports.pipeline_installation_for(fixture)
         fixture.acceptance_date = _date(installation["completed_on"]) if installation else None
     fixture.schedule_confirmation = confirmation
     fixture.calendar_months = row.get("calendar_months") or []
@@ -312,7 +312,7 @@ def _cash_contract(uid, customer_uid, row, invoices, as_of):
         fixture.financial_evidence_only = True
         fixture.status = "ACTIVE"
         from . import debt_imports
-        installation = debt_imports.installation_for(uid)
+        installation = debt_imports.installation_for(uid) or debt_imports.pipeline_installation_for(fixture)
         fixture.acceptance_date = _date(installation["completed_on"]) if installation else None
         fixture.requires_installation_confirmation = True
         fixture.requires_schedule_confirmation = True
@@ -333,6 +333,12 @@ def _cash_contract(uid, customer_uid, row, invoices, as_of):
 
 
 def build(as_of: date = None):
+    from . import debt_imports
+    with debt_imports.proof_read_scope():
+        return _build(as_of)
+
+
+def _build(as_of: date = None):
     """Returns (customers, migration_report). Deterministic: uids derive from the
     VOLT ID, so a tester's session and a test see the same book.
 

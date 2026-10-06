@@ -10,6 +10,7 @@ import re
 import threading
 import uuid
 from contextlib import contextmanager, nullcontext
+from contextvars import ContextVar
 from datetime import date
 from decimal import Decimal
 from types import SimpleNamespace
@@ -22,8 +23,26 @@ from .config import settings
 PROFILES = ("debt_status", "contract_supplement")
 TABS = ("Done - Collection", "Done - Cash", "Repossessed 1")
 LOCK = 0x44454254494D50
-_MEMORY = {"previews": {}, "supplements": {}, "observations": [], "installations": {}}
+_MEMORY = {"previews": {}, "supplements": {}, "observations": [], "installations": {}, "pipeline_outcomes": {}}
 _LOCK = threading.RLock()
+_PROOF_READS = ContextVar("debt_proof_reads", default=None)
+
+
+def _reads():
+    request = request_context.reads()
+    return request if request is not None else _PROOF_READS.get()
+
+
+@contextmanager
+def proof_read_scope():
+    if _reads() is not None:
+        yield
+        return
+    token = _PROOF_READS.set({})
+    try:
+        yield
+    finally:
+        _PROOF_READS.reset(token)
 
 # Integration owner includes this additive SQL in the canonical migration.
 SCHEMA = """
@@ -367,6 +386,9 @@ def stage(raw, filename, profile, actor, customers=None):
 
 
 def supplements(conn=None):
+    cache = _reads()
+    if cache is not None and "debt.supplements" in cache:
+        return cache["debt.supplements"]
     if conn is None and db.configured():
         with transaction() as active:
             return supplements(active)
@@ -374,8 +396,11 @@ def supplements(conn=None):
         return copy.deepcopy(_MEMORY["supplements"])
     if not conn.execute(text("select to_regclass('records.contract_supplement')")).scalar():
         return {}
-    return {row["contract_uid"]: row["payload"] for row in conn.execute(text(
+    result = {row["contract_uid"]: row["payload"] for row in conn.execute(text(
         "select contract_uid,payload from records.contract_supplement")).mappings()}
+    if cache is not None:
+        cache["debt.supplements"] = result
+    return result
 
 
 def observation_map(conn, customer_uids):
@@ -404,9 +429,12 @@ def observations(customer_uid, conn=None):
 
 
 def _publish(conn, uids, reason):
-    cache = request_context.reads()
+    cache = _reads()
     if cache is not None:
-        cache.pop("debt.installations", None)
+        for key in list(cache):
+            if key in ("debt.installations", "debt.supplements", "debt.pipeline_items") or (
+                    isinstance(key, tuple) and key and key[0] == "debt.pipeline_installation"):
+                cache.pop(key, None)
     if conn is None:
         return
     conn.execute(text("insert into app.data_epoch(kind) values(:kind)"), {"kind": reason})
@@ -520,7 +548,7 @@ def _confirm_terminations(payload, body, actor, role, selected):
 
 
 def installation_for(contract_uid, conn=None):
-    cache = request_context.reads()
+    cache = _reads()
     if cache is not None and "debt.installations" in cache:
         return cache["debt.installations"].get(contract_uid)
     if conn is None and db.configured():
@@ -536,6 +564,84 @@ def installation_for(contract_uid, conn=None):
     if cache is not None:
         cache["debt.installations"] = records
     return records.get(contract_uid)
+
+
+def pipeline_installation_evidence(items, customer_uid, contract_uid, *, sole_contract_uid=None, product=None):
+    """Pure validation of real operator outcomes, never scheduled/source dates."""
+    valid = []
+    for item in items:
+        if item.get("customer_uid") != customer_uid or item.get("install_outcome") != "INSTALLED":
+            continue
+        if product and item.get("product") and item["product"] != product:
+            continue
+        completed = _date(item.get("actual_install_on"))
+        outcomes = [event for event in item.get("history") or []
+                    if str(event.get("act") or "").startswith("INSTALL_")]
+        event = outcomes[-1] if outcomes else {}
+        actor = str(event.get("by") or "").strip()
+        scope = item.get("contract_uid") == contract_uid or sole_contract_uid == contract_uid
+        if (not scope or not completed or completed > str(settings.business_date) or
+                event.get("act") != "INSTALL_INSTALLED" or not actor or
+                actor.upper() in ("SYSTEM", "SEED", "SHEET", "ODOO", "IMPORT")):
+            continue
+        valid.append({"state": "CONFIRMED", "contract_uid": contract_uid, "customer_uid": customer_uid,
+                      "completed_on": completed, "confirmed_by": actor, "source": "PIPELINE_PERSON_OUTCOME",
+                      "pipeline_uid": item.get("uid"), "document_ref": "pipeline:" + str(item.get("uid") or "")})
+    if not valid or len({proof["completed_on"] for proof in valid}) != 1:
+        return None
+    return valid[-1]
+
+
+def pipeline_installation_for(contract, conn=None):
+    """Read canonical scalar item rows, avoiding pipeline/case Store factories."""
+    if not db.configured():
+        return pipeline_installation_evidence(list(_MEMORY["pipeline_outcomes"].values()),
+                                             contract.customer_uid, contract.uid, product=getattr(contract, "product", None))
+    cache = _reads()
+    key = ("debt.pipeline_installation", contract.uid)
+    if cache is not None and key in cache:
+        return cache[key]
+    if conn is None:
+        with transaction() as active:
+            return pipeline_installation_for(contract, active)
+    if not conn.execute(text("select to_regclass('app.business_record')")).scalar():
+        return None
+    from . import business_records
+    if cache is not None and "debt.pipeline_items" in cache:
+        by_customer = cache["debt.pipeline_items"]
+    else:
+        payloads = conn.execute(text("select payload from app.business_record "
+            "where store_key='invoice_pipeline.state' and record_key like 'items/%'")).scalars()
+        by_customer = {}
+        for payload in payloads:
+            item = business_records.decode(payload)
+            by_customer.setdefault(item.get("customer_uid"), []).append(item)
+        if cache is not None:
+            cache["debt.pipeline_items"] = by_customer
+    items = by_customer.get(contract.customer_uid) or []
+    source = [value for value in supplements(conn).values() if value["customer_uid"] == contract.customer_uid]
+    sole = source[0]["contract_uid"] if len(source) == 1 else None
+    proof = pipeline_installation_evidence(items, contract.customer_uid, contract.uid, sole_contract_uid=sole,
+                                          product=getattr(contract, "product", None))
+    if cache is not None:
+        cache[key] = proof
+    return proof
+
+
+def publish_pipeline_outcome(item):
+    """The existing person action publishes collection eligibility changes too."""
+    if not db.configured():
+        from . import journey
+        customer = journey.customer_by_uid(item["customer_uid"])
+        target = customer.contracts[0].uid if customer and len(customer.contracts) == 1 else None
+        _MEMORY["pipeline_outcomes"][item["uid"]] = {key: copy.deepcopy(item.get(key)) for key in (
+            "uid", "customer_uid", "product", "install_outcome", "actual_install_on", "history")} | {"contract_uid": target}
+        _publish(None, {item["customer_uid"]}, "INSTALLATION_OUTCOME")
+        return
+    with transaction() as conn:
+        _publish(conn, {item["customer_uid"]}, "INSTALLATION_OUTCOME")
+    from . import data_epoch
+    data_epoch.reset_cache()
 
 
 def confirm_installation(contract, body, actor, role):
@@ -576,3 +682,8 @@ def reset():
     with _LOCK:
         for value in _MEMORY.values():
             value.clear()
+
+
+def reset_pipeline_outcomes():
+    with _LOCK:
+        _MEMORY["pipeline_outcomes"].clear()
