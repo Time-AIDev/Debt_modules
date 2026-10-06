@@ -212,6 +212,14 @@ def k6_runs(directory, runtime, revision):
             safe_preview.update(profile=preview.get("profile") if preview.get("profile") in ("debt_status", "contract_supplement") else None,
                 status=number(preview.get("status"), integer=True), elapsed_ms=number(preview.get("elapsed_ms")),
                 source_bytes=number(preview.get("source_bytes"), integer=True), source_sha256=identifier(preview.get("source_sha256"), SHA))
+        health_guard = meta.get("production_health_guard")
+        safe_guard = None
+        if isinstance(health_guard, dict):
+            reasons = {"production_health", "host_low_memory", "target_oom", "target_restart", "target_not_running", "guard_unavailable"}
+            safe_guard = {key: health_guard.get(key) is True for key in ("enabled", "baseline_passed", "aborted", "isolated_api_stopped")}
+            safe_guard.update(reason=health_guard.get("reason") if health_guard.get("reason") in reasons else None,
+                samples=len(health_guard.get("samples") or []),
+                minimum_available_memory_bytes=number(health_guard.get("minimum_available_memory_bytes"), integer=True))
         dataset = meta.get("dataset") or {}
         roles = {role: number(count, integer=True) for role, count in (meta.get("actor_roles") or {}).items() if role in ROLES}
         runs.append({"profile": match[2], "scenario": match[4], "vus": int(match[3]), "duration_seconds": number(meta.get("duration_seconds"), integer=True),
@@ -222,8 +230,10 @@ def k6_runs(directory, runtime, revision):
             "orchestration_exit_code": number(meta.get("exit_code"), integer=True),
             "capacity_acceptance_certified": False, "metrics": metrics, "supplemental_metrics": supplemental,
             "supplemental_thresholds_passed": supplemental_passed, "concurrent_preview": safe_preview,
+            "production_health_guard": safe_guard,
             "diagnostic_run_passed": passed and supplemental_passed is not False and meta.get("process_return_code") == 0
-                and meta.get("exit_code", 0) == 0 and (safe_preview is None or all(safe_preview[key] for key in ("started", "passed", "never_applied", "isolated_staging_only"))),
+                and meta.get("exit_code", 0) == 0 and (safe_preview is None or all(safe_preview[key] for key in ("started", "passed", "never_applied", "isolated_staging_only")))
+                and (safe_guard is None or safe_guard["baseline_passed"] and not safe_guard["aborted"]),
             "dataset": {key: number(dataset.get(key), integer=True) for key in ("customers", "contracts", "instalments_per_contract")},
             "actor_roles": roles, "workload_sha256": identifier(meta.get("workload_sha256"), SHA),
             "historical_workload_sha256": identifier(meta.get("historical_workload_sha256"), SHA),
@@ -314,6 +324,10 @@ def render_docx(data, output):
             preview = run["concurrent_preview"]
             doc.add_paragraph("Concurrent preview: %s · status %s · %s ms · %s · never applied=%s" %
                 (preview["profile"], preview["status"], preview["elapsed_ms"], "PASS" if preview["passed"] else "FAIL / incomplete", preview["never_applied"]))
+        if run["production_health_guard"]:
+            guard = run["production_health_guard"]
+            doc.add_paragraph("Production/host guard: baseline=%s · aborted=%s · reason=%s · observations=%s" %
+                (guard["baseline_passed"], guard["aborted"], guard["reason"], guard["samples"]))
     doc.add_heading("ข้อมูลเงินจริงและการตรวจไฟล์", 1)
     doc.add_paragraph("ตัวเลขต่อไปนี้เป็นผล parser/component validation ของไฟล์ที่ได้รับ ไม่ใช่ยอดเงินเข้าที่จัดสรรแล้ว และไม่ได้ยืนยัน mapping ทุก customer case")
     table(doc, ("Source", "Documents", "Components", "Multi-payment docs", "Rejected rows", "Quarantined docs", "Parsed component total", "As of"),

@@ -210,6 +210,8 @@ def arguments(argv=None):
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-container")
     parser.add_argument("--db-container")
+    parser.add_argument("--production-health-guard", action="store_true",
+                        help="Require production health and host headroom; abort only owned synthetic load resources")
     parser.add_argument("--k6", default=shutil.which("k6") or "/srv/volt-hardening-tools/k6-v2.3.0-linux-amd64/k6")
     args = parser.parse_args(argv)
     try:
@@ -277,6 +279,24 @@ def main(argv=None):
             meta["concurrent_preview"] = {"profile": args.preview_profile, "source_bytes": preview_path.stat().st_size,
                 "source_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(), "never_applied": True,
                 "isolated_staging_only": True, "contains_user_supplied_data": True, "started": False}
+        guard = None
+        if args.production_health_guard:
+            if not args.api_container or not args.db_container:
+                raise ValueError("Health guard requires both owned diagnostic containers")
+            from capacity_health_guard import Guard
+            guard = Guard(args.api_container, args.db_container)
+            try:
+                refused = guard.poll(baseline=True)
+            except Exception:
+                refused = "guard_unavailable"
+                guard.evidence.update(aborted=True, reason=refused, baseline_passed=False)
+            meta["production_health_guard"] = guard.evidence
+            if refused:
+                meta.update(exit_code=1, process_return_code=None, summary_present=False, completed_at_utc=now())
+                meta["notes"].append("Load not started: production health or host/resource baseline guard refused")
+                atomic_json(paths["meta"], meta)
+                print("k6 not started; baseline guard refused; metadata=" + str(paths["meta"]))
+                return 1
         atomic_json(paths["meta"], meta)
         samples, stop = [], threading.Event()
         names = list(dict.fromkeys(name for name in (args.api_container, args.db_container) if name))
@@ -325,11 +345,34 @@ def main(argv=None):
         environment.update(BASE_URL=args.base_url, TOKENS_FILE=str(tokens_path), DATASET_FILE=str(dataset_path),
                            VUS=str(args.vus), DURATION=args.duration, RUN_ID=args.run_id,
                            SUMMARY_FILE=str(paths["summary"]), THINK_SECONDS="1")
-        code, raw_code = 1, None
+        code, raw_code, guard_thread = 1, None, None
         try:
             with paths["log"].open("xb") as log:
                 process = subprocess.Popen([binary, "run", str(script)], cwd=output, env=environment,
                                            stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                if guard:
+                    def guard_loop():
+                        delay = guard.interval_seconds
+                        while not stop.wait(delay):
+                            began = time.monotonic()
+                            try:
+                                reason = guard.poll()
+                            except Exception:
+                                reason = "guard_unavailable"
+                                guard.evidence.update(aborted=True, reason=reason)
+                            if reason:
+                                # This subprocess is the generator we just started.
+                                # Stop its owned API too, so an in-flight synthetic
+                                # preview cannot continue consuming host headroom.
+                                process.terminate()
+                                try:
+                                    guard.stop_isolated_api()
+                                except Exception:
+                                    guard.evidence["isolated_api_stopped"] = False
+                                break
+                            delay = max(0, guard.interval_seconds - (time.monotonic() - began))
+                    guard_thread = threading.Thread(target=guard_loop, daemon=True)
+                    guard_thread.start()
                 try:
                     raw_code = process.wait(timeout=args.duration_seconds + 180)
                 except (subprocess.TimeoutExpired, KeyboardInterrupt):
@@ -345,6 +388,11 @@ def main(argv=None):
         finally:
             stop.set()
             sampler.join(timeout=12)
+            if guard_thread:
+                guard_thread.join(timeout=14)
+                if guard.evidence["aborted"]:
+                    code = code or 1
+                    meta["notes"].append("Generator interrupted by production/host guard; isolated API stop was attempted")
             if preview_thread:
                 preview_thread.join(timeout=190)
                 if not meta["concurrent_preview"].get("passed"):

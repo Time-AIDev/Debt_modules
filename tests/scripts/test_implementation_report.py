@@ -179,3 +179,17 @@ def test_paged_original_success_requires_its_native_page_gates(tmp_path):
     run = next(run for run in report.build_aggregate(evidence, REV)["k6"] if run["profile"] == "paged")
     assert run["original_thresholds_passed"] is True
     assert run["supplemental_thresholds_passed"] is False and run["diagnostic_run_passed"] is False
+
+
+def test_host_guard_abort_is_visible_even_with_passing_native_metrics(tmp_path):
+    evidence = fixture(tmp_path)
+    prefix = evidence / "diagnostic/results/k6-aaaaaaa-historical-25vu"
+    write(Path(str(prefix) + "-summary.json"), {"metrics": passing_metrics(report.THRESHOLDS)})
+    write(Path(str(prefix) + "-meta.json"), {"revision": REV, "api_image": "sha256:" + "d" * 64,
+        "generator_co_located": True, "process_return_code": 0, "exit_code": 0,
+        "production_health_guard": {"enabled": True, "baseline_passed": True, "aborted": True,
+            "reason": "production_health", "samples": [{"raw_response": "PRIVATE-TOKEN"}], "notes": "PRIVATE-NOTE"}})
+    run = next(run for run in report.build_aggregate(evidence, REV)["k6"] if run["binding"] == "MATCHING_REPORT_REVISION")
+    assert run["original_thresholds_passed"] is True and run["diagnostic_run_passed"] is False
+    assert run["production_health_guard"]["reason"] == "production_health"
+    assert "PRIVATE-TOKEN" not in json.dumps(run) and "PRIVATE-NOTE" not in json.dumps(run)
