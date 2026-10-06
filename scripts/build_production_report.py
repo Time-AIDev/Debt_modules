@@ -209,6 +209,120 @@ def load_k6(path, issues, metadata=None):
             "read_write": get(meta, "read_write_mix", "read_write", "workload", default=PENDING)}
 
 
+def optional_json(path, issues):
+    return load_json(path, issues) if path.exists() else {}
+
+
+def load_k6_evidence(path, issues, overrides=None):
+    sidecar = path.with_name(path.name.replace("-summary.json", "-meta.json"))
+    resource_file = path.with_name(path.name.replace("-summary.json", "-resources.json"))
+    meta = optional_json(sidecar, issues)
+    if not isinstance(meta, dict):
+        meta = {}
+    if isinstance(overrides, dict):
+        meta = dict(overrides, **meta)
+    run = load_k6(path, issues, meta)
+    run["resources"] = optional_json(resource_file, issues)
+    run["meta_file"] = sidecar.name if sidecar.exists() else PENDING
+    run["resource_file"] = resource_file.name if resource_file.exists() else PENDING
+    # Custom metrics are authoritative; never substitute HTTP aggregate latency
+    # for a business-read metric that is absent from the saved summary.
+    for metric_name in ("business_read_duration", "business_read_latency", "read_duration", "business_read_ms"):
+        if metric_name in run["metrics"]:
+            run["business_p95"] = get(values(run["metrics"][metric_name]), "p(95)", "p95")
+            break
+    else:
+        run["business_p95"] = None
+    run["business_errors"] = get(values(run["metrics"].get("business_errors")), "rate")
+    conflict = values(run["metrics"].get("state_conflicts")) or next((values(value) for key, value in run["metrics"].items() if "conflict" in key.lower()), {})
+    run["conflicts"] = get(conflict, "count", "rate")
+    return run
+
+
+def image_audits(evidence_dir, issues):
+    rows = []
+    for path in sorted(evidence_dir.glob("*image-audit*.json")):
+        raw = load_json(path, issues)
+        vulnerabilities = [v for result in raw.get("Results", []) for v in result.get("Vulnerabilities", [])]
+        counts = Counter(v.get("Severity", "UNKNOWN") for v in vulnerabilities)
+        fixable = [v for v in vulnerabilities if v.get("Severity") in ("HIGH", "CRITICAL") and v.get("FixedVersion")]
+        unfixed = [v for v in vulnerabilities if v.get("Severity") in ("HIGH", "CRITICAL") and not v.get("FixedVersion")]
+        family = path.name.split("-", 1)[0]
+        # Full reports take precedence over a filtered report from the same
+        # image family. The accepted database is the explicitly no-XML build.
+        rank = (100 if family == "db" and "no-xml" in path.name else 0) + (10 if "full" in path.name else 5 if "final" in path.name else 0)
+        if "before" in path.name:
+            rank = -100
+        rows.append({"file": path.name, "family": family, "rank": rank,
+                     "artifact": raw.get("ArtifactName"), "created": raw.get("CreatedAt", ""),
+                     "image_id": get(raw, "Metadata.ImageID", "ArtifactID"),
+                     "critical": counts["CRITICAL"], "high": counts["HIGH"],
+                     "fixable_hc": len(fixable), "unfixed_high": sum(v.get("Severity") == "HIGH" for v in unfixed),
+                     "vendor_status": Counter(v.get("Status", "not_recorded") for v in vulnerabilities),
+                     "unfixed": unfixed, "total": len(vulnerabilities)})
+    current = []
+    for family in sorted(set(row["family"] for row in rows)):
+        current.append(max((row for row in rows if row["family"] == family), key=lambda row: (row["rank"], row["created"])))
+    return rows, current
+
+
+def security_section(doc, evidence_dir, issues):
+    doc.add_heading("4. Container security และ source audit", level=1)
+    history, current = image_audits(evidence_dir, issues)
+    if current:
+        table(doc, ["Image / report", "Critical", "High", "Fixable H/C", "Unfixed High", "Vendor statuses"], [
+            (row["family"] + " / " + row["file"], row["critical"], row["high"], row["fixable_hc"],
+             row["unfixed_high"], clean(dict(row["vendor_status"]))) for row in current
+        ])
+        paragraph(doc, "ตัวเลขเป็นรายการ package/CVE จาก artifact ที่บันทึก ไม่ใช่จำนวน CVE ที่ไม่ซ้ำ การมี fixable H/C เท่ากับศูนย์ไม่ได้หมายถึงไม่มีช่องโหว่; vendor-unfixed/affected/fix_deferred ยังคงเป็นความเสี่ยงและต้องติดตาม ไม่มีการสรุปว่า zero vulnerabilities")
+        table(doc, ["Historical report", "Critical / High", "Fixable H/C", "Saved scan date"], [
+            (row["file"], f"{row['critical']} / {row['high']}", row["fixable_hc"], row["created"])
+            for row in history if row not in current
+        ])
+        for row in current:
+            if row["unfixed"]:
+                table(doc, ["Vendor-unfixed package", "CVE", "Severity / status", "Available fixed version"], [
+                    (v.get("PkgName"), v.get("VulnerabilityID"), f"{v.get('Severity')} / {v.get('Status', 'not_recorded')}",
+                     v.get("FixedVersion") or "ไม่มีใน scan / not supplied") for v in row["unfixed"]
+                ])
+    else:
+        paragraph(doc, "รอ full image audit; ยังไม่ยืนยันจำนวนช่องโหว่ของ containers")
+    gate = optional_json(evidence_dir / "infrastructure-image-security-gate.json", issues)
+    if gate:
+        paragraph(doc, "Infrastructure security gate: " + status(gate.get("passed")) + "; gate result ใช้เกณฑ์ใน artifact และไม่ลบ vendor-unfixed findings ออกจากรายงาน")
+        table(doc, ["Gate report / image", "Passed", "Fixable H/C", "Vendor-unfixed H/C"], [
+            (clean(get(image, "report")) + " / " + clean(get(image, "image_id")), status(image.get("passed")),
+             len(image.get("fixable_high_critical", [])), len(image.get("unfixed_high_critical", [])))
+            for image in gate.get("images", []) if isinstance(image, dict)
+        ])
+    provenance = optional_json(evidence_dir / "db-no-xml-build-provenance.json", issues)
+    smoke = optional_json(evidence_dir / "db-no-xml-image-smoke.json", issues)
+    if provenance or smoke:
+        doc.add_heading("PostgreSQL build compatibility", level=2)
+        table(doc, ["Build / compatibility field", "Actual evidence"], [
+            ("PostgreSQL version / image", clean(get(provenance, "postgresql_version")) + " / " + clean(get(provenance, "image_id"))),
+            ("Source / archive SHA256", clean(get(provenance, "source_url")) + " / " + clean(get(provenance, "source_archive_sha256"))),
+            ("Supported deviations", clean(get(provenance, "supported_deviations"))),
+            ("Critical / fixable H/C / unfixed High", f"{clean(get(provenance, 'critical_findings'))} / {clean(get(provenance, 'fixable_high_critical_findings'))} / {clean(get(provenance, 'unfixed_high_findings'))}"),
+            ("Live SQL XML use evidence", clean(get(provenance, "application_xml_columns_extensions"))),
+            ("Synthetic smoke / existing cluster", status(smoke.get("status")) + " / " + status(smoke.get("existing_cluster_preserved"))),
+            ("SQL XML disabled / LLVM JIT disabled", status(smoke.get("sql_xml_disabled")) + " / " + status(smoke.get("llvm_jit_disabled"))),
+            ("Thai UTF8 / JSONB / decimals", f"{status(smoke.get('thai_utf8'))} / {status(smoke.get('jsonb'))} / {status(smoke.get('money_decimal'))}"),
+            ("Audit append-only / dump restore", status(smoke.get("audit_append_only")) + " / " + status(smoke.get("dump_restore"))),
+            ("Locale / collation", clean(smoke.get("locale")) + " / " + clean(smoke.get("collation_versions"))),
+        ])
+        paragraph(doc, "SQL XML/XSLT และ LLVM JIT เป็น feature deviations ที่ปิดตาม build provenance ไม่ใช่การนำไปใช้เหมือน stock image ทุกฟีเจอร์ ขอบเขตที่ตรวจของแอปไม่ใช้ XML columns/extensions และ synthetic cluster/restore checks รองรับข้อมูลที่แอปใช้ ผล smoke ไม่ใช่การทดสอบข้อมูล production ทั้งหมด")
+        paragraph(doc, get(provenance, "scan_scope_note"))
+    secret = optional_json(evidence_dir / "source-secret-audit-metadata.json", issues)
+    if secret:
+        table(doc, ["Tracked-source secret scan", "Evidence"], [
+            ("Files scanned", secret.get("files_scanned", PENDING)),
+            ("Recorded hits", len(secret["findings"]) if isinstance(secret.get("findings"), list) else PENDING),
+            ("Raw values exported", str(secret.get("raw_values_exported", PENDING))),
+        ])
+        paragraph(doc, "ผล no hits ครอบคลุมเฉพาะไฟล์ที่ scanner อ่านตามชุดหลักฐาน ไม่ยืนยันว่าไม่มี secret ใน git history, environment หรือระบบภายนอก")
+
+
 def hyperlink(paragraph, title, url):
     relationship = paragraph.part.relate_to(url, "http://schemas.openxmlformats.org/officeDocument/2006/relationships/hyperlink", is_external=True)
     link = OxmlElement("w:hyperlink")
@@ -325,6 +439,85 @@ def chart(doc, runs):
         paragraph(doc, "ไม่มี matplotlib ใน environment นี้; ตารางตัวเลขยังอ้างอิง evidence โดยตรง")
 
 
+def business_chart(doc, runs):
+    if not any(number(run.get("business_p95")) is not None for run in runs):
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    figure, axes = plt.subplots(1, 3, figsize=(10, 3.5))
+    fields = (("business_p95", "Business-read p95 (ms)", 1),
+              ("business_errors", "Business error rate (%)", 100),
+              ("conflicts", "Conflict counter / exported rate", 1))
+    for axis, (field, label, factor) in zip(axes, fields):
+        selected = [run for run in runs if number(run.get(field)) is not None]
+        if selected:
+            axis.barh([run["file"].replace("k6-", "").replace("-summary.json", "")[:30] for run in selected],
+                      [float(run[field]) * factor for run in selected], color="#157F7A")
+        else:
+            axis.text(0.5, 0.5, "Metric not exported", ha="center", transform=axis.transAxes)
+        axis.set_xlabel(label)
+        axis.grid(axis="x", alpha=0.2)
+        axis.set_axisbelow(True)
+        axis.spines[["top", "right"]].set_visible(False)
+    # Annotate the actual declared latency target, never relax it to fit results.
+    bounds = set()
+    for run in runs:
+        for row in run["thresholds"]:
+            if "read" in str(row["metric"]).lower():
+                matched = re.search(r"p\(95\)\s*<\s*(\d+(?:\.\d+)?)", str(row["expression"]))
+                if matched:
+                    bounds.add(float(matched[1]))
+    if len(bounds) == 1:
+        bound = next(iter(bounds))
+        axes[0].axvline(bound, color="#B8423A", linestyle="--", label=f"Declared SLO: {bound:g} ms")
+        axes[0].legend(fontsize=7)
+    figure.tight_layout()
+    data = io.BytesIO()
+    figure.savefig(data, format="png", dpi=180, bbox_inches="tight")
+    plt.close(figure)
+    data.seek(0)
+    doc.add_picture(data, width=Inches(6.8))
+    paragraph(doc, "กราฟ business-read ใช้ custom metric จริง; ถ้า p95 เกิน SLO หรือ threshold ไม่ผ่าน จะยังแสดงผลไม่ผ่าน ไม่มีการเพิ่มเพดาน latency เพื่อเปลี่ยนผลตรวจ")
+
+
+def resource_section(doc, run):
+    resource = run.get("resources")
+    samples = get(resource, "samples", default=[])
+    if not isinstance(samples, list) or not samples:
+        paragraph(doc, "Resource samples: " + PENDING)
+        return
+    grouped = {}
+    available, swap = [], []
+    for sample in samples:
+        host = get(sample, "host", default={})
+        for values_list, key in ((available, "mem_available_bytes"), (swap, "swap_used_bytes")):
+            observed = number(host.get(key))
+            if observed is not None:
+                values_list.append(observed)
+        for container in get(sample, "containers", default=[]):
+            grouped.setdefault(container.get("name", "unknown"), []).append(container)
+    table(doc, ["Resource sampling", "Actual observation"], [
+        ("Samples / interval", f"{len(samples)} / {clean(get(resource, 'interval_seconds'))} s"),
+        ("Minimum host available RAM", display(min(available) / 1024 ** 2, " MiB") if available else PENDING),
+        ("Maximum host swap used", display(max(swap) / 1024 ** 2, " MiB") if swap else PENDING),
+        ("Evidence file", run["resource_file"]),
+    ])
+    rows = []
+    for name, entries in grouped.items():
+        cpu = [number(item.get("cpu_percent")) for item in entries]
+        memory = [number(item.get("memory_usage_bytes")) for item in entries]
+        cpu, memory = [value for value in cpu if value is not None], [value for value in memory if value is not None]
+        restart = [number(item.get("restart_count")) for item in entries]
+        restart = [value for value in restart if value is not None]
+        rows.append((name, display(max(cpu), "%") if cpu else PENDING,
+                     display(max(memory) / 1024 ** 2, " MiB") if memory else PENDING,
+                     str(any(item.get("oom_killed") for item in entries)),
+                     display(max(restart) - min(restart), digits=0) if restart else PENDING))
+    table(doc, ["Container", "Peak sampled CPU", "Peak sampled RAM", "OOM observed", "Restart delta"], rows)
+    paragraph(doc, "ค่า resource เป็น samples ตาม interval ไม่ใช่ค่าพีคต่อเนื่องทั้งช่วง และไม่ถือว่าไม่มี OOM/restart นอกช่วงที่ตรวจ")
+
+
 def sanitized_remote(value):
     if not value:
         return PENDING
@@ -369,14 +562,16 @@ def build(evidence_dir, output):
     plan_raw = load_json(evidence_dir / "remediation-plan.json", issues)
     plan = plan_raw if isinstance(plan_raw, list) else get(plan_raw, "findings", "items", default=[])
     plan = plan if isinstance(plan, list) else []
-    test_results = [junit(evidence_dir / name, issues) for name in ("backend-tests.xml", "frontend-security-tests.xml")]
+    backend = next((name for name in ("backend-release-tests.xml", "backend-final-tests.xml", "backend-tests.xml") if (evidence_dir / name).exists()), "backend-tests.xml")
+    frontend = "frontend-final-tests.xml" if (evidence_dir / "frontend-final-tests.xml").exists() else "frontend-security-tests.xml"
+    test_results = [junit(evidence_dir / name, issues) for name in (backend, frontend)]
     additional = get(validation, "checks", "tests", default=[])
     if isinstance(additional, dict):
         additional = [dict(value, name=name) if isinstance(value, dict) else {"name": name, "status": value} for name, value in additional.items()]
     additional = additional if isinstance(additional, list) else []
     run_meta = get(validation, "k6_runs", "load_runs", default={})
     run_meta = run_meta if isinstance(run_meta, dict) else {}
-    runs = [load_k6(path, issues, run_meta.get(path.name) or run_meta.get(path.stem)) for path in sorted(evidence_dir.glob("k6-*-summary.json"))]
+    runs = [load_k6_evidence(path, issues, run_meta.get(path.name) or run_meta.get(path.stem)) for path in sorted(evidence_dir.glob("k6-*-summary.json"))]
     if not runs:
         issues.append("ยังไม่มี k6 summary")
     timestamp = datetime.now(ZoneInfo("Asia/Bangkok")).strftime("%d %B %Y %H:%M ICT")
@@ -389,7 +584,7 @@ def build(evidence_dir, output):
     doc.add_paragraph("รายงานการปรับปรุงและความพร้อมระบบ Collection", "Subtitle")
     paragraph(doc, f"Generated: {timestamp} • เป้าหมาย: collection.volt.co.th / 143.198.207.143")
     paragraph(doc, "รายงานนี้สรุปเฉพาะผลที่มีไฟล์หลักฐานในชุดตรวจ ผลที่ขาดหรือยังทำไม่ได้แสดงเป็น pending และสามารถสร้างเอกสารใหม่หลังงานเสร็จได้")
-    deployment = get(release, "deployment", default={})
+    deployment = get(release, "deployment", default=release)
     git = get(release, "git", default={})
     table(doc, ["Milestone", "Evidence status"], [
         ("Production deployment", status(get(deployment, "status", default=get(release, "deployment_status")))),
@@ -436,6 +631,7 @@ def build(evidence_dir, output):
              get(row, "notes", "detail", "evidence", "result")) for row in additional if isinstance(row, dict)
         ])
     paragraph(doc, "จำนวนที่ผ่านไม่รวม skipped; การผ่าน unit tests ไม่ยืนยัน capacity, ข้อมูลต้นทาง, browser OAuth หรือการกู้คืนหลังเครื่องสูญหาย")
+    paragraph(doc, "ตารางหลักเลือก final release JUnit เมื่อมีไฟล์ดังกล่าว ผลก่อนหน้าที่ถูก supersede ยังคงอยู่ใน manifest; skipped ไม่ใช่ passed และไม่ใช่ failures จำนวน targeted suites อาจซ้ำกับ full suites จึงห้ามรวมเป็นจำนวน unique tests")
 
     doc.add_heading("3. ผล k6 / Measured load test", level=1)
     paragraph(doc, "Latency p50/p95/p99 ใช้สถิติที่ k6 export จริง ไม่มีการอนุมาน percentile ที่ขาด Throughput แสดง requests/second; เมื่อคำนวณจาก count ÷ duration จะระบุไว้ ค่า http_req_failed เป็นอัตราตาม expected-response ของสคริปต์ และควรอ่านคู่กับ custom checks โดยเฉพาะ HTTP 409 ที่ตั้งใจทดสอบ")
@@ -446,16 +642,21 @@ def build(evidence_dir, output):
              display(r["throughput"]), percent(r["error_rate"]), status(r["outcome"])) for r in runs
         ])
         chart(doc, runs)
+        business_chart(doc, runs)
         for run in runs:
             doc.add_heading(clean(run["name"]), level=2)
             meta = run["metadata"]
             table(doc, ["Workload field", "Evidence"], [
                 ("Summary file", run["file"]), ("Dataset", clean(run["dataset"])),
+                ("Run metadata / resources", run["meta_file"] + " / " + run["resource_file"]),
                 ("Read / write mix", clean(run["read_write"])),
                 ("Planned VUs / duration", clean(get(meta, "vus", "virtual_users")) + " / " + clean(get(meta, "duration_seconds", "durationSeconds"))),
-                ("Target / generator", clean(get(meta, "target", "base_url")) + " / " + clean(get(meta, "generator", "execution"))),
-                ("k6 version / start", clean(get(meta, "k6Version", "k6_version")) + " / " + clean(get(meta, "generatedAt", "started_at"))),
+                ("Target / generator", clean(get(meta, "target", "base_url")) + " / " + clean(get(meta, "generator", "execution", "generator_co_located"))),
+                ("k6 version / start", clean(get(meta, "k6Version", "k6_version")) + " / " + clean(get(meta, "generatedAt", "started_at", "timestamp_utc"))),
+                ("Authenticated actor roles", clean(get(meta, "actor_roles", "actor_role", "dataset.actor_roles"))),
                 ("HTTP requests", display(run["count"], digits=0)),
+                ("Business-read p95 / business error", display(run["business_p95"], " ms") + " / " + percent(run["business_errors"])),
+                ("State conflicts", display(run["conflicts"])),
                 ("Throughput source", "count ÷ measured duration" if run["derived_throughput"] else "k6 exported rate" if run["throughput"] is not None else PENDING),
                 ("Exit code / notes", clean(get(meta, "exit_code")) + " / " + clean(get(meta, "notes", "limitations"))),
             ])
@@ -469,6 +670,11 @@ def build(evidence_dir, output):
                       if any(word in name.lower() for word in ("conflict", "duplicate", "idempot", "retry", "error", "write", "read", "lock", "checks", "success", "refusal"))]
             if custom:
                 table(doc, ["Business / concurrency metric", "Exported values"], custom)
+            resource_section(doc, run)
+            if get(meta, "generator_co_located") is True:
+                paragraph(doc, "Generator อยู่ร่วม VPS กับ target: CPU/RAM และการทดสอบอื่นบน host อาจมีผลต่อค่าที่วัด และรอบ loopback ไม่แทน internet latency ของผู้ใช้")
+            if get(meta, "actor_roles", "actor_role", "dataset.actor_roles") is not None:
+                paragraph(doc, "Role distribution ตาม metadata เป็นขอบเขตจริงของ load test ถ้าเป็น OWNER ทั้งหมด ผลนี้ไม่ยืนยัน throughput ของ Officer workflow หรือ role/assignment matrix ทุกแบบ")
     else:
         paragraph(doc, "รอผล k6 จริง; ตาราง capacity และ latency ยังไม่พร้อม")
     baselines = [r for r in runs if "baseline" in str(r["name"]).lower() or get(r["metadata"], "phase") == "before"]
@@ -477,7 +683,8 @@ def build(evidence_dir, output):
     else:
         paragraph(doc, "มี baseline อยู่ในตารางผลแต่ละรอบ การเทียบ before/after ใช้ได้เมื่อ dataset, VUs, workload และ target resources เท่ากันเท่านั้น")
 
-    doc.add_heading("4. Dev / staging / production release", level=1)
+    security_section(doc, evidence_dir, issues)
+    doc.add_heading("5. Dev / staging / production release", level=1)
     defaults_file = evidence_dir / "runtime-defaults.json"
     if defaults_file.exists():
         defaults = load_json(defaults_file, issues)
@@ -485,22 +692,31 @@ def build(evidence_dir, output):
     table(doc, ["Release field", "Recorded evidence"], [
         ("Domain / IP", clean(get(release, "domain", "deployment.domain")) + " / " + clean(get(release, "ip", "deployment.ip"))),
         ("Timestamp", clean(get(release, "timestamp", "deployment.timestamp"))),
-        ("Commit / branch", clean(get(git, "commit", "sha")) + " / " + clean(get(git, "branch"))),
+        ("Source commit / branch", clean(get(release, "source_commit", "deployment.source_commit", default=get(git, "commit", "sha"))) + " / " + clean(get(git, "branch"))),
         ("Remote", sanitized_remote(get(git, "remote", "remote_url"))),
         ("Push result", status(get(git, "pushed", "push_status", "status"))),
         ("API digest", clean(get(deployment, "api_image_digest", "api_digest", "images.api"))),
         ("Web digest", clean(get(deployment, "web_image_digest", "web_digest", "images.web"))),
         ("Deployment / go-live", status(get(deployment, "status")) + " / " + status(get(deployment, "go_live", "go_live_enabled"))),
     ])
-    checks = get(deployment, "checks", default=[])
+    checks = get(deployment, "checks", default=get(release, "checks", default=[]))
     if isinstance(checks, dict):
         checks = [{"name": key, "status": value} for key, value in checks.items()]
     if checks:
         table(doc, ["Deployment check", "Status", "Evidence"], [
             (get(row, "name", "check"), status(get(row, "status", "passed")), get(row, "evidence", "notes", "detail")) for row in checks if isinstance(row, dict)
         ])
+    containers = get(deployment, "actual_containers", default=get(release, "actual_containers", default=[]))
+    if isinstance(containers, dict):
+        containers = [dict(value, name=key) if isinstance(value, dict) else {"name": key, "image": value} for key, value in containers.items()]
+    if isinstance(containers, list) and containers:
+        table(doc, ["Actual deployed container", "Image / ID", "State / health", "Restart / OOM"], [
+            (get(row, "name", "Name", "service"), clean(get(row, "image", "image_digest", "Image")) + " / " + clean(get(row, "image_id", "ImageID")),
+             clean(get(row, "status", "state", "State.Status")) + " / " + clean(get(row, "health", "State.Health.Status")),
+             clean(get(row, "restart_count", "RestartCount")) + " / " + clean(get(row, "oom_killed", "State.OOMKilled"))) for row in containers if isinstance(row, dict)
+        ])
 
-    doc.add_heading("5. ข้อจำกัดและงานที่ยังต้องติดตาม / Limits", level=1)
+    doc.add_heading("6. ข้อจำกัดและงานที่ยังต้องติดตาม / Limits", level=1)
     limitations = [
         "ผลทดสอบมีขอบเขตตาม VUs, ระยะเวลา, dataset และ read/write mix ของแต่ละรอบ ไม่ใช่คำรับรอง workload ทุกชนิด",
         "ถ้า generator อยู่บน VPS เดียวกับระบบ ผลรวมทรัพยากรอาจเปลี่ยน latency/throughput และไม่วัด internet round-trip ของผู้ใช้จริง",
@@ -516,7 +732,7 @@ def build(evidence_dir, output):
     for item in dict.fromkeys(clean(item) for item in limitations):
         doc.add_paragraph(item, style="List Bullet")
 
-    doc.add_heading("6. แหล่งหลักฐานและการสร้างซ้ำ / Reproducibility", level=1)
+    doc.add_heading("7. แหล่งหลักฐานและการสร้างซ้ำ / Reproducibility", level=1)
     paragraph(doc, "Command: python scripts/build_production_report.py --evidence-dir reports/production-20261006")
     manifest_paths = sorted(p for p in evidence_dir.iterdir() if p.is_file() and p.suffix in (".json", ".xml") and p.name != "report-validation.json")
     table(doc, ["Evidence file", "SHA-256"], [(p.name, hashlib.sha256(p.read_bytes()).hexdigest()) for p in manifest_paths])
