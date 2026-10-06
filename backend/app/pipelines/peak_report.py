@@ -314,6 +314,59 @@ def group_documents(lines, build, rejected):
     return records, kept
 
 
+def require_consistent(lines, fields):
+    """A repeated item/payment row may not redefine its document's identity/balance."""
+    for line in lines:
+        if line.get("status") is None:
+            raise Unreadable("status_unknown", line.get("status_th"))
+    for field in fields:
+        values = set()
+        for line in lines:
+            value = line.get(field)
+            if value in (None, ""):
+                continue
+            if field in ("issued_on", "due_on", "paid_on"):
+                value = _date(value)
+            elif field in ("amount_total", "amount_due", "amount_awaiting", "paid_amount"):
+                value = _money(value)
+            else:
+                value = str(value).strip()
+            values.add(value)
+        if len(values) > 1:
+            # Diagnostics contain the field name, never customer/tax/account values.
+            raise Unreadable("document_fields_conflict", field)
+
+
+def payment_components(lines):
+    """Deduplicate repeated item × payment cells; retain every source row."""
+    components = {}
+    for line in lines:
+        paid_on = _date(line.get("paid_on"))
+        number = line.get("receipt_no") or None
+        amount = _money(line.get("paid_amount"))
+        if not paid_on and not number and amount is None:
+            continue
+        component = {"on": paid_on, "channel": line.get("paid_channel") or None,
+                     "amount": amount, "receipt_no": number}
+        key = (number, paid_on, component["channel"])
+        components.setdefault(key, []).append((line.get("line_no") or "1", component))
+    result = []
+    for rows in components.values():
+        amounts = {value["amount"] for _item, value in rows}
+        component = dict(rows[0][1])
+        if len(amounts) > 1:
+            per_item = {}
+            for item, value in rows:
+                if item in per_item and per_item[item] != value["amount"]:
+                    raise Unreadable("payment_component_conflict", "paid_amount")
+                per_item[item] = value["amount"]
+            if None in per_item.values():
+                raise Unreadable("payment_component_incomplete", "paid_amount")
+            component["amount"] = str(sum((Decimal(value) for value in per_item.values()), Decimal(0)))
+        result.append(component)
+    return sorted(result, key=lambda value: (value["on"] or "", value["receipt_no"] or ""))
+
+
 def _cycle(*texts):
     for t in texts:
         m = _CYCLE.search(t or "")
@@ -348,9 +401,6 @@ def parse(raw, filename=None):
             continue
         status_th = _cell(row, col["status_th"])
         status = STATUS_MAP.get(status_th)
-        if status is None:
-            rejected.append({"row": n, "code": "status_unknown", "value": status_th})
-            continue
         lines.append({key: _cell(row, i) for key, i in col.items()} | {"status": status, "sheet_row": n})
     invoices, lines = group_documents(lines, _invoice, rejected)
     return {"report_as_of": report_as_of(filename), "exported_at": export_timestamp(filename), "header_row": header_row,
@@ -365,6 +415,9 @@ def _invoice(lines):
     """One invoice from its lines; the invoice-level cells repeat on every line and
     are read from the first."""
     first = lines[0]
+    require_consistent(lines, ("status", "contact_code", "reference", "system_reference", "issued_on",
+                               "due_on", "amount_total", "amount_due", "amount_awaiting"))
+    payments = payment_components(lines)
     doc = first["doc_no"]
     paid_on = _date(first["paid_on"])
     inv = {
@@ -378,14 +431,21 @@ def _invoice(lines):
         # in-run only, for the system-size compare (peak_conflicts); never written
         "product_name": first["product_name"] or None,
         "amount_total": _money(first["amount_total"]), "amount_due": _money(first["amount_due"]),
-        "amount_awaiting": _money(first["amount_awaiting"]) or "0.00",
+        "amount_awaiting": _money(first["amount_awaiting"]),
         "payment": ({"on": paid_on, "channel": first["paid_channel"] or None,
                      "amount": _money(first["paid_amount"]), "receipt_no": first["receipt_no"] or None}
                     if paid_on or first["receipt_no"] else None),
         "note": first["note"] or None, "lines": [],
     }
+    if inv["amount_awaiting"] is None and inv["status"] not in ("DRAFT", "CANCELLED"):
+        raise Unreadable("invoice_balance_missing", "amount_awaiting")
+    if payments:
+        inv["payment"] = payments[-1]
+    inv["payments"] = payments
+    inv["source_rows"] = [line["sheet_row"] for line in lines]
     from ..instalment_evidence import service_period
     inv["service_month"], inv["service_month_conflict"] = service_period(lines)
+    seen_items = set()
     for ln in lines:
         if inv["cycle"] is None:
             inv["cycle"] = _cycle(ln["description"], ln["product_name"])
@@ -393,7 +453,11 @@ def _invoice(lines):
             line_no = int(float(ln["line_no"])) if ln["line_no"] else len(inv["lines"]) + 1
         except (ValueError, TypeError):
             line_no = len(inv["lines"]) + 1
-        inv["lines"].append({"line_no": line_no,
+        item = {"line_no": line_no,
                              "product_code": ln["product_code"] or None,
-                             "description": ln["description"] or None, "amount": _money(ln["price"])})
+                             "description": ln["description"] or None, "amount": _money(ln["price"])}
+        item_key = tuple(item.items())
+        if item_key not in seen_items:
+            seen_items.add(item_key)
+            inv["lines"].append(item)
     return inv

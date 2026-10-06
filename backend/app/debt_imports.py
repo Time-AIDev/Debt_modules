@@ -132,6 +132,10 @@ def _profile_rows(raw):
         for rec in records:
             row = by_row[rec["source_ref"]["row"]]
             raw_install = imports._IMS.col(row, header, "Installation Month")
+            missing_cache_columns = set(sheet.get("formula_missing_cache_by_row", {}).get(
+                str(rec["source_ref"]["row"]), []))
+            rec["missing_cached_fields"] = [heading for column, heading in enumerate(header)
+                                             if column in missing_cache_columns and heading]
             is_month = bool(re.fullmatch(r"\d{2}/\d{2}", str(raw_install or "")))
             rec.update(kind=kind, source_status=rec.get("payment_status") or rec.get("status_word"),
                        installation_source={"date": _source_date(raw_install, expected == "CASH_TAB"),
@@ -147,7 +151,7 @@ def _profile_rows(raw):
                     amount = imports._IMS.money(imports._IMS.cell(row, column))
                     rec["monthly_cells"].append({"month": heading, "amount": amount,
                         "status": status or None, "amount_field": heading, "status_field": status_heading,
-                        "unknown": not bool(status), "missing_cached": amount is None})
+                        "unknown": not bool(status), "missing_cached": column in missing_cache_columns})
             out.append(rec)
     return out
 
@@ -169,7 +173,9 @@ def build_entries(records, customers):
             customer = holders[0] if len(holders) == 1 else None
             reasons = []
             if not customer:
-                reasons.append("IDENTITY_AMBIGUOUS" if holders else "OUTSIDE_CURRENT_COHORT")
+                malformed = not re.fullmatch(r"(?:\d{6,}|V[A-Z]{1,2}\d{4,})", stem(record.get("volt_id")))
+                reasons.append("IDENTITY_MALFORMED" if malformed else
+                               "IDENTITY_AMBIGUOUS" if holders else "OUTSIDE_CURRENT_COHORT")
             if conflict:
                 reasons.append("CONFLICTING_DUPLICATE")
             product = "LEASE" if kind == "LEASING_BOOK" else "CASH" if kind == "CASH_TAB" else None
@@ -207,7 +213,8 @@ def build_entries(records, customers):
                                "Not Due": "CURRENT", "Not issued": "CURRENT"}.get(status),
                            "eligible": customer is not None and not reasons,
                            "review_reasons": reasons,
-                           "quality": {"unknown_money_fields": unknown, "missing_cached_fields": unknown},
+                           "quality": {"unknown_money_fields": unknown,
+                                       "missing_cached_fields": record.get("missing_cached_fields") or []},
                            "installation": {"state": "UNCONFIRMED", "source_date": source.get("date"),
                                "precision": source.get("precision"), "requires_confirmation": True},
                            "termination_candidate": {"completed_evidence": completed, "cause": None,

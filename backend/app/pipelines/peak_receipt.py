@@ -70,9 +70,6 @@ def parse(raw, filename=None):
             continue
         status_th = _cell(row, col["status_th"])
         status = STATUS_MAP.get(status_th)
-        if status is None:
-            rejected.append({"row": n, "code": "status_unknown", "value": status_th})
-            continue
         lines.append({key: _cell(row, i) for key, i in col.items()} | {"status": status, "sheet_row": n})
     receipts, lines = group_documents(lines, _receipt, rejected)
     covers_from, covers_to = report_range(filename)
@@ -95,6 +92,17 @@ def _receipt(lines):
     repeat on every line and are read from the first. The cycle comes from the
     description (or the product name) with the invoice parser's own regex."""
     first = lines[0]
+    invoice_report.require_consistent(lines, ("status", "contact_code", "issued_on", "invoice_ref",
+        "system_invoice_ref", "amount_total", "amount_due"))
+    payments = {}
+    for line in lines:
+        component = {"on": _date(line.get("paid_on")), "amount": _money(line.get("paid_amount")),
+                     "channel": line.get("paid_channel") or None, "channel_code": line.get("channel_code") or None}
+        if component["amount"] is None and not component["on"]:
+            continue
+        key = tuple(component.values())
+        payments[key] = component
+    components = sorted(payments.values(), key=lambda value: (value["on"] or "", value["channel"] or ""))
     doc = first["doc_no"]
     cycle = invoice_report._cycle(first["description"], first["product_name"])
     prefix = doc.split("-")[0] if "-" in doc else doc
@@ -117,15 +125,28 @@ def _receipt(lines):
         "paid_amount": _money(first["paid_amount"]),
         "note": first["note"] or None,
         "lines": [],
+        "source_rows": [line["sheet_row"] for line in lines],
+        "payments": components,
     }
+    if components:
+        if any(value["amount"] is None for value in components):
+            raise invoice_report.Unreadable("payment_component_incomplete", "paid_amount")
+        rec["paid_amount"] = str(sum((invoice_report.Decimal(value["amount"]) for value in components),
+                                    invoice_report.Decimal(0)).quantize(invoice_report.Decimal("0.01")))
+        rec["paid_on"] = components[-1]["on"]
+    seen_items = set()
     for ln in lines:
         try:
             line_no = int(float(ln["line_no"])) if ln["line_no"] else len(rec["lines"]) + 1
         except (ValueError, TypeError):
             line_no = len(rec["lines"]) + 1
-        rec["lines"].append({"line_no": line_no,
+        item = {"line_no": line_no,
                              "product_code": ln["product_code"] or None,
                              "product_name": ln["product_name"] or None,
                              "description": ln["description"] or None,
-                             "amount": _money(ln["price"])})
+                             "amount": _money(ln["price"])}
+        item_key = tuple(item.items())
+        if item_key not in seen_items:
+            seen_items.add(item_key)
+            rec["lines"].append(item)
     return rec

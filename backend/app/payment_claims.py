@@ -221,6 +221,14 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
             continue
         if not _identity_of(receipt) or str(_identity_of(receipt)) != str(_identity_of(inv)):
             continue
+        components = receipt.get("payments") or previous_paid.get(receipt["doc_no"], (None, {}))[1].get("payments")
+        if components:
+            historical = [part for part in components if part.get("on") and str(part["on"])[:10] <= cutoff]
+            if not historical:
+                continue
+            receipt["payments"] = historical
+            receipt["paid_amount"] = _fmt(sum((_money(part["amount"]) for part in historical), ZERO))
+            receipt["paid_on"] = max(part["on"] for part in historical)
         try:
             _money(receipt.get("paid_amount"), pointer="/paid_amount")
         except errors.Problem:
@@ -248,7 +256,7 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
         # spilled to a second invoice. Reversing only the named invoice would
         # leave the second invoice paid after its source receipt was cancelled.
         hypothetical = reconcile_receipts(list(invoice_rows.values()), [
-            dict(receipt, status="PAID") if receipt["doc_no"] in reversing else receipt
+            dict(reversing[receipt["doc_no"]], status="PAID") if receipt["doc_no"] in reversing else receipt
             for _, receipt in latest.values()], _recover_snapshot_cancellations=False)
         for allocation in hypothetical["allocations"]:
             receipt = reversing.get(allocation["receipt_doc_no"])
@@ -259,8 +267,26 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
             if str(receipt["paid_on"])[:10] <= cutoff < _receipt_observation_key(receipt)[0][:10]:
                 snapshot_balance[doc] = min(face[doc], snapshot_balance[doc] + Decimal(allocation["amount"]))
 
-    active = [value[1] for value in latest.values()
+    active_docs = [value[1] for value in latest.values()
               if str(value[1].get("status") or "").upper() not in ("DRAFT", "CANCELLED")]
+    active = []
+    for receipt in active_docs:
+        components = receipt.get("payments")
+        if not components:
+            active.append(receipt)
+            continue
+        try:
+            if (not isinstance(components, list) or not components or
+                    sum((_money(part.get("amount")) for part in components), ZERO) !=
+                    _money(receipt.get("paid_amount"))):
+                raise ValueError()
+            for part in components:
+                _iso_date(part.get("on"))
+        except (errors.Problem, ValueError, TypeError):
+            exceptions.append({"receipt_doc_no": receipt.get("doc_no"), "reason": "PAYMENT_COMPONENTS_INVALID"})
+            continue
+        active.extend(dict(receipt, paid_on=part["on"], paid_amount=part["amount"], payments=None)
+                      for part in components)
     active.sort(key=lambda row: (str(row.get("paid_on") or ""), str(row.get("doc_no") or "")))
     for receipt in active:
         status = str(receipt.get("status") or "").upper()
@@ -344,6 +370,18 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
                 "source_run_id": receipt.get("run_id") or receipt.get("source_run_id"),
             })
 
+    # The current allocation projection has one receipt/invoice key. Multiple
+    # channels/dates conserve their combined cash without overwriting that key.
+    folded = {}
+    for allocation in allocations:
+        key = (allocation["receipt_doc_no"], allocation["invoice_doc_no"])
+        previous = folded.get(key)
+        if previous:
+            previous["amount"] = _fmt(Decimal(previous["amount"]) + Decimal(allocation["amount"]))
+            previous["after"] = allocation["after"]
+        else:
+            folded[key] = dict(allocation)
+    allocations = list(folded.values())
     reconciled_invoices = {}
     for doc, inv in invoice_rows.items():
         left = remaining[doc]
@@ -357,7 +395,7 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
     return {
         "allocations": allocations, "invoices": reconciled_invoices,
         "credit_by_customer": {key: _fmt(value) for key, value in credit_by_customer.items()},
-        "exceptions": exceptions, "active_receipts": len(active),
+        "exceptions": exceptions, "active_receipts": len(active_docs),
     }
 
 
@@ -930,13 +968,14 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
         "select distinct on (p.doc_no) p.doc_no, p.invoice_ref, p.status, p.paid_on, p.paid_amount, "
         "p.customer_no, p.invoice_doc_no, p.verdict, p.rule, p.contact_code, "
         "l.customer_no as linked_no, r.id as run_id, r.meta->>'exported_at' as exported_at, "
-        "r.meta->>'report_as_of' as report_as_of, "
+        "r.meta->>'report_as_of' as report_as_of, r.meta->'payment_components'->p.doc_no as payment_components, "
         "previous.paid_amount as previous_paid_amount, previous.paid_on as previous_paid_on, "
-        "previous.import_run_id as previous_paid_run_id "
+        "previous.import_run_id as previous_paid_run_id, previous.payment_components as previous_payment_components "
         "from landing.peak_receipt p join landing.import_run r on r.id=p.import_run_id "
         "left join records.identity_link l on l.retired_at is null and l.source='PEAK_LINK' "
         "and l.contact_code=upper(regexp_replace(coalesce(p.contact_code,''),'[[:space:]]+','','g')) "
-        "left join lateral (select old.paid_amount,old.paid_on,old.import_run_id "
+        "left join lateral (select old.paid_amount,old.paid_on,old.import_run_id, "
+        "old_run.meta->'payment_components'->old.doc_no as payment_components "
         "from landing.peak_receipt old join landing.import_run old_run on old_run.id=old.import_run_id "
         "where p.status='CANCELLED' and old.doc_no=p.doc_no and old.status='PAID' and old.paid_amount>0 "
         "and old_run.source_system='PEAK_RECEIPT' and old_run.status='OK' and old_run.meta ? 'applied' "
@@ -992,6 +1031,8 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
             "previous_paid_amount": row["previous_paid_amount"],
             "previous_paid_on": str(row["previous_paid_on"]) if row["previous_paid_on"] else None,
             "previous_paid_run_id": row["previous_paid_run_id"],
+            "payments": row["payment_components"] or (row["previous_payment_components"]
+                        if row["status"] == "CANCELLED" else None),
         })
     result = reconcile_receipts(invoices, receipts)
 

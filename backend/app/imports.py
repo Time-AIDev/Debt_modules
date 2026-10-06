@@ -517,7 +517,7 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None, budget=
     return cells, width
 
 
-def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None):
+def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None, diagnostics=None):
     """(rows, the 1-based spreadsheet row number of each), cells already cleaned.
 
     Streamed (2026-09-25): ET.fromstring built the whole tab as a tree first, and
@@ -543,6 +543,11 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None):
             if tag != row_tag or sheet_data is None:
                 continue
             cells, width = _row_cells(el, shared, date_styles, epoch_1904, prefix, budget)
+            missing_cache = ([_col_index(cell.get("r")) for cell in el
+                              if cell.tag == prefix + "c" and cell.get("r")
+                              and cell.find(prefix + "f") is not None
+                              and (cell.find(prefix + "v") is None or not cell.find(prefix + "v").text)]
+                             if diagnostics is not None and any(cells.values()) else [])
             r = el.get("r") or ""
             el.clear()
             sheet_data.clear()   # drops the rows already read, so the tree never grows
@@ -556,6 +561,8 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None):
             if budget:
                 budget.retain(width, cells)
             numbers.append(int(r) if r.isdigit() else (numbers[-1] + 1 if numbers else 1))
+            if diagnostics is not None and missing_cache:
+                diagnostics[str(numbers[-1])] = missing_cache
             rows.append([_clean_cell(cells.get(i, "")) for i in range(width)])
     return rows, numbers
 
@@ -615,8 +622,10 @@ def _read_xlsx_archive(zf, selected_sheets=None):
         if selected_sheets is not None and name.strip().lower() not in {
                 value.strip().lower() for value in selected_sheets}:
             continue
-        rows, numbers = _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget)
-        sheets.append({"name": name, "rows": rows, "row_numbers": numbers})
+        diagnostics = {}
+        rows, numbers = _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget, diagnostics)
+        sheets.append({"name": name, "rows": rows, "row_numbers": numbers,
+                       "formula_missing_cache_by_row": diagnostics})
     return sheets
 
 

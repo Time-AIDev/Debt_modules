@@ -36,6 +36,7 @@ def assess(
     contacts: Iterable[dict] = (),
     field_of: Optional[Callable] = None,
     eligible_of: Optional[Callable] = None,
+    assessment_lines_of: Optional[Callable] = None,
 ) -> Assessment:
     """Assess a customer's active schedules without mutating any workflow state.
 
@@ -61,6 +62,9 @@ def assess(
                              "reason": eligibility.get("reason") or "CONTRACT_INELIGIBLE"})
             continue
         eligible_count += 1
+        original_lines = lines
+        if assessment_lines_of:
+            lines = list(assessment_lines_of(contract))
         max_dpd = max(max_dpd, compute_dpd(lines, as_of=as_of, frozen_days=0) or 0)
         missed = sum(
             1 for line in lines
@@ -68,7 +72,7 @@ def assess(
         )
         max_missed = max(max_missed, missed)
         restructured = restructured or any(
-            getattr(line, "schedule_status", None) == "SUPERSEDED" for line in lines
+            getattr(line, "schedule_status", None) == "SUPERSEDED" for line in original_lines
         )
         assessment_hold = assessment_hold or (
             field_of(contract, "fee_state") in ASSESSMENT_HOLD_STATES

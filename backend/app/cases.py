@@ -1038,12 +1038,19 @@ def _payment_status_from_contracts(customer):
 def npl_assessment_for(customer, contacts=()):
     from .npl_assessment import assess
     from .collection_eligibility import for_contract
+    def assessment_lines(contract):
+        from . import instalment_evidence, journey, payment_summary
+        if instalment_evidence.required(contract):
+            return instalment_evidence.collection_lines(contract, journey.for_current(),
+                                                       payment_summary._active_lines(contract))
+        return contract_field_of(contract, "instalments") or ()
     return assess(
         customer.contracts,
         as_of=settings.business_date,
         contacts=contacts,
         field_of=contract_field_of,
         eligible_of=lambda contract: for_contract(contract, contract_field_of),
+        assessment_lines_of=assessment_lines,
     )
 
 

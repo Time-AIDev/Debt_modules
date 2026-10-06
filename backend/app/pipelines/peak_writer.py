@@ -104,7 +104,10 @@ def write(conn, parsed, verdicts, door="upload", filename=None, on_progress=None
             "exported_at": parsed.get("exported_at"),
             "covers_from": covers_from, "covers_to": covers_to,
             "door": door, "filename": filename, "fingerprint": fingerprint,
-            "schema": parsed.get("schema")}
+            "schema": parsed.get("schema"),
+            "payment_components": {inv["doc_no"]: inv["payments"] for inv in parsed["invoices"]
+                                   if inv.get("payments")},
+            "source_rows": {inv["doc_no"]: inv.get("source_rows") or [] for inv in parsed["invoices"]}}
     if run_id:
         run = int(run_id)
         conn.execute(text("update landing.import_run set meta = meta || cast(:m as jsonb) where id = :i"),
@@ -377,6 +380,7 @@ def _linked_rows(conn, run_id, columns, where="", params=None):
 def _served(row, rule=None):
     r = dict(row)
     payment = _payment(r, r["receipt_no"]) if r["paid_on"] or r["receipt_no"] else None
+    payments = r.get("payment_components") or ([payment] if payment else [])
     return {"doc_no": r["doc_no"], "doc_kind": r["doc_kind"], "issued_on": _iso(r["issued_on"]),
             "due_on": _iso(r["due_on"]), "status": r["status"],
             "cycle": {"n": r["cycle_n"], "of": r["cycle_of"]} if r["cycle_n"] else None,
@@ -385,7 +389,7 @@ def _served(row, rule=None):
             "amount_awaiting": str(r["amount_awaiting"] or "0.00"),
             # `payments` is every payment the book serves for this invoice (fix-all P2):
             # the report's own one here, the receipt run's receipts once they overlay it.
-            "payment": payment, "payments": [payment] if payment else [],
+            "payment": payments[-1] if payments else None, "payments": payments,
             "contact_code": r["contact_code"], "rule": rule or r["rule"]}
 
 
@@ -446,7 +450,9 @@ def invoices_for_book(conn, served_nos=None):
         no, rule = _serves(r)
         if not no:
             continue
-        out.setdefault(no, {"report_as_of": as_of, "run_id": run["id"], "invoices": []})["invoices"].append(_served(r, rule=rule))
+        components = (run.get("meta") or {}).get("payment_components", {}).get(r["doc_no"])
+        out.setdefault(no, {"report_as_of": as_of, "run_id": run["id"], "invoices": []})["invoices"].append(
+            _served(dict(r, payment_components=components), rule=rule))
     for block in out.values():
         block["invoices"].sort(key=lambda i: (i["due_on"] or "", i["doc_no"]))
     # Q6 (TASK-204): the last applied receipt run overlays what it settles.
@@ -502,7 +508,10 @@ def write_receipts(conn, parsed, verdicts, door="upload", filename=None, on_prog
             "exported_at": (parsed.get("meta") or {}).get("exported_at"),
             "covers_from": covers_from, "covers_to": covers_to,
             "door": door, "filename": filename, "fingerprint": fingerprint,
-            "schema": (parsed.get("meta") or {}).get("schema")}
+            "schema": (parsed.get("meta") or {}).get("schema"),
+            "payment_components": {rec["doc_no"]: rec["payments"] for rec in parsed["receipts"]
+                                   if rec.get("payments")},
+            "source_rows": {rec["doc_no"]: rec.get("source_rows") or [] for rec in parsed["receipts"]}}
     if run_id:
         run = int(run_id)
         conn.execute(text("update landing.import_run set meta = meta || cast(:m as jsonb) where id = :i"),
@@ -685,9 +694,13 @@ def _overlay_receipts(conn, out, invoice_as_of):
                 continue
             used.update(r["doc_no"] for r in paid)
             payments = [dict(_payment(r, r["doc_no"]), source=RECEIPT_SOURCE) for r in paid]
-            own = inv["payment"]            # the report's own; without a number it cannot be told apart
-            if own and own["receipt_no"] and own["receipt_no"] not in {p["receipt_no"] for p in payments}:
-                payments = sorted(payments + [dict(own, source="PEAK_REPORT")],
+            embedded = inv.get("payments") or ([inv["payment"]] if inv.get("payment") else [])
+            allocated_docs = {p["receipt_no"] for p in payments}
+            historical = [dict(own, source="PEAK_REPORT") for own in embedded
+                          if own.get("receipt_no") and own["receipt_no"] not in allocated_docs
+                          and own["receipt_no"] not in cancelled]
+            if historical:
+                payments = sorted(payments + historical,
                                   key=lambda p: (p["on"] or "", p["receipt_no"]))
             total = sum((Decimal(p["amount"]) for p in payments if p["amount"]), Decimal(0))
             asked = Decimal(inv.get("amount_due") or inv.get("amount_total") or "0")
