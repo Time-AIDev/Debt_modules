@@ -158,6 +158,15 @@ def test_image_verification_checks_pinned_id_revision_and_pg16():
     with pytest.raises(RecoveryError): runner.image('latest')
 
 
+def test_command_runner_streams_private_sql_bytes_without_putting_them_in_arguments(tmp_path):
+    with (tmp_path/'commands.log').open('w') as log:
+        commands = Commands(log)
+        result = commands.run([sys.executable, '-c', 'import sys; print(sys.stdin.buffer.read().decode())'],
+                              stdin=io.BytesIO(b'synthetic SQL input'), capture=True, timeout=10)
+    assert result == 'synthetic SQL input'
+    assert 'synthetic SQL input' not in (tmp_path/'commands.log').read_text()
+
+
 def test_stack_commands_use_owned_internal_resources_and_do_not_publish_ports(tmp_path):
     calls = []
     class Runner:

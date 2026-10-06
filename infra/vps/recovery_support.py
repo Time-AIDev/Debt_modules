@@ -157,7 +157,8 @@ class Commands:
         self.log = log
 
     def run(self, arguments, *, capture=False, stdin=None, cwd=None, timeout=1800):
-        result = subprocess.run(arguments, stdin=stdin, cwd=cwd, check=True, timeout=timeout,
+        input_values = {'input': stdin.getvalue()} if hasattr(stdin, 'getvalue') else {'stdin': stdin}
+        result = subprocess.run(arguments, **input_values, cwd=cwd, check=True, timeout=timeout,
                                 stdout=subprocess.PIPE if capture else self.log, stderr=self.log)
         return result.stdout.decode().strip() if capture else None
 
