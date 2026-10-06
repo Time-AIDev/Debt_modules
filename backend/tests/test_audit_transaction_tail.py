@@ -5,7 +5,7 @@ from threading import Barrier
 import pytest
 from sqlalchemy import create_engine, text
 
-from app import audit_store, db, errors, migrate
+from app import audit, audit_store, db, errors, migrate
 from app.production_unit import CURRENT, append_audit_tail
 
 
@@ -37,6 +37,10 @@ def test_repeatable_readers_end_snapshot_before_short_audit_tail(pg_url, pg_conn
     monkeypatch.setenv("DATABASE_URL", pg_url)
     db.reset()
     engine = create_engine(pg_url, pool_size=12, max_overflow=0)
+    with engine.connect() as conn:
+        previous = conn.execute(text('select seq,hash from audit.entry order by seq desc limit 1')).mappings().first()
+    previous_sequence = previous['seq'] if previous else 0
+    previous_hash = previous['hash'] if previous else audit.GENESIS
     barrier = Barrier(12)
     def reader(index):
         with engine.connect().execution_options(isolation_level="REPEATABLE READ") as conn:
@@ -49,9 +53,11 @@ def test_repeatable_readers_end_snapshot_before_short_audit_tail(pg_url, pg_conn
         with ThreadPoolExecutor(max_workers=12) as workers:
             list(workers.map(reader, range(12)))
         with engine.connect() as conn:
-            rows = conn.execute(text("select seq,prev_hash,hash from audit.entry order by seq")).mappings().all()
+            rows = conn.execute(text("select seq,prev_hash,hash from audit.entry where seq>:previous order by seq"),
+                                {'previous': previous_sequence}).mappings().all()
         assert len(rows) == 12
-        assert [row["seq"] for row in rows] == list(range(1, 13))
+        assert [row["seq"] for row in rows] == list(range(previous_sequence + 1, previous_sequence + 13))
+        assert rows[0]['prev_hash'] == previous_hash
         assert all(next_row["prev_hash"] == previous["hash"] for previous, next_row in zip(rows, rows[1:]))
         assert audit_store.verify()["ok"] is True
     finally:
