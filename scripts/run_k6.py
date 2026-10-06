@@ -274,7 +274,8 @@ def main(argv=None):
             meta["read_write_mix"] = {"reads": "case before each act and final conservation check",
                 "writes": ["next_action", "dc_status", "uncounted_contact", "ptp_create", "ptp_close"],
                 "complete_action_includes": ["case_read", "mutation", "conflict_refresh_retry", "idempotent_replay"],
-                "customer_partitions": "distinct per actor", "cash_conservation": True}
+                "customer_partitions": "distinct per actor", "cash_conservation": True,
+                "ops_negative_probes": ["payment_claim", "embedded_contact_ptp"], "ops_denial_has_no_financial_side_effect": True}
         if preview_path:
             meta["concurrent_preview"] = {"profile": args.preview_profile, "source_bytes": preview_path.stat().st_size,
                 "source_sha256": hashlib.sha256(preview_path.read_bytes()).hexdigest(), "never_applied": True,

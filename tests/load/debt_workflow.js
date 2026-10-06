@@ -87,6 +87,18 @@ export default function (calendar) {
       { headers: { ...headers(actor), 'Content-Type': 'application/json' }, timeout: '20s', tags: { name: 'ops_financial_denied' } });
     const refused = check(r, { 'OPS financial action is denied': response => response.status === 403 });
     denied.add(!refused);
+    const ptp = http.post(`${base}/api/v1/cases/by-customer/${uid}/contacts`, JSON.stringify({
+      result: 'REACHED_PTP', counted: false, not_counted: true,
+      ptp: { amount: '100.00', date: calendar.nextDate }, note: 'Synthetic forbidden OPS promise probe',
+    }), { headers: { ...headers(actor), 'Content-Type': 'application/json' }, timeout: '20s',
+      tags: { name: 'ops_embedded_ptp_denied' } });
+    const ptpRefused = check(ptp, { 'OPS embedded contact promise is denied': response => response.status === 403 });
+    denied.add(!ptpRefused);
+    const untouched = readCase(actor, uid);
+    const noFinancialEffect = check(untouched, { 'OPS refused financial probes preserve promise and confirmed cash': value => value
+      && value.body.case.open_ptp_uid === initial.body.case.open_ptp_uid
+      && value.body.work_item?.aggregate_outstanding === initial.body.work_item?.aggregate_outstanding });
+    failures.add(!noFinancialEffect);
     sleep(Number(__ENV.THINK_SECONDS || 1));
     return;
   }
