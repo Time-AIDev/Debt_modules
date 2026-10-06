@@ -37,6 +37,19 @@ def main():
             raise SystemExit('Load database must be empty; create a fresh database')
         run = landing.start_run(conn, 'SHEET', 'synthetic-k6')
         landing.write_customers(conn, run, 'SHEET', customers)
+        # Production now requires explicit live Won CRM evidence. Keep the
+        # historical contractual SHEET fixture unchanged and add its synthetic
+        # identity/proof observations rather than disabling the production rule.
+        proof = landing.start_run(conn, 'ODOO', 'synthetic-k6-won-proof')
+        landing.write_customers(conn, proof, 'ODOO', customers)
+        orders = [(customer['volt_id'], {
+            'no': index + 1, 'crm_id': index + 1,
+            'order_status': 'Order - Done', 'crm_status': 'Won',
+            'epc_start_date': '2023-09-14', 'epc_end_date': '2023-09-20',
+        }) for index, customer in enumerate(customers)]
+        landing.write_orders(conn, proof, 'ODOO', orders)
+        landing.finish_run(conn, proof, 'OK', row_counts={'customers': len(customers), 'orders': len(orders)}, reconciled=True)
+        landing.write_orders(conn, run, 'SHEET', orders)
         for i, customer in enumerate(customers):
             block = lease_block(i)
             block['first_payment_date'] = '2024-01-10'
@@ -47,14 +60,14 @@ def main():
     built, _report = book.build()
     args.private_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
     dataset = {'synthetic': True, 'customers': len(built),
-               'contracts': len(built), 'instalments_per_contract': 96,
+               'contracts': len(built), 'instalments_per_contract': 96, 'synthetic_won_proof': True,
                'customer_uids': [c.uid for c in built]}
     if not dataset['customer_uids']: raise SystemExit('Synthetic data did not create a served book')
     (args.private_dir / 'dataset.json').write_text(json.dumps(dataset))
     from app import auth, tab_sessions
     auth.set_config(auth.load_config())
     users = [{'subject': 'vu%d@load.example.test' % i,
-              'token': tab_sessions.issue(auth.new_session('vu%d@load.example.test' % i, 'GOOGLE', 'OWNER', 'load_owner', False))}
+              'token': tab_sessions.issue(auth.new_session('vu%d@load.example.test' % i, 'GOOGLE', 'OWNER', 'owner', False))}
              for i in range(25)]
     path = args.private_dir / 'tokens.json'
     path.write_text(json.dumps(users)); path.chmod(0o600)
