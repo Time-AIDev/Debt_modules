@@ -25,6 +25,13 @@ import { Calendar } from './screens/Calendar.jsx'
 import { DataSources } from './screens/DataSources.jsx'
 import { Terminated, ArchivedCase } from './screens/Terminated.jsx'
 import { Audit } from './screens/Audit.jsx'
+import { AccountingHistory } from './screens/AccountingHistory.jsx'
+
+function LegacyTerminated() {
+  const location = useLocation()
+  return <Navigate to={`${location.pathname.replace(/^\/terminated/, '/audit/terminated')}${location.search}`}
+    state={location.state} replace />
+}
 
 function Shell() {
   const { t, todayView } = usePrefs()
@@ -126,9 +133,12 @@ function Shell() {
             <Route path="/settings" element={<Settings />} />
             <Route path="/calendar" element={<Calendar />} />
             <Route path="/data-sources" element={<DataSources />} />
-            <Route path="/terminated" element={<Terminated />} />
-            <Route path="/terminated/:uid" element={<ArchivedCase />} />
+            <Route path="/terminated" element={<LegacyTerminated />} />
+            <Route path="/terminated/:uid" element={<LegacyTerminated />} />
             <Route path="/audit" element={<Audit />} />
+            <Route path="/audit/accounting-reviews" element={<AccountingHistory />} />
+            <Route path="/audit/terminated" element={<Terminated />} />
+            <Route path="/audit/terminated/:uid" element={<ArchivedCase />} />
             <Route path="/workbook" element={<Navigate to="/book" replace />} />
             <Route path="/customers" element={<Navigate to="/book" replace />} />
             <Route path="/reminders" element={<Navigate to="/calendar" replace />} />

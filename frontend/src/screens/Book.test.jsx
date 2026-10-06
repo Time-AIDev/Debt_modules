@@ -28,6 +28,17 @@ beforeEach(() => {
 })
 
 describe('Book', () => {
+  it('restores company/search/sort filters from the URL and includes company in exports', async () => {
+    api.workbookExport.mockResolvedValue({ filename: 'book.csv', text: 'customer_uid\n' })
+    const user = userEvent.setup()
+    renderScreen(<Book />, { route: '/book?entity=EPC&q=C1&sort=display_name&dir=asc' })
+    await waitFor(() => expect(api.workbook).toHaveBeenCalledWith({ entity: 'EPC', q: 'C1',
+      sort: 'display_name', dir: 'asc', identities: 1, limit: 50 }))
+    expect(screen.getByRole('combobox', { name: 'EPC/SPV' })).toHaveValue('EPC')
+    await user.click(screen.getByRole('button', { name: 'ส่งออก CSV' }))
+    expect(api.workbookExport).toHaveBeenCalledWith({ entity: 'EPC', q: 'C1', sort: 'display_name', dir: 'asc', identities: 1 })
+  })
+
   it('groups rows by the served aging band and shows the served source', async () => {
     renderScreen(<Book />)
     expect(await screen.findByText('ค้างไม่ถึง 30 วัน')).toBeInTheDocument()

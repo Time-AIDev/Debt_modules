@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { usePrefs } from '../lib/prefs.jsx'
 import { useIdentity } from '../lib/identity.jsx'
@@ -6,11 +7,13 @@ import { money, date as fmtDate, when } from '../lib/format.js'
 import { Drawer } from './Drawer.jsx'
 import { Problem } from './Problem.jsx'
 import { useToast } from './Toast.jsx'
+import { internalOrigin, recordState } from '../lib/origin.js'
 
 /** Service evidence and collection due dates are independent of PEAK cash. */
 export function ServiceDeferrals({ data, onChanged }) {
   const { t } = usePrefs()
   const identity = useIdentity()
+  const location = useLocation()
   const [action, setAction] = useState(null)
   const entries = (data.payment_summary?.contracts || []).filter((e) => e.product === 'LEASE'
     && !['CLOSED', 'TERMINATED'].includes(data.contracts?.find((k) => k.uid === e.contract_uid)?.status))
@@ -49,6 +52,9 @@ export function ServiceDeferrals({ data, onChanged }) {
           onClick={() => setAction({ kind: 'reverse', row })}>{t('deferral.reverse')}</button> : null}
         <button className="btn btn--sm" type="button" onClick={() => setAction({ kind: 'accounting', row })}>
           {t('deferral.review')}</button>
+        <Link className="btn btn--sm" to={`/audit/accounting-reviews?${new URLSearchParams({
+          customer_uid: data.customer.uid, contract_uid: row.contract_uid, deferral_uid: row.uid,
+        })}`} state={recordState(internalOrigin(location, 'deferral.title'))}>{t('history.accountingButton')}</Link>
       </div> : null}
     </li>)}</ul> : null}
     {action ? <DeferralDrawer key={`${action.kind}-${action.row?.uid || 'new'}`} action={action}
@@ -92,8 +98,9 @@ function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
   const issues = data.issues || []
   const ticket = issues.find((i) => i.uid === form.issue_uid)
   const ticketConfirmed = ticket && (ticket.status === 'RESOLVED' || ticket.fault_confirmed === true)
+  const datesValid = form.service_from && form.service_until && form.service_until >= form.service_from
   const ready = form.reason.trim() && (!create || (form.cycles.length && form.service_from && form.service_until
-    && (ticketConfirmed || (form.confirmation_note.trim() && form.confirmed_by.trim()))))
+    && datesValid && (ticketConfirmed || (form.confirmation_note.trim() && form.confirmed_by.trim()))))
   const title = t(accounting ? 'deferral.review' : create ? 'deferral.create' : 'deferral.reverse')
   const close = () => { if (!busy) onClose() }
   function change(key, value) {
@@ -153,6 +160,11 @@ function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
   </>}>
     <div className="case__stack">
       <p>{t(create ? 'deferral.note' : accounting ? 'deferral.accountingNote' : 'deferral.reverseNote')}</p>
+      {!accounting ? <ol className="deferral-steps" aria-label={t('deferral.steps')}>
+        <li aria-current={!preview ? 'step' : undefined}>{t('deferral.stepEvidence')}</li>
+        <li aria-current={preview ? 'step' : undefined}>{t('deferral.stepPreview')}</li>
+        <li>{t('deferral.stepConfirm')}</li>
+      </ol> : null}
       <fieldset disabled={busy} className="case__stack">
         {create ? <>
           <label className="label">{t('deferral.contract')}
@@ -168,6 +180,7 @@ function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
             </label>) : <p>{t('deferral.noEligible')}</p>}
           </fieldset>
           {field('service_from', 'date')}{field('service_until', 'date')}
+          {form.service_from && form.service_until && !datesValid ? <p role="alert">{t('deferral.dateOrder')}</p> : null}
           <label className="label">{t('deferral.issue_uid')}
             <select className="field" value={form.issue_uid} onChange={(e) => change('issue_uid', e.target.value)}>
               <option value="">{t('deferral.useNote')}</option>
@@ -175,6 +188,7 @@ function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
             </select>
           </label>
           {field('confirmation_note')}{field('confirmed_by')}
+          {form.issue_uid && !ticketConfirmed ? <p role="note">{t('deferral.ticketPending')}</p> : null}
           <label className="label">{t('deferral.evidence')}
             <input type="file" onChange={(e) => upload(e.target.files?.[0])} />
           </label>
@@ -195,11 +209,14 @@ function DeferralDrawer({ action, data, entries, onClose, onChanged }) {
         </> : null}
       </fieldset>
       {preview ? <section aria-label={t('deferral.preview')} className="case__stack" aria-live="polite">
+        <strong>{t('deferral.tailPolicy')}</strong>
         <ul>{preview.moves.map((m) => <li key={m.n}>{t('deferral.cycle', { n: m.n })}: {' '}
           {fmtDate(create ? m.old_due_date : m.new_due_date)} → {fmtDate(create ? m.new_due_date : m.old_due_date)}</li>)}</ul>
         <p>{t('deferral.newEnd')}: {fmtDate(preview.contract_end_after)}</p>
         <p>{t('deferral.overdueAfter')}: {money(preview.collection_overdue_after)}</p>
         <p>{t('deferral.penaltyAfter')}: {money(preview.penalty_after)}</p>
+        <p>{t('deferral.peakOutstanding')}: {money(data.work_item?.payment_position?.peak_outstanding)}</p>
+        <p className="scr-meta">{t('deferral.balanceNote')}</p>
       </section> : null}
       {problem ? <Problem problem={problem} /> : null}
     </div>

@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link, useLocation } from 'react-router-dom'
 import { api } from '../lib/api.js'
 import { usePrefs } from '../lib/prefs.jsx'
 import { money } from '../lib/format.js'
@@ -7,11 +8,13 @@ import { useDictionary, active, labelFor } from '../lib/dictionaries.js'
 import { Drawer } from './Drawer.jsx'
 import { Problem } from './Problem.jsx'
 import { useToast } from './Toast.jsx'
+import { internalOrigin, recordState } from '../lib/origin.js'
 
 /** Ending a contract preserves the actual balance and money records. */
 export function TerminateDrawer({ open, onClose, customerUid, outstanding, onDone }) {
   const { t, lang } = usePrefs()
   const identity = useIdentity()
+  const location = useLocation()
   const toast = useToast()
   const causes = useDictionary('TERMINATION_CAUSE')
   const [cause, setCause] = useState('')
@@ -54,6 +57,8 @@ export function TerminateDrawer({ open, onClose, customerUid, outstanding, onDon
       open={open}
       onClose={close}
       title={t('record.terminateTitle')}
+      headAction={<Link className="btn btn--sm" to={`/audit/terminated?${new URLSearchParams({ customer_uid: customerUid })}`}
+        state={recordState(internalOrigin(location, 'record.terminateTitle'))}>{t('history.terminationButton')}</Link>}
       footer={(
         <>
           <button type="button" className="btn" onClick={close}>{t('common.cancel')}</button>

@@ -42,9 +42,10 @@ export function Book() {
   useCrumb('group.mine', 'nav.book')
 
   const [params, setParams] = useSearchParams()
-  const [q, setQ] = useState('')
-  const [sort, setSort] = useState('aggregate_overdue')
-  const [dir, setDir] = useState('desc')
+  const q = params.get('q') || ''
+  const sort = params.get('sort') || 'aggregate_overdue'
+  const dir = params.get('dir') || 'desc'
+  const entity = params.get('entity') || ''
   const [data, setData] = useState(null)
   const [problem, setProblem] = useState(null)
   const [closed, setClosed] = useState({})
@@ -64,8 +65,21 @@ export function Book() {
     // The queue, the KPIs and every money export stay contract-only.
     const p = { sort, dir, identities: 1 }
     if (q.trim()) p.q = q.trim()
+    if (entity) p.entity = entity
     return p
-  }, [q, sort, dir])
+  }, [q, sort, dir, entity])
+
+  function updateFilter(key, value) {
+    const next = new URLSearchParams(params)
+    value ? next.set(key, value) : next.delete(key)
+    next.delete('sel')
+    next.delete('cursor')
+    requestSeq.current += 1
+    setRecord(null)
+    setData(null)
+    setLoadingMore(false)
+    setParams(next, { replace: true })
+  }
 
   const listQuery = useCallback(() => ({ ...query(), limit: PAGE_SIZE }), [query])
 
@@ -133,6 +147,7 @@ export function Book() {
   useEffect(() => {
     if (!sel) { setRecord(null); return undefined }
     let alive = true
+    setRecord(null)
     setRecordProblem(null)
     api.caseDetail(sel.customer.uid)
       .then((d) => { if (alive) setRecord(d) })
@@ -190,11 +205,14 @@ export function Book() {
         <span className="lensbar__meta">{data?.meta?.source_name || ''}</span>
         <span className="spacer" />
         <input className="field lensbar__search" placeholder={t('book.search')} aria-label={t('book.search')}
-               value={q} onChange={(e) => setQ(e.target.value)} />
-        <select className="field" aria-label={t('book.sort')} value={sort} onChange={(e) => setSort(e.target.value)} style={{ width: 170 }}>
+               value={q} onChange={(e) => updateFilter('q', e.target.value)} />
+        <select className="field" aria-label={t('today.entity')} value={entity} onChange={(e) => updateFilter('entity', e.target.value)}>
+          <option value="">{t('today.entityAll')}</option><option value="EPC">EPC</option><option value="SPV">SPV</option>
+        </select>
+        <select className="field" aria-label={t('book.sort')} value={sort} onChange={(e) => updateFilter('sort', e.target.value)} style={{ width: 170 }}>
           {SORTS.map(([id, key]) => <option key={id} value={id}>{t(key)}</option>)}
         </select>
-        <button type="button" className="btn btn--sm" onClick={() => setDir(dir === 'desc' ? 'asc' : 'desc')}>
+        <button type="button" className="btn btn--sm" onClick={() => updateFilter('dir', dir === 'desc' ? 'asc' : 'desc')}>
           {dir === 'desc' ? t('book.desc') : t('book.asc')}
         </button>
         <button type="button" className="btn btn--sm" onClick={plainExport}>{t('book.exportCsv')}</button>

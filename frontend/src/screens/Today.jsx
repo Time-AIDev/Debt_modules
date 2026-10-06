@@ -40,8 +40,8 @@ export function Today() {
   useCrumb('group.mine', 'nav.today')
 
   const [params, setParams] = useSearchParams()
-  const [officer, setOfficer] = useState('')
-  const [entity, setEntity] = useState('')
+  const officer = params.get('officer') || ''
+  const entity = params.get('entity') || ''
   const [payload, setPayload] = useState(null)
   const [problem, setProblem] = useState(null)
   const [columns, setColumns] = useState(null)
@@ -54,6 +54,7 @@ export function Today() {
   const [moveFor, setMoveFor] = useState(null)
   const [moveProblem, setMoveProblem] = useState(null)
   const [moving, setMoving] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
   // feedback-r2 TASK-013/014: the supervisor's multi-select and its assign bar.
   const [selected, setSelected] = useState(() => new Set())
   const [assigning, setAssigning] = useState(false)
@@ -76,23 +77,59 @@ export function Today() {
   const itemUid = useCallback((item) => (preInstall ? item?.customer_uid : item?.customer?.uid), [preInstall])
 
   const loadVersion = useRef(0)
+  const requestQuery = useCallback(() => {
+    const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : {}
+    if (entity) query.entity = entity
+    if (!preInstall) query.limit = 50
+    return query
+  }, [officer, entity, preInstall])
   const load = useCallback(() => {
     const version = ++loadVersion.current
     setProblem(null)
     setPayload(null)
     setRecord(null)
     setSelected(new Set())
+    setLoadingMore(false)
     // feedback-r2 TASK-015: the "ยังไม่มอบหมาย" option filters through the server's
     // own unassigned desk, never by dropping rows on the client.
-    const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : {}
-    if (entity) query.entity = entity
-    const request = preInstall ? api.pipeline() : api.today(Object.keys(query).length ? query : undefined)
+    const query = requestQuery()
+    const request = preInstall ? api.pipeline(entity ? { entity } : undefined) : api.today(query)
     request
       .then((d) => { if (version === loadVersion.current) setPayload(d) })
       .catch((e) => {
         if (version === loadVersion.current) setProblem(e?.problem || { code: 'request_failed' })
       })
-  }, [officer, entity, preInstall])
+  }, [requestQuery, entity, preInstall])
+
+  const loadMore = useCallback(() => {
+    const cursor = payload?.page?.next_cursor
+    if (!cursor || loadingMore || preInstall) return
+    const version = ++loadVersion.current
+    setLoadingMore(true)
+    setProblem(null)
+    api.today({ ...requestQuery(), cursor }).then((next) => {
+      if (version !== loadVersion.current) return
+      setPayload((current) => ({ ...next, items: [...(current?.items || []), ...(next.items || [])] }))
+      setLoadingMore(false)
+    }).catch((e) => {
+      if (version !== loadVersion.current) return
+      setLoadingMore(false)
+      if (e?.problem?.code === 'today_cursor_stale') { load(); return }
+      setProblem(e?.problem || { code: 'request_failed' })
+    })
+  }, [payload?.page?.next_cursor, loadingMore, preInstall, requestQuery, load])
+
+  function updateFilter(key, value) {
+    const next = new URLSearchParams(params)
+    value ? next.set(key, value) : next.delete(key)
+    next.delete('sel')
+    loadVersion.current += 1
+    setSelected(new Set())
+    setRecord(null)
+    setPayload(null)
+    setLoadingMore(false)
+    setParams(next, { replace: true })
+  }
 
   useEffect(() => {
     load()
@@ -106,6 +143,11 @@ export function Today() {
 
   const items = payload?.items || []
   const meta = payload?.meta || {}
+  const pagingControls = payload?.page ? <div className="history-pagination today__paging" aria-live="polite">
+    <span>{t('history.loaded', { n: items.length, total: meta.total ?? items.length })}</span>
+    {payload.page.next_cursor ? <button type="button" className="btn btn--sm" disabled={loadingMore} onClick={loadMore}>
+      {loadingMore ? t('common.loading') : t('history.loadMore')}</button> : null}
+  </div> : null
 
   const tierLabel = useCallback((tier) => {
     const key = lang === 'en' ? 'tier_labels_en' : 'tier_labels_th'
@@ -121,12 +163,13 @@ export function Today() {
   // R-A: rows worked today leave their tier group and collect in one collapsed group
   // at the bottom; the tier order inside both groups is untouched.
   const allGroups = [
-    ...(pendingRows.length ? [{ tier: 'PAYMENT_PENDING', label: t('today.paymentPending'), rows: pendingRows }] : []),
+    ...(pendingRows.length || meta.pending_unworked_count ? [{ tier: 'PAYMENT_PENDING', label: t('today.paymentPending'), rows: pendingRows }] : []),
     ...grouped,
   ]
   const unworkedGroups = allGroups
     .map((g) => ({ ...g, rows: g.rows.filter((r) => !r.worked_today) }))
-    .filter((g) => g.rows.length > 0)
+    .filter((g) => g.rows.length > 0 || (g.tier === 'PAYMENT_PENDING'
+      ? meta.pending_unworked_count : meta.unworked_tier_counts?.[g.tier]) > 0)
   const workedRows = allGroups.flatMap((g) => g.rows.filter((r) => r.worked_today))
   const preInstallGroups = useMemo(() => [
     { tier: 'PREINSTALL_BLOCKED', label: t('pipeline.blocked'), rows: items.filter((item) => !passed(item)) },
@@ -302,20 +345,20 @@ export function Today() {
   const canSelect = atLeast('OFFICER')
   const canAssign = atLeast('SUPERVISOR')
   const canSplit = atLeast('MANAGER')
-  const filterControls = !preInstall ? (
+  const filterControls = (
     <div className="today__filters">
-      <select className="field today__filter" aria-label={t('today.officer')} value={officer}
-              onChange={(e) => setOfficer(e.target.value)}>
+      {!preInstall ? <select className="field today__filter" aria-label={t('today.officer')} value={officer}
+              onChange={(e) => updateFilter('officer', e.target.value)}>
         {officerOptions.map((o) => <option key={o.id} value={o.id}>{o.label}</option>)}
-      </select>
+      </select> : null}
       <select className="field today__filter" aria-label={t('today.entity')} value={entity}
-              onChange={(e) => setEntity(e.target.value)}>
+              onChange={(e) => updateFilter('entity', e.target.value)}>
         <option value="">{t('today.entityAll')}</option>
         <option value="EPC">EPC</option>
         <option value="SPV">SPV</option>
       </select>
     </div>
-  ) : null
+  )
 
   // F17 / TASK-030: the summary follows the list on screen — the filtered officer's
   // own entry, else "*" (the whole list served, the unassigned desk included).
@@ -431,6 +474,7 @@ export function Today() {
               onMove={(card) => { setMoveProblem(null); setMoveFor(card) }}
             />
           ) : null}
+          {pagingControls}
         </>
       ) : (
         <div className="work work--split today__work">
@@ -488,7 +532,7 @@ export function Today() {
               <div className="today__empty">
                 <p className="empty">{t('today.empty')}</p>
                 {officer ? (
-                  <button type="button" className="btn btn--quiet btn--sm" onClick={() => setOfficer('')}>{t('today.clearFilter')}</button>
+                  <button type="button" className="btn btn--quiet btn--sm" onClick={() => updateFilter('officer', '')}>{t('today.clearFilter')}</button>
                 ) : null}
               </div>
             ) : null}
@@ -496,15 +540,17 @@ export function Today() {
               <Group
                 key={g.tier}
                 label={g.label}
-                count={g.rows.length}
+                count={preInstall ? g.rows.length : (g.tier === 'PAYMENT_PENDING'
+                  ? meta.pending_unworked_count : meta.unworked_tier_counts?.[g.tier]) ?? g.rows.length}
                 icon={preInstall ? (g.tier === 'PREINSTALL_READY' ? 'done' : 'do') : tierStatus(g.tier).kind}
                 open={!closed[g.tier]}
                 onToggle={() => setClosed((c) => ({ ...c, [g.tier]: !c[g.tier] }))}
               >
                 {g.rows.map(preInstall ? renderPreInstallRow : renderRow)}
+                {!g.rows.length ? <p className="scr-meta today__pad">{t('history.notLoaded')}</p> : null}
               </Group>
             ))}
-            {!preInstall && workedRows.length ? (
+            {!preInstall && (workedRows.length || meta.worked_today_count > 0) ? (
               <Group
                 label={t('today.workedGroup')}
                 count={meta.worked_today_count ?? workedRows.length}
@@ -515,6 +561,7 @@ export function Today() {
                 {workedRows.map(renderRow)}
               </Group>
             ) : null}
+            {pagingControls}
           </ListPanel>
 
           <div className="today__case">

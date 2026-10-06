@@ -273,6 +273,7 @@ describe('แหล่งข้อมูล (design D)', () => {
     const user = userEvent.setup()
     renderScreen(<DataSources />)
     await user.click(await screen.findByRole('button', { name: /^ไฟล์ชีต/ }))
+    await user.selectOptions(screen.getByRole('combobox', { name: 'รูปแบบข้อมูลที่ต้องการนำเข้า' }), 'fullbook')
     const install = screen.getByRole('button', { name: 'นำเข้าเป็นสมุดงาน' })
     expect(install).toBeDisabled()                                    // an officer checks, never installs
     expect(within(screen.getByRole('region', { name: 'ไฟล์ชีต' })).getByText('เฉพาะผู้จัดการขึ้นไป')).toBeInTheDocument()

@@ -33,6 +33,15 @@ beforeEach(() => {
 })
 
 describe('the shell', () => {
+  it('redirects legacy termination history with its exact customer filter into Action log', async () => {
+    api.terminated.mockResolvedValue({ entries: [], meta: { total: 0, actors: [] } })
+    renderApp(<App />, { route: '/terminated?customer_uid=c1' })
+    await waitFor(() => expect(api.terminated).toHaveBeenCalledWith({ customer_uid: 'c1' }))
+    const rail = screen.getByRole('navigation', { name: 'Volt Debt' })
+    expect(rail.querySelector('[title="บันทึกการใช้งาน"]')).toHaveClass('rail__link--on')
+    expect(rail.querySelector('[title="สัญญาที่ยุติ"]')).toBeNull()
+  })
+
   it('draws the consolidated rail rows with served badge counts', async () => {
     renderApp(<App />)
     const rail = await screen.findByRole('navigation', { name: 'Volt Debt' })

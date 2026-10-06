@@ -11,6 +11,7 @@ import { StatusIcon, StatusPill } from '../components/StatusIcon.jsx'
 import { Icon } from '../components/Icon.jsx'
 import { Popover } from '../components/Popover.jsx'
 import { PeakIntake } from '../components/PeakIntake.jsx'
+import { ImportPreview } from '../components/ImportPreview.jsx'
 import { Problem, LoadError } from '../components/Problem.jsx'
 import { useToast } from '../components/Toast.jsx'
 import { Dropzone, FileInput, OperationProgress, Progress, codeWord, runProblem } from '../components/import/parts.jsx'
@@ -76,6 +77,7 @@ export function DataSources() {
   const [pullProblem, setPullProblem] = useState(null)
   const [retestProblem, setRetestProblem] = useState(null)
   const [sheet, setSheet] = useState(null)
+  const [sheetProfile, setSheetProfile] = useState('debt_status')
   const [sheetProblem, setSheetProblem] = useState(null)
   const [allRefusals, setAllRefusals] = useState(false)
   const [allRuns, setAllRuns] = useState(false)
@@ -162,7 +164,8 @@ export function DataSources() {
     const controller = new AbortController()
     sheetAbort.current = controller
     setSheetTask({ phase: 'uploading', uploadedBytes: 0, totalBytes: file.size })
-    const run = await api.createImport(file, { signal: controller.signal, onProgress: setSheetTask })
+    const run = await api.createImport(file, { signal: controller.signal, onProgress: setSheetTask,
+      ...(sheetProfile !== 'fullbook' ? { profile: sheetProfile } : {}) })
     setSheet({ run, file: file.name, raw: file })
     setSheetTask(null)
     toast(t('data.checked'))
@@ -493,15 +496,23 @@ export function DataSources() {
               <div className="imp__head imp__head--act">
                 <h2 className="imp__h2">{t('data.sourceSheet')}</h2>
                 <span className="spacer" />
-                <span className="imp__act">
+                {sheetProfile === 'fullbook' ? <span className="imp__act">
                   <button type="button" className="btn btn--primary" disabled={!!busy || !mgr || !sr}
                           onClick={() => { setInstallProblem(null); setAskInstall(true) }}
                           title={!mgr ? t('data.managerOnly') : !sr ? t('data.sheetInstallFirst') : undefined}>
                     {t('data.sheetInstall')}
                   </button>
                   {mgr ? null : <span className="imp__reason">{t('data.managerOnly')}</span>}
-                </span>
+                </span> : null}
               </div>
+              <label className="label">{t('supplement.profileLabel')}
+                <select className="field" value={sheetProfile} disabled={!!busy}
+                  onChange={(e) => { setSheetProfile(e.target.value); setSheet(null); setSheetProblem(null) }}>
+                  {['debt_status', 'contract_supplement', 'fullbook'].map((profile) => <option key={profile} value={profile}>
+                    {t(`supplement.profile.${profile}`)}</option>)}
+                </select>
+              </label>
+              <p className="scr-meta">{t(sheetProfile === 'fullbook' ? 'data.sheetInstallNote' : 'supplement.tabsNote')}</p>
               <InstallConfirm open={askInstall} onClose={() => setAskInstall(false)} onConfirm={installFile}
                               busy={busy === 'install'} danger={!!retire?.needs_confirm}
                               title={t('data.sheetInstall')} confirmLabel={t('data.sheetInstall')}>
@@ -518,7 +529,8 @@ export function DataSources() {
               )}
               <FileInput inputRef={sheetRef} label={t('data.chooseFile')} disabled={!!busy} onFile={checkFile} />
               <Problem problem={sheetProblem} />
-              {sr ? (
+              {sr?.preview ? <ImportPreview key={sr.preview.uid} preview={sr.preview} canApply={mgr}
+                onApplied={() => { load(); refreshImports().catch(() => {}) }} /> : sr ? (
                 <section className="imp__box imp__box--flush">
                   <div className="imp__receiptHead">
                     <h3 className="imp__h3">{t('data.receipt', { file: sheet.file })}</h3>

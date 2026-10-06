@@ -15,7 +15,7 @@ it('shows full evidence and an exact snapshot link in audit details', async () =
   fireEvent.click(await screen.findByRole('button', { name: 'ยุติสัญญา' }))
   expect(screen.getByRole('dialog', { name: 'รายละเอียดกิจกรรม' })).toBeInTheDocument()
   expect(screen.getByText(/เหตุผลหนึ่ง/).textContent).toContain('\nเหตุผลสอง')
-  expect(screen.getByRole('link', { name: 'เปิดเคสย้อนหลัง' })).toHaveAttribute('href', '/terminated/archive-1')
+  expect(screen.getByRole('link', { name: 'เปิดเคสย้อนหลัง' })).toHaveAttribute('href', '/audit/terminated/archive-1')
   fireEvent.click(screen.getByRole('button', { name: 'ปิด' }))
   expect(screen.queryByRole('dialog')).toBeNull()
 })

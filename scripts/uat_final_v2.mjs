@@ -29,6 +29,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { createRequire } from 'node:module'
 import { spawnSync, execFileSync } from 'node:child_process'
+import { safeClose } from './browser_support.mjs'
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..')
 const require = createRequire(path.join(ROOT, 'frontend', 'package.json'))
@@ -84,9 +85,6 @@ async function withPageRetry(label, holder, fn, retries = 1) {
     await safeClose(holder.page)
     holder.page = await newPage(holder.browser)
   })
-}
-async function safeClose(page) {
-  try {       await safeClose(page) } catch { /* the frame may already be gone */ }
 }
 function mergeErrors(into, from) {
   if (!into || !from) return into

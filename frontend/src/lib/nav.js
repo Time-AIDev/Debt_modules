@@ -13,7 +13,6 @@ export const NAV_GROUPS = [
     items: [
       { id: 'today', to: '/', icon: 'M8 2v4M16 2v4M3 10h18M5 6h14v15H5z', badge: 'today' },
       { id: 'calendar', to: '/calendar', icon: 'M8 2v4M16 2v4M3 10h18M5 6h14v15H5zM9 14h2M15 14h2M9 18h2' },
-      { id: 'terminated', to: '/terminated', icon: 'M5 4h14v16H5zM9 9h6M9 13h6' },
       { id: 'book', to: '/book', icon: 'M4 4h16v16H4zM8 4v16', badge: 'book' },
     ],
   },
@@ -39,7 +38,7 @@ export const NAV_GROUPS = [
 export const NAV_ITEMS = NAV_GROUPS.flatMap((g) => g.items)
 
 export function navItemByPath(pathname) {
-  if (pathname.startsWith('/terminated')) return NAV_ITEMS.find((i) => i.id === 'terminated') || null
+  if (pathname.startsWith('/audit') || pathname.startsWith('/terminated')) return NAV_ITEMS.find((i) => i.id === 'audit') || null
   if (pathname.startsWith('/customers')) return NAV_ITEMS.find((i) => i.id === 'today') || null
   return NAV_ITEMS.find((i) => i.to === pathname) || null
 }

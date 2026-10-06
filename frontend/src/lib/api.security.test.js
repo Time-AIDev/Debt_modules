@@ -17,6 +17,19 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('production write transport', () => {
+  it('uses the case version for notes while other writes retain their numeric version', async () => {
+    const detail = response({ customer: { uid: 'customer' } }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce(response({}, 8)).mockResolvedValueOnce(response({}, 9))
+    await api.caseDetail('customer')
+    await api.addCaseNote('customer', { note: 'ตรวจยอด' })
+    expect(fetch.mock.calls[1][1].headers['If-Match']).toBe('case:customer:2')
+    await api.setNextAction('customer', { next_action: 'CALL' })
+    expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('8')
+  })
+
   it('reuses an idempotency key after a connection failure', async () => {
     const fetch = vi.spyOn(globalThis, 'fetch')
       .mockRejectedValueOnce(new TypeError('connection lost'))

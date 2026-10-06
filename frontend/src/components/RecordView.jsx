@@ -24,6 +24,7 @@ import { ManualInvoiceMatch } from './ManualInvoiceMatch.jsx'
 import { PreInstallCard } from './PreInstallCard.jsx'
 import { CycleGrid } from './CycleGrid.jsx'
 import { ServiceDeferrals, InvoiceDeferral } from './ServiceDeferrals.jsx'
+import { InstallationConfirmation } from './InstallationConfirmation.jsx'
 import { OfficerScoreboard } from './OfficerScoreboard.jsx'
 import { ContractDetailsDrawer } from './ContractDetailsDrawer.jsx'
 import { SocialComposer } from './SocialComposer.jsx'
@@ -537,6 +538,7 @@ export function RecordView({
   const cycleCard = (title) => (
     <Card title={title} extra={summary ? <InfoPopover>{provenance}</InfoPopover> : null}>
       <div className="card__body case__stack">
+        <InstallationConfirmation data={data} onChanged={onChanged} />
         {summary ? <CycleGrid summary={summary} invoices={invoices} /> : null}
         <ServiceDeferrals data={data} onChanged={onChanged} />
       </div>

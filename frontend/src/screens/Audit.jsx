@@ -8,6 +8,7 @@ import { StatusPill } from '../components/StatusIcon.jsx'
 import { auditStatus } from '../lib/status.js'
 import { LoadError } from '../components/Problem.jsx'
 import { thaiTime, useHistoryRead, useHistoryScroll } from './Terminated.jsx'
+import { ActionLogNav } from '../components/ActionLogNav.jsx'
 
 // Calendar dates on this screen mean Bangkok days, with an exclusive upper bound.
 export function auditDateRange(since, until) {
@@ -29,7 +30,7 @@ function AuditDetail({ entry, onClose, origin }) {
     <div className="history-record"><dl className="history-fields">
       {[['เวลา (ไทย)', thaiTime(entry.at)], ['ผู้ดำเนินการ', entry.actor_claimed || '—'], ['กิจกรรม', d.activity_th || entry.act || `${entry.verb} ${entry.route_template}`], ['ลูกค้า', d.customer_name || 'ไม่พบข้อมูลลูกค้า'], ['เป้าหมาย', entry.subject_uid || entry.subject_type || '—'], ['ผลลัพธ์', entry.outcome === 'OK' ? 'สำเร็จ' : 'ไม่สำเร็จ'], ['เหตุผลที่บันทึกไว้', d.reason || 'ไม่พบเหตุผลที่มีหลักฐาน'], ['เลขอ้างอิง', entry.request_id], ['ข้อผิดพลาด', entry.error_code || '—']].map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
     </dl>
-    {d.case_url ? <Link className="btn btn--sm" to={d.case_url} state={{ origin }}>เปิดเคส{d.case_url.startsWith('/terminated/') ? 'ย้อนหลัง' : ''}</Link> : <p className="scr-meta">เปิดเคสไม่ได้ — เก็บเลขอ้างอิงไว้สำหรับตรวจสอบ</p>}
+    {d.case_url ? <Link className="btn btn--sm" to={d.case_url.replace(/^\/terminated\//, '/audit/terminated/')} state={{ origin }}>เปิดเคส{d.case_url.includes('/terminated/') ? 'ย้อนหลัง' : ''}</Link> : <p className="scr-meta">เปิดเคสไม่ได้ — เก็บเลขอ้างอิงไว้สำหรับตรวจสอบ</p>}
     <details><summary>รายละเอียดและ hash สำหรับตรวจสอบ</summary><pre className="history-json">{JSON.stringify({ detail: entry.detail, hash: entry.hash, prev_hash: entry.prev_hash }, null, 2)}</pre></details>
     </div>
   </dialog>
@@ -57,6 +58,7 @@ export function Audit() {
   }
   return <div className="stack">
     <div className="lensbar"><h1 className="lensbar__title">{t('nav.audit')}</h1><span className="spacer" /><button type="button" className="btn btn--sm" onClick={() => api.auditVerify().then(setVerify).catch(() => setVerify({ ok: false }))}>{t('audit.verify')}</button></div>
+    <ActionLogNav />
     {verify ? <span><StatusPill kind={verify.ok || verify.valid ? 'done' : 'problem'}>{verify.ok || verify.valid ? t('audit.chainOk') : t('audit.chainBad')}</StatusPill></span> : null}
     <section className="card">
       <form className="history-filters" onSubmit={(e) => e.preventDefault()}>

@@ -133,6 +133,7 @@ function signalAuth(status, body) {
   clearTabToken()
   clearPendingMutations()
   resourceVersions.clear()
+  caseVersions.clear()
   seenStateVersion = null
   try {
     if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
@@ -153,6 +154,7 @@ restorePendingMutations()
 const responseMutations = new WeakMap()
 const backgroundResponses = new WeakSet()
 const resourceVersions = new Map()
+const caseVersions = new Map()
 let seenStateVersion = null
 
 function resourceKey(path) {
@@ -164,6 +166,13 @@ function resourceKey(path) {
 }
 
 function noteState(response, path) {
+  const scope = /^\/v1\/cases\/by-customer\/([^/]+)/.exec(path)
+  const token = response.headers?.get?.('x-volt-case-version')
+  if (scope && typeof token === 'string' && token.startsWith(`case:${decodeURIComponent(scope[1])}:`)
+      && /^case:[A-Za-z0-9_.:-]{1,200}:\d{1,20}$/.test(token)
+      && response.ok && !backgroundResponses.has(response)) {
+    caseVersions.set(decodeURIComponent(scope[1]), token)
+  }
   const raw = response.headers?.get?.('x-volt-state-version')
   if (!/^\d+$/.test(String(raw))) return
   const version = String(raw)
@@ -193,7 +202,8 @@ function restorePendingMutations() {
     for (const entry of entries) {
       if (!entry || !/^[a-f0-9]{64}$/.test(entry.fingerprint) ||
           !/^[A-Za-z0-9_.:-]{1,200}$/.test(entry.key) || !Number.isFinite(entry.at) || entry.at <= 0 ||
-          !(entry.expectedVersion === null || /^\d{1,20}$/.test(String(entry.expectedVersion)))) throw new Error('metadata')
+          !(entry.expectedVersion === null || /^\d{1,20}$/.test(String(entry.expectedVersion))
+            || /^case:[A-Za-z0-9_.:-]{1,200}:\d{1,20}$/.test(String(entry.expectedVersion)))) throw new Error('metadata')
       pendingMutations.set(entry.fingerprint, {
         key: entry.key, at: entry.at, expectedVersion: entry.expectedVersion, persistent: true,
       })
@@ -227,6 +237,8 @@ function acceptAuthenticatedLogin(body) {
   // metadata must never become an instruction submitted by the new identity.
   clearPendingMutations()
   resourceVersions.clear()
+  caseVersions.clear()
+  seenStateVersion = null
   return acceptLogin(body)
 }
 
@@ -289,8 +301,10 @@ function mutationHeaders(path, signature) {
     if (pendingMutations.size >= PENDING_MAX_ENTRIES || totalBytes > PENDING_MAX_BYTES) {
       throw pendingProblem('pending_operations_full', 'มีงานที่ผลลัพธ์ยังไม่ยืนยันมากเกินไป กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
     }
+    const caseNote = /^\/v1\/cases\/by-customer\/([^/]+)\/notes(?:\?|$)/.exec(path)
     operation = { key: uploadId(), at: Date.now(),
-      expectedVersion: resourceVersions.get(resourceKey(path)) ?? seenStateVersion,
+      expectedVersion: (caseNote && caseVersions.get(decodeURIComponent(caseNote[1])))
+        || resourceVersions.get(resourceKey(path)) || seenStateVersion,
       persistent: !signature.startsWith('volatile:') }
     pendingMutations.set(signature, operation)
     if (operation.persistent) {
@@ -590,7 +604,6 @@ export const api = {
   boardMove: (payload) => post('/v1/board/moves', payload),
   recoveryBoardMove: (payload) => post('/v1/recovery-board/moves', payload),
   cases: (params) => get('/v1/cases', params),
-  caseDetail: (uid) => get(`/v1/cases/${uid}`),
   advanceCase: (uid, payload) => post(`/v1/cases/${uid}:advance`, payload),
   cashCases: () => get('/v1/cash-cases'),
   advanceCashCase: (uid, payload) => post(`/v1/cash-cases/${uid}:advance`, payload),
@@ -625,6 +638,7 @@ export const api = {
   previewServiceDeferralReverse: (uid, row, payload) => post(`/v1/contracts/${uid}/service-deferrals/${row}/reverse-preview`, payload),
   reverseServiceDeferral: (uid, row, payload) => post(`/v1/contracts/${uid}/service-deferrals/${row}/reverse`, payload),
   reviewServiceDeferral: (uid, row, payload) => post(`/v1/contracts/${uid}/service-deferrals/${row}/accounting-review`, payload),
+  accountingHistory: (params) => get('/v1/service-deferrals/history', params),
   recordReceipt: (payload) => post('/v1/receipts', payload),
   timeline: (customerUid) => get(`/v1/customers/${customerUid}/timeline`),
   intercompanyDocs: (params) => get('/v1/intercompany/docs', params),
@@ -742,7 +756,13 @@ export const api = {
   migrationReport: () => get('/v1/migration/report'),
   gapList: () => get('/v1/migration/gap-list'),
   // Ruling 71/72 (round 5) — the officer's own upload and the governed export.
-  createImport: (file, options) => postOperation('/v1/imports:start', file, {}, options),
+  createImport: (file, options = {}) => {
+    const { profile, ...operationOptions } = options
+    const query = profile ? `?profile=${encodeURIComponent(profile)}` : ''
+    return postOperation(`/v1/imports:start${query}`, file, {}, operationOptions)
+  },
+  applyImportPreview: (uid, payload) => post(`/v1/imports/previews/${encodeURIComponent(uid)}:apply`, payload),
+  confirmInstallation: (uid, payload) => post(`/v1/contracts/${encodeURIComponent(uid)}/installation-confirmation`, payload),
   // Fix-all leg S (Arina 2026-09-24): a manager installs the checked New Order Master
   // as the book; the review list names where PEAK and the sheet disagree.
   // `confirm` echoes the count of customers the install would retire (the check serves it).
@@ -833,6 +853,7 @@ export const api = {
     clearTabToken()
     clearPendingMutations()
     resourceVersions.clear()
+    caseVersions.clear()
     seenStateVersion = null
     return result
   },

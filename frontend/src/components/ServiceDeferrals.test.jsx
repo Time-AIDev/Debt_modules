@@ -112,6 +112,8 @@ it('records accounting findings and PEAK document references separately', async 
   const user = userEvent.setup()
   api.reviewServiceDeferral.mockResolvedValue({ deferral: DEFERRAL })
   renderScreen(<ServiceDeferrals data={{ ...DATA, service_deferrals: [DEFERRAL] }} />)
+  expect(screen.getByRole('link', { name: 'ดูประวัติการตรวจสอบบัญชี' })).toHaveAttribute('href',
+    '/audit/accounting-reviews?customer_uid=c1&contract_uid=k1&deferral_uid=d1')
   await user.click(screen.getByRole('button', { name: 'บันทึกการตรวจสอบของบัญชี' }))
   await user.type(screen.getByLabelText('ผลการตรวจสอบ'), 'ปรับเอกสารแล้ว')
   await user.selectOptions(screen.getByLabelText('สถานะตรวจสอบของบัญชี'), 'REVIEWED')

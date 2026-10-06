@@ -7,6 +7,7 @@ import { CycleGrid } from '../components/CycleGrid.jsx'
 import { DataTable } from '../components/DataTable.jsx'
 import { LoadError } from '../components/Problem.jsx'
 import { date } from '../lib/format.js'
+import { ActionLogNav } from '../components/ActionLogNav.jsx'
 import './history.css'
 
 export const causeLabel = (value) => ({ DEFAULT: 'ผิดนัด / เรียกคืน', CUSTOMER_REQUEST: 'ลูกค้าขอยุติ' }[value] || value || 'ไม่พบหลักฐาน')
@@ -37,13 +38,15 @@ export function useHistoryScroll(data, location) {
 }
 
 export function Terminated() {
-  useCrumb('group.mine', 'nav.terminated')
+  useCrumb('group.system', 'nav.terminated')
   const [params, setParams] = useSearchParams()
   const location = useLocation()
   const query = params.toString()
   const { data, problem, loading, retry } = useHistoryRead(query, () => api.terminated(Object.fromEntries(params)))
   useHistoryScroll(data, location)
   const [actors, setActors] = useState([])
+  const origin = location.state?.origin
+  const back = origin?.to?.startsWith('/') && !origin.to.startsWith('//') ? origin : null
   useEffect(() => { if (data?.meta?.actors) setActors(data.meta.actors) }, [data])
   const update = (name, value) => {
     const next = new URLSearchParams(params)
@@ -53,7 +56,9 @@ export function Terminated() {
   }
   const page = Number(params.get('page') || 1)
   return <div className="stack">
+    {back ? <Link className="scr-meta" to={back.to} state={{ ...back.state, restoreScroll: back.scrollY }}>← กลับหน้าเคส</Link> : null}
     <div className="lensbar"><h1 className="lensbar__title">สัญญาที่ยุติ</h1><span className="lensbar__meta">{data ? `${data.meta.total} ลูกค้า` : ''}</span></div>
+    <ActionLogNav />
     <p className="scr-meta">ค้นหาเหตุผลและเปิดข้อมูลเคสที่เก็บไว้ย้อนหลัง • ไม่รวมการชำระครบตามปกติ</p>
     <section className="card">
       <form className="history-filters" onSubmit={(e) => e.preventDefault()}>
@@ -73,7 +78,7 @@ export function Terminated() {
           { key: 'causes', label: 'สาเหตุ', render: (r) => (r.causes || []).map(causeLabel).join(', ') || 'ไม่พบหลักฐาน' },
           { key: 'reason', label: 'เหตุผล', render: (r) => <div className="history-reason">{r.reason || 'ไม่พบเหตุผลที่บันทึกไว้'}</div> },
           { key: 'source', label: 'แหล่งข้อมูล', render: (r) => sourceLabel(r.source) },
-          { key: 'open', label: 'เคสย้อนหลัง', render: (r) => <Link className="btn btn--sm" to={`/terminated/${r.archive_uid}`} state={{ origin: { to: location.pathname + location.search, scrollY: window.scrollY } }} aria-label={`ดูเคสย้อนหลัง ${r.customer_name}`}>ดูเคสย้อนหลัง</Link> },
+          { key: 'open', label: 'เคสย้อนหลัง', render: (r) => <Link className="btn btn--sm" to={`/audit/terminated/${r.archive_uid}`} state={{ origin: { to: location.pathname + location.search, scrollY: window.scrollY, state: location.state } }} aria-label={`ดูเคสย้อนหลัง ${r.customer_name}`}>ดูเคสย้อนหลัง</Link> },
         ]} />
         <div className="history-pagination"><button className="btn btn--sm" disabled={page <= 1} onClick={() => update('page', String(page - 1))}>ก่อนหน้า</button><span>หน้า {page} / {Math.max(1, Math.ceil(data.meta.total / 50))}</span><button className="btn btn--sm" disabled={page * 50 >= data.meta.total} onClick={() => update('page', String(page + 1))}>ถัดไป</button></div>
       </> : null}
@@ -93,16 +98,17 @@ function ReadRows({ title, rows }) {
 }
 
 export function ArchivedCase() {
-  useCrumb('group.mine', 'nav.terminated')
+  useCrumb('group.system', 'nav.terminated')
   const { uid } = useParams()
   const location = useLocation()
   const { data, problem, loading, retry } = useHistoryRead(uid, () => api.terminatedCase(uid))
   const [tab, setTab] = useState('contracts')
   useEffect(() => setTab('contracts'), [uid])
   const origin = location.state?.origin
-  const back = origin?.to?.startsWith('/') && !origin.to.startsWith('//') ? origin.to : '/terminated'
+  const back = origin?.to?.startsWith('/') && !origin.to.startsWith('//') ? origin.to : '/audit/terminated'
   return <div className="stack archive-case">
-    <Link className="scr-meta" to={back} state={{ restoreScroll: origin?.scrollY }}>← {back.startsWith('/audit') ? 'กลับบันทึกการใช้งาน' : 'กลับสัญญาที่ยุติ'}</Link>
+    <Link className="scr-meta" to={back} state={{ ...origin?.state, restoreScroll: origin?.scrollY }}>← {back === '/audit' || back.startsWith('/audit?') ? 'กลับบันทึกการใช้งาน' : 'กลับสัญญาที่ยุติ'}</Link>
+    <ActionLogNav />
     {loading ? <p role="status">กำลังโหลดเคสย้อนหลัง…</p> : problem ? <LoadError problem={problem} onRetry={retry} /> : data ? <>
       <section className="card"><header className="card__head"><h1>{data.customer_name}</h1><span className="pill pill--done">อ่านอย่างเดียว</span></header>
         <div className="history-record"><p className="scr-meta">{data.volt_id || data.customer_no} · เก็บข้อมูล {thaiTime(data.captured_at)}</p>

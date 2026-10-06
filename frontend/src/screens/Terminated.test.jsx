@@ -17,7 +17,7 @@ it('reads the archive without offering case actions and preserves multiline reas
 it('keeps archive filters in the URL and provides an accessible case link', async () => {
   api.terminated.mockResolvedValue({ entries: [{ archive_uid: 'a', customer_name: 'ลูกค้า ข', customer_no: 'C1', causes: ['DEFAULT'], reason: 'เหตุผลครบ' }], meta: { total: 1, actors: [] } })
   renderScreen(<Terminated />, { route: '/terminated?q=C1' })
-  expect(await screen.findByRole('link', { name: /ดูเคสย้อนหลัง/ })).toHaveAttribute('href', '/terminated/a')
+  expect(await screen.findByRole('link', { name: /ดูเคสย้อนหลัง/ })).toHaveAttribute('href', '/audit/terminated/a')
   expect(screen.getByRole('searchbox', { name: /ค้นหา/ })).toHaveValue('C1')
 })
 

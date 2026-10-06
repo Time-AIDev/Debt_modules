@@ -53,13 +53,31 @@ beforeEach(() => {
 })
 
 describe('Today', () => {
+  it('restores company filtering from the URL and loads a second cursor page with the same filter', async () => {
+    const first = { ...TODAY, items: [TODAY.items[0]], page: { next_cursor: 'next' } }
+    const second = { ...TODAY, items: [TODAY.items[1]], page: { next_cursor: null } }
+    api.today.mockResolvedValueOnce(first).mockResolvedValueOnce(second)
+    const user = userEvent.setup()
+    renderScreen(<Today />, { route: '/?entity=SPV' })
+    expect(await screen.findByRole('combobox', { name: 'EPC/SPV' })).toHaveValue('SPV')
+    await user.click(await screen.findByRole('button', { name: 'โหลดลูกค้าเพิ่มเติม' }))
+    await waitFor(() => expect(api.today).toHaveBeenLastCalledWith({ entity: 'SPV', limit: 50, cursor: 'next' }))
+    expect(await screen.findByText(`โหลดแล้ว 2 จาก ${TODAY.meta.total} ราย`)).toBeInTheDocument()
+  })
+
+  it('passes the company filter to pre-install without collection paging', async () => {
+    renderScreen(<Today />, { route: '/?workstream=pre_install&entity=EPC' })
+    await waitFor(() => expect(api.pipeline).toHaveBeenCalledWith({ entity: 'EPC' }))
+    expect(screen.getByRole('combobox', { name: 'EPC/SPV' })).toHaveValue('EPC')
+  })
+
   it('filters collection by EPC beside the officer and keeps it on the board', async () => {
     const user = userEvent.setup()
     renderScreen(<Today />)
     const entity = await screen.findByRole('combobox', { name: 'EPC/SPV' })
     expect(entity).toHaveValue('')
     await user.selectOptions(entity, 'EPC')
-    await waitFor(() => expect(api.today).toHaveBeenLastCalledWith({ entity: 'EPC' }))
+    await waitFor(() => expect(api.today).toHaveBeenLastCalledWith({ entity: 'EPC', limit: 50 }))
     await user.click(screen.getByRole('radio', { name: 'บอร์ด' }))
     expect(screen.getByRole('combobox', { name: 'EPC/SPV' })).toHaveValue('EPC')
     expect(screen.getByTestId('board')).toBeInTheDocument()
