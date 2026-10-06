@@ -186,8 +186,8 @@ def arguments(argv=None):
     parser.add_argument("--dataset-file", required=True, type=Path)
     parser.add_argument("--vus", type=int, default=10)
     parser.add_argument("--duration", default="120s")
-    parser.add_argument("--profile", choices=("historical", "paged"), default="historical",
-                        help="Historical unchanged workload, or historical plus paged Today")
+    parser.add_argument("--profile", choices=("historical", "paged", "debt-workflow"), default="historical",
+                        help="Historical workload, paged Today supplement, or real Debt mutations")
     parser.add_argument("--run-id", required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--api-container")
@@ -224,7 +224,8 @@ def main(argv=None):
         if not binary:
             raise ValueError("Installed k6 executable is unavailable")
         version = subprocess.run([binary, "version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        script = SCRIPT if args.profile == "historical" else ROOT / "tests/load/capacity.js"
+        script = {"historical": SCRIPT, "paged": ROOT / "tests/load/capacity.js",
+                  "debt-workflow": ROOT / "tests/load/debt_workflow.js"}[args.profile]
         roles = actor_roles(args.base_url, users)
         meta = {"timestamp_utc": now(), "run_id": args.run_id, "vus": args.vus,
                 "duration": args.duration, "duration_seconds": args.duration_seconds,
@@ -240,6 +241,11 @@ def main(argv=None):
                     "Generator and target are co-located; results include host resource contention",
                     "Native k6 summary metrics and failed thresholds are authoritative",
                     "Dataset preparation and state priming are external and excluded from measured duration"]}
+        if args.profile == "debt-workflow":
+            meta["read_write_mix"] = {"reads": "case before each act and final conservation check",
+                "writes": ["next_action", "dc_status", "uncounted_contact", "ptp_create", "ptp_close"],
+                "complete_action_includes": ["case_read", "mutation", "conflict_refresh_retry", "idempotent_replay"],
+                "customer_partitions": "distinct per actor", "cash_conservation": True}
         atomic_json(paths["meta"], meta)
         samples, stop = [], threading.Event()
         names = list(dict.fromkeys(name for name in (args.api_container, args.db_container) if name))
