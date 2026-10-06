@@ -1,22 +1,20 @@
 """The persisted chain. Skipped entirely when no database is configured — the
 DATABASE_URL-unset path is Task 4's business, not this file's."""
-import os
-
 import pytest
 from sqlalchemy import text
 
 from app import audit, audit_store, db, migrate
 
-pytestmark = pytest.mark.skipif(not os.getenv("DATABASE_URL"),
-                                reason="no DATABASE_URL; the in-memory path is tested in test_audit_chain.py")
-
-
 @pytest.fixture(autouse=True)
-def schema():
-    with db.connect() as conn:
-        with conn.begin():
-            migrate.apply(conn)
+def schema(pg_url, pg_conn, monkeypatch):
+    # Opt in only to the disposable fixture; conftest intentionally clears any
+    # ambient DATABASE_URL before collection so deployed databases stay safe.
+    migrate.apply(pg_conn)
+    pg_conn.commit()
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    db.reset()
     yield
+    db.reset()
 
 
 def _fields(**over):
