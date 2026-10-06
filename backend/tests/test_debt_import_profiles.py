@@ -158,3 +158,22 @@ def test_profile_reader_ignores_unselected_old_tabs():
                                {"name": "Done - Cash", "rows": [CASH_HEADER]}])
     parsed = debt_imports.imports.read_xlsx(raw, selected_sheets=["Done - Cash"])
     assert [sheet["name"] for sheet in parsed] == ["Done - Cash"]
+
+
+def test_contract_enrichment_cannot_implicitly_expire_a_human_npl_decision():
+    from app import payment_overrides
+    payment_overrides.set(customer().uid, "NPL", "NOT_INSTALLED", "Reviewed by Manager", "Manager")
+    preview = staged("contract_supplement", lease=[lease()])
+    assert not preview["entries"][0]["eligible"]
+    assert "MANUAL_NPL_REVIEW" in preview["entries"][0]["review_reasons"]
+    assert payment_overrides.active()[customer().uid]["code"] == "NPL"
+
+
+def test_human_npl_added_after_preview_is_rechecked_before_any_supplement_write():
+    from app import payment_overrides
+    preview = staged("contract_supplement", lease=[lease()])
+    payment_overrides.set(customer().uid, "NPL", "NOT_INSTALLED", "New reviewed decision", "Manager")
+    with pytest.raises(errors.Problem) as failure:
+        apply(preview)
+    assert failure.value.code == "debt_import_manual_npl_review"
+    assert debt_imports.supplements() == {}

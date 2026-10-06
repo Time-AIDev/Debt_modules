@@ -238,6 +238,14 @@ def _epoch():
     return data_epoch.current() if db.configured() else 0
 
 
+def _manual_npl_holds():
+    from . import payment_overrides
+    rows = payment_overrides.active()
+    if rows is None:
+        raise problem("human_status_unavailable", "อ่านการตัดสินใจของผู้ดูแลไม่ได้ กรุณาลองใหม่", 503)
+    return {uid for uid, row in rows.items() if row.get("code") == "NPL"}
+
+
 @contextmanager
 def transaction():
     if not db.configured():
@@ -295,8 +303,12 @@ def stage(raw, filename, profile, actor, customers=None):
     customers = list(customers if customers is not None else current_customers())
     entries = build_entries(records, customers)
     if profile == "contract_supplement":
+        human_npl = _manual_npl_holds()
         entries = [entry for entry in entries if entry["product"]]
         for entry in entries:
+            if entry["customer_uid"] in human_npl:
+                entry["eligible"] = False
+                entry["review_reasons"].append("MANUAL_NPL_REVIEW")
             if entry["quality"]["unknown_money_fields"]:
                 entry["eligible"] = False
                 entry["review_reasons"].append("CONTRACT_FIELDS_UNCONFIRMED")
@@ -392,6 +404,10 @@ def apply(uid, body, actor, role):
         entries = {entry["key"]: entry for entry in payload["entries"]}
         if any(value not in entries or not entries[value]["eligible"] for value in selected):
             raise problem("review_required", "แถวที่เลือกยังมีข้อขัดแย้ง ต้องตรวจสอบก่อน", 409)
+        if payload["profile"] == "contract_supplement":
+            human_npl = _manual_npl_holds()
+            if any(entries[value]["customer_uid"] in human_npl for value in selected):
+                raise problem("manual_npl_review", "มีการตัดสินใจ NPL โดยผู้ดูแล ต้องตรวจสอบก่อนนำเข้าสัญญา", 409)
         affected = set()
         for value in selected:
             entry = entries[value]
