@@ -121,7 +121,6 @@ def test_database_book_journey_and_case_keep_component_dates_and_cash(pg_conn, p
     finally:
         if pg_conn.in_transaction():
             pg_conn.rollback()
-        for table in ('payment_reconciliation_version', 'payment_allocation', 'payment_reconciliation_exception'):
-            pg_conn.execute(text('delete from records.' + table))
+        pg_conn.execute(text('truncate records.payment_reconciliation_version, records.payment_allocation, records.payment_reconciliation_exception restart identity cascade'))
         pg_conn.commit()
         engine.dispose()
