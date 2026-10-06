@@ -26,8 +26,8 @@ def probe_health():
             with opener.open(urllib.request.Request(url, headers={"Accept": "application/json"}), timeout=2) as response:
                 status = response.status
                 body = response.read(4097)
-                valid_json = (len(body) <= 4096 and response.headers.get_content_type() == "application/json"
-                              and isinstance(json.loads(body), dict))
+                parsed = json.loads(body) if len(body) <= 4096 and response.headers.get_content_type() == "application/json" else None
+                valid_json = isinstance(parsed, dict) and parsed.get("status") == {"liveness": "ok", "readiness": "ready"}[name]
         except Exception as exc:
             status = getattr(exc, "code", None)
         endpoints[name] = {"status": status, "json": valid_json,
@@ -91,3 +91,32 @@ class Guard:
         subprocess.run(["docker", "stop", "--time", "2", self.api],
                        capture_output=True, timeout=8, check=True)
         self.evidence["isolated_api_stopped"] = True
+
+    def abort_load(self, process):
+        """Finish owned-resource shutdown even if the child exits during polling."""
+        try:
+            if process.poll() is None:
+                process.terminate()
+        except ProcessLookupError:
+            self.evidence["generator_already_exited"] = True
+        except OSError:
+            self.evidence["generator_signal_failed"] = True
+            try:
+                process.kill()
+            except OSError:
+                pass
+        finally:
+            try:
+                self.stop_isolated_api()
+            except Exception:
+                self.evidence["isolated_api_stopped"] = False
+        self.evidence["generator_alive"] = process.poll() is None
+        self.evidence["shutdown_complete"] = not self.evidence["generator_alive"] and self.evidence["isolated_api_stopped"]
+
+    def finish_monitor(self, thread):
+        thread.join(timeout=30)
+        completed = not thread.is_alive()
+        self.evidence["monitor_completed"] = completed
+        if not completed:
+            self.evidence.update(aborted=True, reason="guard_monitor_incomplete", shutdown_complete=False)
+        return completed

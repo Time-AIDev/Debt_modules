@@ -54,16 +54,67 @@ def test_probes_keep_only_status_timing_and_memory_not_raw_responses(monkeypatch
         def __exit__(self, *args):
             return False
         def read(self, cap):
-            return b'{"private":"PRIVATE-TOKEN"}'
+            return json.dumps({'status': self.expected, 'private': 'PRIVATE-TOKEN'}).encode()
     class Opener:
         def open(self, request, **kwargs):
             assert request.full_url in guard_module.URLS.values()
             assert 'Authorization' not in request.headers
-            return Response()
+            response = Response()
+            response.expected = 'ok' if request.full_url.endswith('/healthz') else 'ready'
+            return response
     monkeypatch.setattr(guard_module.urllib.request, 'build_opener', lambda *args: Opener())
     result = guard_module.probe_health()
     assert result['production_healthy'] is True
     assert 'PRIVATE-TOKEN' not in json.dumps(result)
+
+
+@pytest.mark.parametrize('body', [b'{}', b'{"status":"unavailable"}'])
+def test_http200_without_expected_health_status_fails(monkeypatch, body):
+    class Response:
+        status = 200
+        headers = SimpleNamespace(get_content_type=lambda: 'application/json')
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return False
+        def read(self, cap):
+            return body
+    monkeypatch.setattr(guard_module.urllib.request, 'build_opener', lambda *args: SimpleNamespace(open=lambda *a, **kw: Response()))
+    assert guard_module.probe_health()['production_healthy'] is False
+
+
+def test_child_exit_race_still_stops_owned_api_and_records_complete_shutdown(guard, monkeypatch):
+    class Child:
+        done = False
+        def poll(self):
+            return 0 if self.done else None
+        def terminate(self):
+            self.done = True
+            raise ProcessLookupError('Child completed during probe')
+    calls = []
+    def stopped():
+        calls.append('only-owned-api')
+        guard.evidence['isolated_api_stopped'] = True
+    monkeypatch.setattr(guard, 'stop_isolated_api', stopped)
+    guard.abort_load(Child())
+    assert calls == ['only-owned-api'] and guard.evidence['generator_already_exited'] is True
+    assert guard.evidence['shutdown_complete'] is True and guard.evidence['generator_alive'] is False
+
+
+def test_unfinished_child_or_unstopped_api_never_claims_complete_shutdown(guard, monkeypatch):
+    child = SimpleNamespace(poll=lambda: None, terminate=lambda: None)
+    monkeypatch.setattr(guard, 'stop_isolated_api', lambda: None)
+    guard.abort_load(child)
+    assert guard.evidence['generator_alive'] is True and guard.evidence['shutdown_complete'] is False
+
+
+def test_monitor_still_alive_after_bounded_join_records_failed_proof(guard):
+    joined = []
+    thread = SimpleNamespace(join=lambda **kwargs: joined.append(kwargs), is_alive=lambda: True)
+    assert guard.finish_monitor(thread) is False
+    assert joined == [{'timeout': 30}]
+    assert guard.evidence['monitor_completed'] is False and guard.evidence['aborted'] is True
+    assert guard.evidence['reason'] == 'guard_monitor_incomplete' and guard.evidence['shutdown_complete'] is False
 
 
 def test_runner_refused_baseline_persists_metadata_without_starting_generator(tmp_path, monkeypatch):

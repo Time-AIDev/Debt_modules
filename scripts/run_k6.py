@@ -364,11 +364,7 @@ def main(argv=None):
                                 # This subprocess is the generator we just started.
                                 # Stop its owned API too, so an in-flight synthetic
                                 # preview cannot continue consuming host headroom.
-                                process.terminate()
-                                try:
-                                    guard.stop_isolated_api()
-                                except Exception:
-                                    guard.evidence["isolated_api_stopped"] = False
+                                guard.abort_load(process)
                                 break
                             delay = max(0, guard.interval_seconds - (time.monotonic() - began))
                     guard_thread = threading.Thread(target=guard_loop, daemon=True)
@@ -389,7 +385,7 @@ def main(argv=None):
             stop.set()
             sampler.join(timeout=12)
             if guard_thread:
-                guard_thread.join(timeout=14)
+                guard.finish_monitor(guard_thread)
                 if guard.evidence["aborted"]:
                     code = code or 1
                     meta["notes"].append("Generator interrupted by production/host guard; isolated API stop was attempted")

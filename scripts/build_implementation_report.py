@@ -215,8 +215,8 @@ def k6_runs(directory, runtime, revision):
         health_guard = meta.get("production_health_guard")
         safe_guard = None
         if isinstance(health_guard, dict):
-            reasons = {"production_health", "host_low_memory", "target_oom", "target_restart", "target_not_running", "guard_unavailable"}
-            safe_guard = {key: health_guard.get(key) is True for key in ("enabled", "baseline_passed", "aborted", "isolated_api_stopped")}
+            reasons = {"production_health", "host_low_memory", "target_oom", "target_restart", "target_not_running", "guard_unavailable", "guard_monitor_incomplete"}
+            safe_guard = {key: health_guard.get(key) is True for key in ("enabled", "baseline_passed", "aborted", "isolated_api_stopped", "monitor_completed", "shutdown_complete")}
             safe_guard.update(reason=health_guard.get("reason") if health_guard.get("reason") in reasons else None,
                 samples=len(health_guard.get("samples") or []),
                 minimum_available_memory_bytes=number(health_guard.get("minimum_available_memory_bytes"), integer=True))
@@ -233,7 +233,7 @@ def k6_runs(directory, runtime, revision):
             "production_health_guard": safe_guard,
             "diagnostic_run_passed": passed and supplemental_passed is not False and meta.get("process_return_code") == 0
                 and meta.get("exit_code", 0) == 0 and (safe_preview is None or all(safe_preview[key] for key in ("started", "passed", "never_applied", "isolated_staging_only")))
-                and (safe_guard is None or safe_guard["baseline_passed"] and not safe_guard["aborted"]),
+                and (safe_guard is None or safe_guard["baseline_passed"] and not safe_guard["aborted"] and safe_guard["monitor_completed"]),
             "dataset": {key: number(dataset.get(key), integer=True) for key in ("customers", "contracts", "instalments_per_contract")},
             "actor_roles": roles, "workload_sha256": identifier(meta.get("workload_sha256"), SHA),
             "historical_workload_sha256": identifier(meta.get("historical_workload_sha256"), SHA),
