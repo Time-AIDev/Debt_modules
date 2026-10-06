@@ -96,3 +96,21 @@ def test_payment_components_survive_invoice_writer_and_book_read(durable):
     assert len(meta["source_rows"][parsed["invoices"][0]["doc_no"]]) == 2
     # Header-only schema diagnostics are allowed; the tax identifier value is not.
     assert "1234567890121" not in json.dumps(meta)
+
+
+def test_database_preview_reads_canonical_identity_without_a_business_store(durable, monkeypatch):
+    from app import landing, session
+    from tests.test_debt_import_profiles import VID
+    source = landing.start_run(durable, "ODOO")
+    landing.write_customer(durable, source, "ODOO", {
+        "volt_id": VID, "customer_no": customer().customer_no, "product": "LEASE"})
+    landing.write_order(durable, source, "ODOO", VID, {
+        "order_type": "Leasing", "crm_status": "Won", "order_status": "Order - Done"})
+    landing.finish_run(durable, source, "OK")
+    durable.commit()
+    def forbidden_store(_self):
+        raise AssertionError("A metadata preview must not read a mutable business Store")
+    monkeypatch.setattr(session.Store, "for_current", forbidden_store)
+    preview = debt_imports.stage(workbook(lease=[lease()]), "synthetic.xlsx", "debt_status", "Manager")
+    assert preview["counts"]["matched"] == 1
+    assert preview["entries"][0]["customer_uid"] == customer().uid
