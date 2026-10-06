@@ -56,6 +56,33 @@ beforeEach(() => {
 })
 
 describe('แหล่งข้อมูล (design D)', () => {
+  it('disables Odoo pulls with a visible reason when the connector is not configured', async () => {
+    const data = overview()
+    data.integrations.odoo.configured = false
+    api.dataSourcesOverview.mockResolvedValue(data)
+    api.crmLeadSchedule.mockResolvedValue({ ...SCHEDULE, odoo_configured: false })
+    setRole('MANAGER')
+    const user = userEvent.setup()
+    renderScreen(<DataSources />)
+    await user.click(await screen.findByRole('button', { name: /^Odoo crm\.lead/ }))
+    expect(screen.getByRole('button', { name: 'ดึงจาก Odoo crm.lead' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'ซิงก์ Odoo' })).toBeDisabled()
+    expect(screen.getAllByText('Odoo ยังไม่ได้ตั้งค่า').length).toBeGreaterThan(0)
+    expect(api.startCrmLeadPipeline).not.toHaveBeenCalled()
+  })
+
+  it('shows the Thai job failure reason instead of the generic English review text', async () => {
+    const watch = { uid: 'review-job', kind: 'odoo', state: 'failed', problem: {
+      code: 'job_dead_letter', detail: 'Task requires operator review before a new submission.',
+      message_th: 'งานหยุดแล้ว กรุณาให้ผู้ดูแลตรวจสอบก่อนส่งงานใหม่',
+    } }
+    api.crmLeadLastRun.mockResolvedValue({ run: null, receipt: null, watch })
+    const user = userEvent.setup()
+    renderScreen(<DataSources />)
+    await user.click(await screen.findByRole('button', { name: /^Odoo crm\.lead/ }))
+    expect(await screen.findByText(watch.problem.message_th)).toBeInTheDocument()
+    expect(screen.queryByText(watch.problem.detail)).toBeNull()
+  })
   it('shows every served count with separators, and the Odoo rung its served slice', async () => {
     const user = userEvent.setup()
     renderScreen(<DataSources />)

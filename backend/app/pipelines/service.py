@@ -255,6 +255,8 @@ def _failure(exc):
         return {"code": "rules_unreadable", "detail": str(exc)}, "rules_unreadable"
     if isinstance(exc, odoo_client.NotConfigured):
         return ({"code": "integration_not_configured", "missing": exc.missing,
+                 "status": 422, "retryable": False,
+                 "message_th": "ยังไม่ได้ตั้งค่าการเชื่อมต่อ Odoo",
                  "detail": "missing " + ", ".join(exc.missing)}, "integration_not_configured")
     if isinstance(exc, odoo_client.OdooError):
         return {"code": "integration_unavailable", "detail": str(exc)}, "odoo_refused"

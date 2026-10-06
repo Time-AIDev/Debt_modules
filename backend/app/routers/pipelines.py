@@ -355,9 +355,15 @@ async def start_crm_lead(request: Request, x_volt_role: str = Header(default="OF
     _manager_only(x_volt_role)
     raw = await _body(request)
     mode = _read_mode(raw, "application/json" in (request.headers.get("content-type") or ""))
-    uid = runs.start("odoo")
     from ..production_unit import enabled
     from ..durable_runs import WORKER_RUN
+    if enabled() and not WORKER_RUN.get():
+        from ..integrations import odoo
+        try:
+            odoo._config()
+        except odoo.NotConfigured as exc:
+            raise errors.integration_not_configured("Odoo", exc.missing) from None
+    uid = runs.start("odoo")
     if enabled():
         if not WORKER_RUN.get():
             from ..task_outbox import enqueue_request

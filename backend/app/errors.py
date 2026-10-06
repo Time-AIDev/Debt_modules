@@ -888,8 +888,8 @@ def integration_not_configured(name, missing):
     return Problem(
         code="integration_not_configured", status=422,
         title="%s credentials are not configured" % name,
-        detail="Set %s in backend/.env. The variables are named in the repo README; "
-               "the values are never committed." % ", ".join(missing),
+        detail="Set %s in the runtime environment for both API and worker. "
+               "Credential values are never committed or returned." % ", ".join(missing),
         message_th="ยังไม่ได้ตั้งค่าการเชื่อมต่อระบบภายนอก",
         error_id="DEBT-INT-0422",
         extensions={"integration": name, "missing_env": list(missing)},

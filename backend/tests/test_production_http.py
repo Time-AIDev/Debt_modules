@@ -32,6 +32,20 @@ def test_production_empty_database_never_seeds_demo_customers(production):
     assert response.json()["rows"] == []
 
 
+def test_odoo_missing_config_refuses_before_creating_a_job(production):
+    from sqlalchemy import text
+    api, headers = production
+    response = api.post("/api/v1/pipelines/crm-lead:start", json={"source": "odoo"},
+                        headers=headers("owner@volt.co.th", "OWNER", "owner"))
+    assert response.status_code == 422, response.text
+    assert response.json()["code"] == "integration_not_configured"
+    assert set(response.json()["extensions"]["missing_env"]) == {
+        "ODOO_URL", "ODOO_DB", "ODOO_LOGIN", "ODOO_API_KEY"}
+    with db.connect() as conn:
+        assert conn.execute(text("select count(*) from app.task_outbox")).scalar_one() == 0
+        assert conn.execute(text("select count(*) from app.operation_run")).scalar_one() == 0
+
+
 def test_candidate_does_not_allow_officers_into_business_routes(production):
     api, headers = production
     assert api.get("/api/v1/workbook", headers=headers("thip@volt.co.th", "OFFICER", "thip")).status_code == 503

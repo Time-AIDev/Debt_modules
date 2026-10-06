@@ -224,6 +224,38 @@ def test_heartbeat_detects_stale_idle_and_stalled_working_process(wired):
     conn.execute(text("update app.worker_heartbeat set last_seen_at=now()-interval '31 seconds'"))
     conn.commit()
     assert not local_worker.healthy()
+
+
+def test_failed_accepted_run_is_dead_lettered_once_with_its_original_problem(wired, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.responses import JSONResponse
+    from app import local_worker, main, task_outbox
+    conn, _ = wired
+    uid = "failed-accepted-run"
+    conn.execute(text("insert into app.operation_run(uid,payload) values(:u,cast(:p as jsonb))"),
+                 {"u": uid, "p": json.dumps({"uid": uid, "state": "queued", "kind": "odoo",
+                                           "started_at": 1, "finished_at": None})})
+    conn.commit()
+    problem = {"code": "integration_not_configured", "status": 422, "retryable": False,
+               "missing": ["ODOO_URL"], "message_th": "ยังไม่ได้ตั้งค่าการเชื่อมต่อ Odoo"}
+    application = FastAPI()
+    @application.post("/v1/fail-run")
+    def fail_run():
+        with db.connect() as published, published.begin():
+            published.execute(text("update app.operation_run set payload=payload||cast(:p as jsonb) where uid=:u"),
+                              {"u": uid, "p": json.dumps({"state": "failed", "problem": problem})})
+        return JSONResponse({"state": "failed", "problem": problem}, status_code=202)
+    monkeypatch.setattr(main, "app", application)
+    task_outbox.enqueue(uid, "/v1/fail-run", b"{}", b"", {}, {"sub": "owner", "role": "OWNER"})
+    assert asyncio.run(local_worker.run_once()) == 1
+    row = conn.execute(text("select attempt_count,dead_lettered_at,last_error_code from app.task_outbox where uid=:u"),
+                       {"u": uid}).one()
+    assert row.attempt_count == 1 and row.dead_lettered_at
+    assert row.last_error_code == "integration_not_configured"
+    saved = conn.execute(text("select payload->'problem' from app.operation_run where uid=:u"), {"u": uid}).scalar_one()
+    assert saved["code"] == problem["code"] and saved["missing"] == ["ODOO_URL"]
+    assert saved["dead_letter"] is True and saved["message_th"] == problem["message_th"]
+    assert asyncio.run(local_worker.run_once()) == 0
     local_worker.heartbeat("working", "job")
     assert local_worker.healthy()
     conn.execute(text("update app.worker_heartbeat set job_started_at=now()-interval '301 seconds'"))

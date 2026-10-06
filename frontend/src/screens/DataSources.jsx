@@ -117,6 +117,7 @@ export function DataSources() {
   // while it is running, and pull the receipt + the book once when it leaves that state.
   const latest = crmLast?.watch
   const crmWatch = crmRun || (latest?.kind === 'odoo' ? latest : null)
+  const odooNotConfigured = overview?.integrations?.odoo?.configured === false
   useEffect(() => {
     if (!isRunActive(crmWatch)) return undefined
     const timer = setInterval(() => {
@@ -411,9 +412,9 @@ export function DataSources() {
                 </div>
                 <span className="spacer" />
                 <span className="imp__act">
-                  <button type="button" className="btn btn--primary" disabled={!!busy || !mgr || running} onClick={pullCrmLead}
+                  <button type="button" className="btn btn--primary" disabled={!!busy || !mgr || running || odooNotConfigured} onClick={pullCrmLead}
                           title={!mgr ? t('data.managerOnly') : running ? t('data.pullRunning')
-                            : crmSchedule?.odoo_configured === false ? t('data.autoSyncPaused') : undefined}>
+                            : odooNotConfigured ? t('data.odooNotConfigured') : undefined}>
                     {t('data.crmLeadRun')}
                   </button>
                   {mgr ? null : <span className="imp__reason">{t('data.managerOnly')}</span>}
@@ -424,6 +425,7 @@ export function DataSources() {
                           onCancel={cancelCrm} cancelLabel={t('common.cancel')}
                           text={t('data.crmLeadProgress', { read: int(crmWatch.read ?? 0), total: int(crmWatch.total) })} />
               ) : null}
+              {odooNotConfigured ? <p className="imp__reason">{t('data.odooNotConfigured')}</p> : null}
               <Problem problem={pullProblem} />
               {crmFailed ? (
                 <Problem problem={runProblem(t('data.crmRunFailed'), crmFailed,
@@ -645,8 +647,8 @@ export function DataSources() {
             <ul className="imp__switches">
               <li>
                 {/* "Sync Odoo" is the crm.lead pull; the Odoo panel opens to show its progress. */}
-                <button type="button" className="btn btn--sm" disabled={!!busy || !mgr || running}
-                        title={mgr ? undefined : t('data.managerOnly')}
+                <button type="button" className="btn btn--sm" disabled={!!busy || !mgr || running || odooNotConfigured}
+                        title={!mgr ? t('data.managerOnly') : odooNotConfigured ? t('data.odooNotConfigured') : undefined}
                         onClick={() => { setTile('odoo'); pullCrmLead() }}>
                   {t('data.sync')}
                 </button>

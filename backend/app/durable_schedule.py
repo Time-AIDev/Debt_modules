@@ -42,7 +42,7 @@ def enqueue_due():
                 conn.execute(text("update app.schedule_config set enabled=false where name='crm-lead'"))
                 return 0
             uid = runs.start("odoo")
-            task_outbox.enqueue(uid, "/v1/pipelines/crm-lead:start", b'{"mode":"NEW_ONLY"}', b"",
+            task_outbox.enqueue(uid, "/v1/pipelines/crm-lead:start", b'{"source":"odoo","mode":"NEW_ONLY"}', b"",
                                 {"content-type": "application/json"}, row.actor)
             conn.execute(text("update app.schedule_config set last_run_at=now(),last_run_uid=:u where name='crm-lead'"), {"u": uid})
         finally: CURRENT.reset(token)

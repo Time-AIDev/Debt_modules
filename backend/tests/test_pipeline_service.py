@@ -110,6 +110,14 @@ def test_a_refusal_from_odoo_leaves_a_durable_failed_run(live_db, monkeypatch):
     assert row["meta"] == {"door": "odoo", "mode": "NEW_ONLY"}
 
 
+def test_missing_odoo_configuration_is_a_permanent_actionable_failure():
+    from app.integrations import odoo
+    problem, code = service._failure(odoo.NotConfigured())
+    assert code == "integration_not_configured"
+    assert problem["status"] == 422 and problem["retryable"] is False
+    assert problem["missing"] and problem["message_th"]
+
+
 def test_an_unexpected_failure_is_named_by_class_only(live_db, monkeypatch):
     def boom(rules, on_progress=None, on_exclusions=None):
         raise RuntimeError("DETAIL: Failing row contains (a customer's name)")

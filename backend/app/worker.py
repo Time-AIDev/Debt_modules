@@ -127,15 +127,20 @@ async def _execute_job_body(uid):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=trusted), base_url="http://worker") as client:
             response = await client.post(payload["path"] + ("?" + payload["query"] if payload["query"] else ""),
                                          content=raw, headers=payload["headers"])
-            if response.status_code >= 400:
-                try:
-                    detail = response.json()
-                except ValueError:
+            try:
+                detail = response.json()
+            except ValueError:
+                detail = {}
+            failed_run = isinstance(detail, dict) and detail.get("state") == "failed"
+            if response.status_code >= 400 or failed_run:
+                detail = (detail.get("problem") or {}) if failed_run else detail
+                if not isinstance(detail, dict):
                     detail = {}
-                retryable = response.status_code >= 500 or response.status_code in (408, 425, 429) or bool(detail.get("retryable"))
-                raise errors.Problem(detail.get("code", "job_execution_refused"), response.status_code,
+                status = int(detail.get("status") or 422) if failed_run else response.status_code
+                retryable = bool(detail.get("retryable")) or status >= 500 or status in (408, 425, 429)
+                raise errors.Problem(detail.get("code", "job_execution_refused"), status,
                                      "Job not committed", "The API refused the task execution.",
-                                     "งานยังไม่สำเร็จ กรุณาตรวจสอบสถานะงาน", "DEBT-JOB-%s" % response.status_code,
+                                     "งานยังไม่สำเร็จ กรุณาตรวจสอบสถานะงาน", "DEBT-JOB-%s" % status,
                                      retryable=retryable)
     finally: WORKER_RUN.reset(token)
     await run_in_threadpool(_finished, uid)
@@ -167,6 +172,13 @@ def _dead_letter(uid, code):
                "detail": "Task requires operator review before a new submission.",
                "message_th": "งานหยุดแล้ว กรุณาให้ผู้ดูแลตรวจสอบก่อนส่งงานใหม่", "cause": code}
     with db.connect() as conn, conn.begin():
+        payload = conn.execute(text("select payload from app.operation_run where uid=:u for update"),
+                               {"u": uid}).scalar()
+        original = (payload or {}).get("problem")
+        if isinstance(original, dict) and original.get("code") and original.get("code") != "job_dead_letter":
+            # Preserve the actionable business failure; delivery exhaustion must
+            # not turn missing configuration into an opaque operator-review error.
+            problem = dict(original, retryable=False, dead_letter=True, delivery_error_code=code)
         conn.execute(text("update app.task_outbox set finished_at=now(),dead_lettered_at=now(),"
                           "last_error_code=:e,next_attempt_at=null where uid=:u"), {"u": uid, "e": code})
         conn.execute(text("update app.operation_run set payload=payload || cast(:p as jsonb),updated_at=now() "

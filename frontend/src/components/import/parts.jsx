@@ -29,7 +29,7 @@ export function ruleWord(t, rule) {
 /** A client-made refusal: a Thai headline plus the served reason as its one line. */
 export function runProblem(head, problem, reason) {
   const p = problem || {}
-  const th = reason || p.detail_th || p.detail
+  const th = reason || p.detail_th || p.message_th || p.detail
   const en = p.detail || th
   return {
     code: p.code || 'pipeline_failed',
