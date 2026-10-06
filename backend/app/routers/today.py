@@ -274,8 +274,10 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
           entity: str = Query(default=None),
           q: str = Query(default=None), unassigned: str = Query(default=None),
           limit: int = Query(default=None, ge=1, le=200), cursor: str = Query(default=None),
+          sort: str = Query(default="priority"),
           x_volt_role: str = Header(default="OFFICER"), x_volt_officer: str = Header(default=None)):
     from .. import read_projection
+    sort = _valid_choice("sort", sort, ("priority", "arrears"), "เลือกเรียงตามลำดับงานหรือยอดค้างชำระ")
     if read_projection.enabled():
         rung = _valid_rung(ladder_indicative)
         tier = _valid_choice("tier", tier, today_domain.TIERS, "ไม่รู้จักลำดับความสำคัญที่ระบุ")
@@ -302,7 +304,7 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
                                   "ไม่รู้จักสถานะติดตามที่ระบุ")
         return _json(read_projection.today({"officer": officer, "ladder_indicative": rung, "tier": tier,
             "payment_status": payment_status, "dc_status": dc_status, "product": product, "entity": entity,
-            "q": q, "unassigned": bool(unassigned)}, limit, cursor))
+            "q": q, "unassigned": bool(unassigned)}, limit, cursor, sort))
     cs = cases_domain.for_current()
     # Feedback Round 1 / B2: every filter is validated BEFORE the broken-PTP sweep or any
     # row is built. A filter that matched everything — or nothing — on a typo would be
@@ -339,6 +341,19 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
     today_domain.annotate_worked(data["items"], settings.business_date)
     data["meta"]["worked_today_count"] = sum(1 for i in data["items"] if i["worked_today"])
     data["meta"]["daily_summary"] = today_domain.daily_summary(data["items"], cs, settings.business_date)
+    data["meta"]["sort"] = sort
+    if sort == "arrears":
+        data["items"].sort(key=lambda item: (item["tier_rank"], -Decimal(item["aggregate_overdue"]),
+            -(item["oldest_dpd"] or 0), item["customer"]["display_name"], item["customer"]["uid"]))
+        unlocked = [row for row in data["items"] if row["contact_lock"]["state"] == "OPEN" and row["tier"] != "ROUTINE"] or [
+            row for row in data["items"] if row["contact_lock"]["state"] == "OPEN"]
+        data["meta"]["next_up"] = unlocked[0]["customer"]["uid"] if unlocked else None
+    from .. import main
+    data["meta"]["board_counts"] = dict.fromkeys((column["column_id"] for column in main.BOARD_COLUMNS), 0)
+    for row in data["items"]:
+        column = row.get("board_column_id")
+        if column:
+            data["meta"]["board_counts"][column] = data["meta"]["board_counts"].get(column, 0) + 1
     return _json(data)
 
 

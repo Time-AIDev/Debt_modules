@@ -433,3 +433,58 @@ def test_governed_export_rejects_nested_object_as_reason():
     with TestClient(main.app) as client:
         response = client.post("/v1/workbook:export", json={"reason": {"reason": "Synthetic audit reason"}})
     assert response.status_code == 422
+
+
+def test_today_arrears_sort_is_global_across_pages_and_keeps_tier_priority(capacity):
+    import json
+    rows = [projected("a", overdue=10, tier="PTP_DUE_TODAY"),
+            projected("b", overdue=100, tier="PTP_DUE_TODAY"),
+            projected("c", overdue=1000, tier="NEXT_ACTION_DUE")]
+    for row, rank, dpd in zip(rows, (1, 1, 2), (100, 1, 200)):
+        row.update(tier_rank=rank, dpd=dpd)
+        payload = json.loads(row["today"])
+        payload.update(tier_rank=rank, oldest_dpd=dpd)
+        row["today"] = json.dumps(payload)
+    generation(capacity, rows)
+    with unit(capacity):
+        priority = read_projection.today({}, sort="priority")
+        assert [row["customer"]["uid"] for row in priority["items"]] == ["a", "b", "c"]
+        first = read_projection.today({}, limit=1, sort="arrears")
+        second = read_projection.today({}, limit=1, sort="arrears", cursor=first["page"]["next_cursor"])
+        third = read_projection.today({}, limit=1, sort="arrears", cursor=second["page"]["next_cursor"])
+        assert [result["items"][0]["customer"]["uid"] for result in (first, second, third)] == ["b", "a", "c"]
+        assert first["meta"]["total"] == second["meta"]["total"] == third["meta"]["total"] == 3
+        assert first["meta"]["next_up"] == "b"
+        with pytest.raises(Exception) as changed_sort:
+            read_projection.today({}, limit=1, sort="priority", cursor=first["page"]["next_cursor"])
+        assert changed_sort.value.code == "today_cursor_stale"
+
+
+def test_today_board_counts_cover_unloaded_filtered_cards(capacity):
+    import json
+    rows = [projected("a", entity="SPV"), projected("b", entity="SPV"), projected("c", entity="EPC")]
+    for row, column in zip(rows, ("col_01H8X", "col_01H8Y", "col_01H8Y")):
+        payload = json.loads(row["today"])
+        payload["board_column_id"] = column
+        row["today"] = json.dumps(payload)
+    generation(capacity, rows)
+    with unit(capacity):
+        result = read_projection.today({"entity": "SPV"}, limit=1)
+        assert len(result["items"]) == 1
+        assert result["meta"]["board_counts"]["col_01H8X"] == 1
+        assert result["meta"]["board_counts"]["col_01H8Y"] == 1
+        assert sum(result["meta"]["board_counts"].values()) == result["meta"]["total"] == 2
+
+
+def test_legacy_today_arrears_order_and_board_counts_match_entire_queue():
+    from fastapi.testclient import TestClient
+    with TestClient(main.app) as client:
+        client.cookies.set("volt_session", "shared")
+        priority = client.get("/v1/today", params={"entity": "SPV"}).json()
+        arrears = client.get("/v1/today", params={"entity": "SPV", "sort": "arrears"}).json()
+        expected = sorted(priority["items"], key=lambda row: (row["tier_rank"], -Decimal(row["aggregate_overdue"]),
+            -(row["oldest_dpd"] or 0), row["customer"]["display_name"], row["customer"]["uid"]))
+        assert [row["customer"]["uid"] for row in arrears["items"]] == [row["customer"]["uid"] for row in expected]
+        assert arrears["meta"]["total"] == priority["meta"]["total"]
+        assert sum(arrears["meta"]["board_counts"].values()) == arrears["meta"]["total"]
+        assert client.get("/v1/today", params={"sort": "unknown"}).status_code == 422

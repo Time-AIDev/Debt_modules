@@ -293,15 +293,17 @@ def _rows(conn, pointer, filters, kind, limit, cursor, sort, direction):
         expression += ' collate "C"'
     order = expression + (" desc" if descending else " asc") + ' nulls last,customer_uid collate "C" asc'
     if kind == "today":
-        order = 'tier_rank asc,coalesce(dpd,0) desc,overdue desc,display_name collate "C" asc,customer_uid collate "C" asc'
+        money_order = "overdue desc,coalesce(dpd,0) desc" if sort == "arrears" else "coalesce(dpd,0) desc,overdue desc"
+        order = 'tier_rank asc,' + money_order + ',display_name collate "C" asc,customer_uid collate "C" asc'
     identity = [kind, pointer["generation"], pointer["ordering_version"], str(pointer["business_date"]),
                 filters, sort, direction]
     if cursor:
         anchor = _anchor(conn, cursor, identity, kind)
         if kind == "today":
-            where += ' and (tier_rank,-coalesce(dpd,0),-overdue,display_name collate "C",customer_uid collate "C") > '
-            where += "(:a_tier,:a_dpd,cast(:a_overdue as numeric),:a_name,:a_uid)"
-            params.update(a_tier=anchor[0], a_dpd=anchor[1], a_overdue=anchor[2], a_name=anchor[3], a_uid=anchor[4])
+            money_keys = "-overdue,-coalesce(dpd,0)" if sort == "arrears" else "-coalesce(dpd,0),-overdue"
+            where += ' and (tier_rank,' + money_keys + ',display_name collate "C",customer_uid collate "C") > '
+            where += "(:a_tier,cast(:a_first as numeric),cast(:a_second as numeric),:a_name,:a_uid)"
+            params.update(a_tier=anchor[0], a_first=anchor[1], a_second=anchor[2], a_name=anchor[3], a_uid=anchor[4])
         else:
             params.update(a_value=anchor[0], a_uid=anchor[1])
             cast = "cast(:a_value as numeric)" if column in ("overdue", "outstanding", "dpd", "tier_rank") else ":a_value"
@@ -320,6 +322,8 @@ def _rows(conn, pointer, filters, kind, limit, cursor, sort, direction):
     if has_more:
         last = kept[-1]
         anchor = [last["tier_rank"], -(last["dpd"] or 0), str(-last["overdue"]), last["display_name"], last["customer_uid"]]
+        if kind == "today" and sort == "arrears":
+            anchor[1], anchor[2] = anchor[2], anchor[1]
         if kind != "today":
             anchor = [str(last["sort_value"]) if last["sort_value"] is not None else None, last["customer_uid"]]
         next_cursor = _cursor(conn, identity, anchor)
@@ -351,12 +355,12 @@ def workbook(filters, sort="aggregate_overdue", direction="desc", limit=None, cu
     return result
 
 
-def today(filters, limit=None, cursor=None):
+def today(filters, limit=None, cursor=None, sort="priority"):
     from . import today as domain
     conn = _unit()["conn"]
     pointer = current(conn)
     where, params = _filters(pointer["generation"], filters, "today")
-    rows, page = _rows(conn, pointer, filters, "today", limit, cursor, "tier", "asc")
+    rows, page = _rows(conn, pointer, filters, "today", limit, cursor, sort, "asc")
     tiers = {tier: 0 for tier in domain.TIERS}
     counts = conn.execute(text("select tier,count(*),count(*) filter(where not worked and payment_status<>'PENDING') "
                                 "from app.customer_projection where " + where + " group by tier"), params).all()
@@ -377,7 +381,13 @@ def today(filters, limit=None, cursor=None):
                 unworked_tier_counts=unworked, counts_by_tier=tiers, tier_partition=tiers, tier_counts=tier_options,
                 answers_waiting=aggregate[3], answers_waiting_elsewhere=aggregate[3]-tiers["ANSWER_WAITING"],
                 filters={**filters, "q": str(filters.get("q") or "").strip().lower() or None},
-                ladder_indicative=filters.get("ladder_indicative"))
+                ladder_indicative=filters.get("ladder_indicative"), sort=sort)
+    from . import main
+    meta["board_counts"] = dict.fromkeys((column["column_id"] for column in main.BOARD_COLUMNS), 0)
+    for column, count in conn.execute(text("select today->>'board_column_id',count(*) from app.customer_projection "
+                                           "where " + where + " group by today->>'board_column_id'"), params):
+        if column:
+            meta["board_counts"][column] = count
     entity_where = "generation=:generation and today is not null" + (" and entity=:entity" if filters.get("entity") else "")
     meta["officer_totals"] = dict.fromkeys(meta.get("officer_totals", {}), 0)
     for officer, count in conn.execute(text("select officer,count(*) from app.customer_projection where " + entity_where + " group by officer"), params):
@@ -400,8 +410,10 @@ def today(filters, limit=None, cursor=None):
     summaries["*"] = {"total": aggregate[0], "worked": aggregate[1], "not_yet": aggregate[0]-aggregate[1],
                        "ptp_count": int(stats[0]), "ptp_amount": str(stats[1].quantize(Decimal('.01'))), "unreachable": int(stats[2])}
     meta["daily_summary"] = summaries
+    money_order = "overdue desc,coalesce(dpd,0) desc" if sort == "arrears" else "coalesce(dpd,0) desc,overdue desc"
     next_up = conn.execute(text("select customer_uid from app.customer_projection where " + where +
-                               " and contact_open order by (tier='ROUTINE'),tier_rank,coalesce(dpd,0) desc,overdue desc,display_name,customer_uid limit 1"), params).scalar()
+                               " and contact_open order by (tier='ROUTINE'),tier_rank," + money_order +
+                               ',display_name collate "C",customer_uid collate "C" limit 1'), params).scalar()
     meta["next_up"] = next_up
     # Reminder delivery remains a governed batch action. Match the full selected
     # desk without forcing the browser to hydrate every row.
