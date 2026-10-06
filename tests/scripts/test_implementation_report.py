@@ -87,3 +87,58 @@ def test_docx_and_json_are_self_contained_aggregate_artifacts(tmp_path):
         assert "COLOCATED_PROVISIONAL" in xml and "FAIL / incomplete" in xml
         assert "PRIVATE-TOKEN" not in xml and "PRIVATE-CUSTOMER-NAME" not in xml
     assert json.loads((output / "implementation-aggregate.json").read_text())["deployment_certified"] is False
+
+
+def passing_metrics(rules):
+    return {name: {"values": {"p(95)" if name.endswith("_ms") else "count" if rule.startswith("count") else "rate":
+                    100 if name.endswith("_ms") else 10 if rule.startswith("count") else 1 if name == "checks" else 0},
+                   "thresholds": {rule: {"ok": True}}} for name, rule in rules.items()}
+
+
+def test_import_failure_and_complete_action_failure_are_not_hidden_by_original_gates(tmp_path):
+    evidence = fixture(tmp_path)
+    metrics = {**passing_metrics(report.THRESHOLDS), **passing_metrics(report.SUPPLEMENTAL["debt-workflow"])}
+    metrics["complete_action_ms"] = {"values": {"p(95)": 3000}, "thresholds": {"p(95)<2000": {"ok": False}}}
+    prefix = evidence / "diagnostic/results/k6-aaaaaaa-debt-workflow-25vu-import"
+    write(Path(str(prefix) + "-summary.json"), {"metrics": metrics})
+    write(Path(str(prefix) + "-meta.json"), {"revision": REV, "api_image": "sha256:" + "d" * 64,
+        "generator_co_located": True, "process_return_code": 0, "exit_code": 1,
+        "concurrent_preview": {"profile": "debt_status", "started": True, "passed": False, "status": 429,
+            "never_applied": True, "isolated_staging_only": True, "elapsed_ms": 120000, "tokens": "PRIVATE-TOKEN"}})
+    run = next(run for run in report.build_aggregate(evidence, REV)["k6"] if run["scenario"] == "import")
+    assert run["original_thresholds_passed"] is True
+    assert run["supplemental_thresholds_passed"] is False and run["diagnostic_run_passed"] is False
+    assert run["concurrent_preview"]["status"] == 429 and run["orchestration_exit_code"] == 1
+    assert run["binding"] == "MATCHING_REPORT_REVISION" and run["api_image"] == "sha256:" + "d" * 64
+    assert "PRIVATE-TOKEN" not in json.dumps(run)
+
+
+def test_measured_old_image_binding_survives_new_runtime_and_dirty_revision_stays_unbound(tmp_path):
+    evidence = fixture(tmp_path)
+    write(evidence / "diagnostic/owned-resources.json", {"revision": REV, "api_image": "sha256:" + "d" * 64})
+    prefix = evidence / "diagnostic/results/k6-bbbbbbb-historical-25vu-growth"
+    write(Path(str(prefix) + "-summary.json"), {"metrics": passing_metrics(report.THRESHOLDS)})
+    write(Path(str(prefix) + "-meta.json"), {"revision": OLD, "api_image": "sha256:" + "c" * 64,
+        "generator_co_located": True, "process_return_code": 0, "exit_code": 0,
+        "duration_seconds": 120, "dataset": {"customers": 1431, "contracts": 1431, "instalments_per_contract": 96}})
+    prefix2 = evidence / "diagnostic/results/k6-aaaaaaa-historical-25vu-soak"
+    write(Path(str(prefix2) + "-summary.json"), {"metrics": passing_metrics(report.THRESHOLDS)})
+    write(Path(str(prefix2) + "-meta.json"), {"revision": None, "api_image": "sha256:" + "e" * 64,
+        "generator_co_located": True, "process_return_code": 0, "exit_code": 0, "duration_seconds": 900})
+    runs = report.build_aggregate(evidence, REV)["k6"]
+    growth = next(run for run in runs if run["scenario"] == "growth")
+    soak = next(run for run in runs if run["scenario"] == "soak")
+    assert growth["binding"] == "OLDER_REVISION" and growth["api_image"] == "sha256:" + "c" * 64
+    assert growth["dataset"]["customers"] == 1431 and growth["diagnostic_run_passed"] is True
+    assert soak["binding"] == "UNBOUND" and soak["duration_seconds"] == 900
+
+
+def test_paged_original_success_requires_its_native_page_gates(tmp_path):
+    evidence = fixture(tmp_path)
+    prefix = evidence / "diagnostic/results/k6-aaaaaaa-paged-25vu"
+    write(Path(str(prefix) + "-summary.json"), {"metrics": passing_metrics(report.THRESHOLDS)})
+    write(Path(str(prefix) + "-meta.json"), {"revision": REV, "api_image": "sha256:" + "d" * 64,
+        "generator_co_located": True, "process_return_code": 0, "exit_code": 0})
+    run = next(run for run in report.build_aggregate(evidence, REV)["k6"] if run["profile"] == "paged")
+    assert run["original_thresholds_passed"] is True
+    assert run["supplemental_thresholds_passed"] is False and run["diagnostic_run_passed"] is False

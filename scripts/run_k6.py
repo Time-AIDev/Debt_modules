@@ -137,6 +137,22 @@ def actor_roles(base, users):
     return dict(roles)
 
 
+def runtime_binding(container):
+    """Bind the measured target to immutable metadata, without inspecting env."""
+    if not container:
+        return {}
+    template = ('{"image":{{json .Image}},"revision":'
+                '{{json (index .Config.Labels "org.opencontainers.image.revision")}}}')
+    result = subprocess.run(["docker", "inspect", "--format", template, container],
+                            capture_output=True, text=True, timeout=10, check=True)
+    values = json.loads(result.stdout)
+    if not re.fullmatch(r"sha256:[0-9a-f]{64}", values.get("image") or ""):
+        raise ValueError("Isolated API image must be immutable")
+    revision = values.get("revision")
+    return {"api_image": values["image"],
+            "revision": revision if re.fullmatch(r"[0-9a-f]{40}", revision or "") else None}
+
+
 def bytes_size(value):
     match = re.fullmatch(r"([0-9]+(?:\.[0-9]+)?)\s*([kKMGTPE]?i?B)", value.strip())
     if not match:
@@ -235,6 +251,7 @@ def main(argv=None):
         version = subprocess.run([binary, "version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
         script = {"historical": SCRIPT, "paged": ROOT / "tests/load/capacity.js",
                   "debt-workflow": ROOT / "tests/load/debt_workflow.js"}[args.profile]
+        binding = runtime_binding(args.api_container)
         roles = actor_roles(args.base_url, users)
         meta = {"timestamp_utc": now(), "run_id": args.run_id, "vus": args.vus,
                 "duration": args.duration, "duration_seconds": args.duration_seconds,
@@ -250,6 +267,7 @@ def main(argv=None):
                     "Generator and target are co-located; results include host resource contention",
                     "Native k6 summary metrics and failed thresholds are authoritative",
                     "Dataset preparation and state priming are external and excluded from measured duration"]}
+        meta.update(binding)
         if args.profile == "debt-workflow":
             meta["read_write_mix"] = {"reads": "case before each act and final conservation check",
                 "writes": ["next_action", "dc_status", "uncounted_contact", "ptp_create", "ptp_close"],

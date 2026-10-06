@@ -22,6 +22,9 @@ SHA = re.compile(r"[0-9a-f]{64}\Z")
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 THRESHOLDS = {"business_read_ms": "p(95)<2000", "business_write_ms": "p(95)<2000",
               "business_errors": "rate<0.01", "checks": "rate>0.99", "idempotency_replay_errors": "rate==0"}
+SUPPLEMENTAL = {"paged": {"capacity_page_ms": "p(95)<2000", "capacity_page_errors": "rate<0.01"},
+                "debt-workflow": {"complete_action_ms": "p(95)<2000", "debt_mutations_committed": "count>0",
+                                  "role_denial_errors": "rate==0"}}
 INPUTS = ("S3 configuration", "age recipient/key custodian", "recovery host", "independent load generator",
           "HTTP JSON webhook configuration", "Git write credentials")
 ROLES = {"OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"}
@@ -125,32 +128,54 @@ def k6_runs(directory, runtime, revision):
     runtime_revision = identifier((runtime or {}).get("revision"), REVISION)
     api_image = identifier((runtime or {}).get("api_image"), IMAGE)
     for summary in sorted(directory.glob("k6-*-summary.json")):
-        match = re.fullmatch(r"k6-([0-9a-f]{7,40})-(historical|paged|debt-workflow)-(\d+)vu-summary\.json", summary.name)
+        match = re.fullmatch(r"k6-([0-9a-f]{7,40})-(historical|paged|debt-workflow)-(\d+)vu"
+                            r"(?:-(mixed|import|growth|soak))?-summary\.json", summary.name)
         if not match:
             continue
         meta_path = summary.with_name(summary.name.replace("-summary.json", "-meta.json"))
         data, meta = read_json(summary) or {}, read_json(meta_path) or {}
         full = identifier(meta.get("revision"), REVISION)
-        if full is None and runtime_revision and runtime_revision.startswith(match[1]):
+        if (full is None and "revision" not in meta and "api_image" not in meta
+                and runtime_revision and runtime_revision.startswith(match[1])):
             full = runtime_revision
-        bound = full is not None and api_image is not None and full == runtime_revision
-        metrics = {}
-        for name, rule in THRESHOLDS.items():
-            native = (data.get("metrics") or {}).get(name) or {}
-            values = native.get("values") or {}
-            observed = number(values.get("p(95)" if name.endswith("_ms") else "rate"))
-            native_gate = (native.get("thresholds") or {}).get(rule, {}).get("ok")
-            metrics[name] = {"value": observed, "threshold": rule,
-                             "native_threshold_passed": native_gate if isinstance(native_gate, bool) else None}
+        measured_image = identifier(meta.get("api_image"), IMAGE)
+        if measured_image is None and full == runtime_revision:
+            measured_image = api_image
+        bound = full is not None and full.startswith(match[1]) and measured_image is not None
+        def measured(rules):
+            result = {}
+            for name, rule in rules.items():
+                native = (data.get("metrics") or {}).get(name) or {}
+                values = native.get("values") or {}
+                observed = number(values.get("p(95)" if name.endswith("_ms") else "count" if rule.startswith("count") else "rate"))
+                native_gate = (native.get("thresholds") or {}).get(rule, {}).get("ok")
+                result[name] = {"value": observed, "threshold": rule,
+                               "native_threshold_passed": native_gate if isinstance(native_gate, bool) else None}
+            return result
+        metrics = measured(THRESHOLDS)
+        supplemental = measured(SUPPLEMENTAL.get(match[2], {}))
         passed = all(value["native_threshold_passed"] is True and value["value"] is not None for value in metrics.values())
+        supplemental_passed = all(value["native_threshold_passed"] is True and value["value"] is not None
+                                  for value in supplemental.values()) if supplemental else None
+        preview = meta.get("concurrent_preview")
+        safe_preview = None
+        if isinstance(preview, dict):
+            safe_preview = {key: preview.get(key) is True for key in ("started", "passed", "never_applied", "isolated_staging_only")}
+            safe_preview.update(profile=preview.get("profile") if preview.get("profile") in ("debt_status", "contract_supplement") else None,
+                status=number(preview.get("status"), integer=True), elapsed_ms=number(preview.get("elapsed_ms")),
+                source_bytes=number(preview.get("source_bytes"), integer=True), source_sha256=identifier(preview.get("source_sha256"), SHA))
         dataset = meta.get("dataset") or {}
         roles = {role: number(count, integer=True) for role, count in (meta.get("actor_roles") or {}).items() if role in ROLES}
-        runs.append({"profile": match[2], "vus": int(match[3]), "duration_seconds": number(meta.get("duration_seconds"), integer=True),
-            "revision": full, "api_image": api_image if bound else None,
+        runs.append({"profile": match[2], "scenario": match[4], "vus": int(match[3]), "duration_seconds": number(meta.get("duration_seconds"), integer=True),
+            "revision": full, "api_image": measured_image if bound else None,
             "binding": "MATCHING_REPORT_REVISION" if bound and full == revision else "OLDER_REVISION" if bound else "UNBOUND",
             "classification": "COLOCATED_PROVISIONAL" if meta.get("generator_co_located") is True else "GENERATOR_LOCATION_UNVERIFIED",
             "native_exit_code": number(meta.get("process_return_code"), integer=True), "original_thresholds_passed": passed,
-            "capacity_acceptance_certified": False, "metrics": metrics,
+            "orchestration_exit_code": number(meta.get("exit_code"), integer=True),
+            "capacity_acceptance_certified": False, "metrics": metrics, "supplemental_metrics": supplemental,
+            "supplemental_thresholds_passed": supplemental_passed, "concurrent_preview": safe_preview,
+            "diagnostic_run_passed": passed and supplemental_passed is not False and meta.get("process_return_code") == 0
+                and meta.get("exit_code", 0) == 0 and (safe_preview is None or all(safe_preview[key] for key in ("started", "passed", "never_applied", "isolated_staging_only"))),
             "dataset": {key: number(dataset.get(key), integer=True) for key in ("customers", "contracts", "instalments_per_contract")},
             "actor_roles": roles, "workload_sha256": identifier(meta.get("workload_sha256"), SHA),
             "historical_workload_sha256": identifier(meta.get("historical_workload_sha256"), SHA),
@@ -222,13 +247,23 @@ def render_docx(data, output):
         def fmt(name, rate=False):
             value = m[name]["value"]
             return None if value is None else ("%.3f%%" % (value * 100) if rate else "%.2f" % value)
-        rows.append((run["profile"], run["vus"], fmt("business_read_ms"), fmt("business_write_ms"),
+        label = run["profile"] + (" / " + run["scenario"] if run["scenario"] else "")
+        rows.append((label, run["vus"], fmt("business_read_ms"), fmt("business_write_ms"),
                      fmt("business_errors", True), fmt("checks", True), fmt("idempotency_replay_errors", True),
                      "PASS" if run["original_thresholds_passed"] else "FAIL / incomplete", run["binding"]))
-    table(doc, ("Profile", "VUs", "Read p95 ms", "Write p95 ms", "Error rate", "Checks rate", "Replay rate", "Native gates", "Revision binding"), rows)
+    table(doc, ("Profile", "VUs", "Read p95 ms", "Write p95 ms", "Error rate", "Checks rate", "Replay rate", "Original gates", "Revision binding"), rows)
     for run in data["k6"]:
         doc.add_paragraph("%s / %s VUs: revision %s · API %s · %s · exit %s" %
                           (run["profile"], run["vus"], run["revision"], run["api_image"], run["classification"], run["native_exit_code"]))
+        doc.add_paragraph("Combined diagnostic gates: " + ("PASS" if run["diagnostic_run_passed"] else "FAIL / incomplete") +
+                          "; orchestration exit=" + str(run["orchestration_exit_code"]))
+        if run["supplemental_metrics"]:
+            doc.add_paragraph("Supplemental native gates: " + ("PASS" if run["supplemental_thresholds_passed"] else "FAIL / incomplete") +
+                "; " + "; ".join("%s=%s (%s)" % (key, value["value"], value["threshold"]) for key, value in run["supplemental_metrics"].items()))
+        if run["concurrent_preview"]:
+            preview = run["concurrent_preview"]
+            doc.add_paragraph("Concurrent preview: %s · status %s · %s ms · %s · never applied=%s" %
+                (preview["profile"], preview["status"], preview["elapsed_ms"], "PASS" if preview["passed"] else "FAIL / incomplete", preview["never_applied"]))
     doc.add_heading("ข้อมูลเงินจริงและการตรวจไฟล์", 1)
     doc.add_paragraph("ตัวเลขต่อไปนี้เป็นผล parser/component validation ของไฟล์ที่ได้รับ ไม่ใช่ยอดเงินเข้าที่จัดสรรแล้ว และไม่ได้ยืนยัน mapping ทุก customer case")
     table(doc, ("Source", "Documents", "Components", "Multi-payment docs", "Rejected rows", "Quarantined docs", "Parsed component total", "As of"),
