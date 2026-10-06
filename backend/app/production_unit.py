@@ -27,6 +27,15 @@ CURRENT = ContextVar("production_unit", default=None)
 LOCK_KEY = 0x564F4C54505244
 
 
+async def timed_work(phases, name, function, *args, **kwargs):
+    """Observe the full wait and execution of an existing synchronous stage."""
+    began = time.monotonic()
+    try:
+        return await run_in_threadpool(function, *args, **kwargs)
+    finally:
+        phases[name] = phases.get(name, 0.0) + (time.monotonic() - began) * 1000
+
+
 def customer_scope(scope):
     """Only audited customer-owned routes may use the partitioned write model."""
     if os.environ.get("VOLT_CUSTOMER_SCOPES_ENABLED", "true") != "true":
@@ -378,10 +387,11 @@ class ProductionUnitMiddleware:
         refresh_retry = False
         slot = "prd-request:" + uuid.uuid4().hex
         messages = []
+        phases = {}
         async def capture(message): messages.append(message)
         try:
-            conn = await run_in_threadpool(db.connect)
-            transaction = await run_in_threadpool(conn.begin)
+            conn = await timed_work(phases, "connection_checkout", db.connect)
+            transaction = await timed_work(phases, "transaction_begin", conn.begin)
             await run_in_threadpool(conn.execute, text("set local lock_timeout='5s'"))
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
@@ -407,7 +417,7 @@ class ProductionUnitMiddleware:
                     "capacity": capacity, "mutation": mutation_request, "book_exclusive": book_exclusive}
             unit_token = CURRENT.set(unit)
             from . import auth
-            auth_session = await run_in_threadpool(auth.resolve_session, scope) if auth.current_config().on else None
+            auth_session = await timed_work(phases, "auth_resolution", auth.resolve_session, scope) if auth.current_config().on else None
             unit["subject"] = (auth_session or {}).get("sub", "anonymous")
             if scoped_customer:
                 unit["customer_uid"] = scoped_customer
@@ -444,7 +454,7 @@ class ProductionUnitMiddleware:
                     await run_in_threadpool(production_permissions.enforce, scope,
                                             dict(auth_session, role=role, officer=officer), b"{}")
                 from . import read_projection
-                await run_in_threadpool(read_projection.current, conn)
+                await timed_work(phases, "projection_readiness", read_projection.current, conn)
                 # A cold full generation seeded complete stores. Restore a fresh
                 # customer slice for the route, never keep that full graph.
                 for store in session.REGISTRY:
@@ -457,7 +467,7 @@ class ProductionUnitMiddleware:
                 "/v1/workbook", "/v1/today", "/v1/reports/monthly")
             if auth_session and not projection_read and not control_request and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
                 from .production_runtime import prepare_book
-                await run_in_threadpool(prepare_book, exclusive=book_exclusive)
+                await timed_work(phases, "book_readiness", prepare_book, exclusive=book_exclusive)
                 from .production_runtime import book_marker as marker
                 book_marker = marker()
             from .durable_runs import WORKER_RUN
@@ -545,7 +555,11 @@ class ProductionUnitMiddleware:
                 allowed_versions += (token, b'"' + token + b'"')
             if mutation and headers.get(b"if-match") not in allowed_versions:
                 raise self.problem("state_conflict", 409)
-            await self.app(scope, receive, capture)
+            handler_began = time.monotonic()
+            try:
+                await self.app(scope, receive, capture)
+            finally:
+                phases["handler"] = (time.monotonic() - handler_began) * 1000
             start = next(m for m in messages if m["type"] == "http.response.start")
             from .durable_runs import WORKER_RUN
             failed_run = None
@@ -577,10 +591,10 @@ class ProductionUnitMiddleware:
             else:
                 if unit.get("rollback_requested"):
                     raise RuntimeError("domain requested rollback")
-                if mutation and not control_request: await run_in_threadpool(flush)
+                if mutation and not control_request: await timed_work(phases, "flush", flush)
                 if mutation and not control_request and capacity and not path.startswith("/v1/auth/"):
                     from . import read_projection
-                    await run_in_threadpool(read_projection.finish_write, conn)
+                    await timed_work(phases, "projection_write", read_projection.finish_write, conn)
                     if scoped_customer:
                         unit["customer_version"] = await run_in_threadpool(lambda: conn.execute(text(
                             "update app.customer_version set version=version+1 where customer_uid=:u returning version"),
@@ -610,16 +624,16 @@ class ProductionUnitMiddleware:
                                              if k.lower() != b"set-cookie"]),
                             "b": b"".join(m.get("body", b"") for m in messages if m["type"] == "http.response.body")})
                 if mutation and not control_request:
-                    await run_in_threadpool(append_audit_tail, conn, unit)
-                    await run_in_threadpool(transaction.commit)
+                    await timed_work(phases, "audit_tail", append_audit_tail, conn, unit)
+                    await timed_work(phases, "commit", transaction.commit)
                     unit.pop("pending_audits", None)
                     unit.pop("refusal_audit", None)
                 else:
                     # End the repeatable read before reading the global chain.
                     # Reuse its connection rather than exhausting the pool with
                     # a second checkout while the original is still leased.
-                    await run_in_threadpool(transaction.commit)
-                    await run_in_threadpool(append_audit_tail, conn, unit, fresh=True)
+                    await timed_work(phases, "commit", transaction.commit)
+                    await timed_work(phases, "audit_tail", append_audit_tail, conn, unit, fresh=True)
         except Exception as exc:
             from .production_runtime import BookRefreshRequired
             if isinstance(exc, BookRefreshRequired):
@@ -662,7 +676,7 @@ class ProductionUnitMiddleware:
             if touched_token is not None: session.TOUCHED.reset(touched_token)
             if session_token is not None: session.CURRENT.reset(session_token)
             if unit_token is not None: CURRENT.reset(unit_token)
-            if conn is not None: await run_in_threadpool(conn.close)
+            if conn is not None: await timed_work(phases, "connection_close", conn.close)
             try:
                 from . import auth
                 route = auth._route_template(scope)
@@ -672,6 +686,7 @@ class ProductionUnitMiddleware:
                                   "lock_wait_ms": round(lock_wait * 1000, 2),
                                   "store_cache_hits": unit.get("store_cache_hits", 0) if unit_token is not None else 0,
                                   "store_cache_misses": unit.get("store_cache_misses", 0) if unit_token is not None else 0,
+                                  "phases_ms": {key: round(value, 2) for key, value in phases.items()},
                                   "latency_ms": round((time.monotonic() - started) * 1000, 2)}), flush=True)
             except Exception:
                 # Observation must not change the result of an already committed act.
