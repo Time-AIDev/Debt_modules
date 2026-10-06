@@ -97,6 +97,14 @@ def qa_aggregate(matrix, scenarios, execution, revision):
         candidate = number(execution.get("score"))
         if candidate is not None and candidate <= 10 and number(execution.get("unexecuted"), integer=True) == 0:
             score = candidate
+            if candidate == 10 and not (
+                execution.get("failed") == 0 and execution.get("skipped") == 0
+                and execution.get("open_defects") == 0
+                and number(execution.get("checkpoints_total"), integer=True) is not None
+                and execution["checkpoints_total"] >= 19
+                and execution.get("checkpoints_passed") == execution["checkpoints_total"]
+            ):
+                score = None
     counts = {key: number((execution or {}).get(key), integer=True) if executed else None
               for key in ("passed", "failed", "skipped", "unexecuted")}
     return {"inventory_revision": identifier((matrix or {}).get("revision"), REVISION),

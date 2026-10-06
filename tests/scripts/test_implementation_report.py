@@ -71,6 +71,18 @@ def test_unexecuted_scenarios_prevent_scoring_even_with_claimed_completion(tmp_p
     assert data["ux"]["usability_estimate_score"] is None
 
 
+def test_full_score_requires_completed_checkpoints_and_no_open_defects(tmp_path):
+    evidence = fixture(tmp_path)
+    valid = {"revision": REV, "execution_status": "completed", "score": 10,
+             "passed": 91, "failed": 0, "skipped": 0, "unexecuted": 0,
+             "open_defects": 0, "checkpoints_total": 33, "checkpoints_passed": 33}
+    assert report.build_aggregate(evidence, REV, qa_execution=valid)["ux"]["usability_estimate_score"] == 10
+    for change in ({"failed": 1}, {"skipped": 1}, {"open_defects": 1},
+                   {"checkpoints_passed": 32}, {"checkpoints_total": 1}):
+        actual = report.build_aggregate(evidence, REV, qa_execution={**valid, **change})
+        assert actual["ux"]["usability_estimate_score"] is None
+
+
 def test_wrong_revision_browser_does_not_promote_user_attestation(tmp_path):
     data = report.build_aggregate(fixture(tmp_path), REV, browser={"revision": OLD, "browser_login_performed": True,
         "authenticated_google_session": True, "authenticated_session_kind": "GOOGLE", "status": 200,

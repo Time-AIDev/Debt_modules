@@ -27,10 +27,20 @@ def run(vus=25, duration=120, **extra):
                          "thresholds": {expression: {"ok": True}}}
     metrics["http_reqs"] = {"values": {"count": 100}}
     metrics["vus_max"] = {"values": {"max": vus}}
+    for name, stat, value, expression in (
+        ("capacity_page_ms", "p(95)", 100, "p(95)<2000"),
+        ("capacity_page_errors", "rate", 0, "rate<0.01"),
+        ("complete_action_ms", "p(95)", 100, "p(95)<2000"),
+        ("debt_mutations_committed", "count", 100, "count>0"),
+    ):
+        metrics[name] = {"values": {stat: value}, "thresholds": {expression: {"ok": True}}}
     return {"vus": vus, "duration_seconds": duration, "exit_code": 0,
             "customers": 500, "instalments_per_contract": 96, "unchanged_workload": True,
+            "workload_sha256": quality.HISTORICAL_WORKLOAD_SHA256,
             "legacy_unpaged_today": True, "oom_observed": False, "restart_delta": 0,
             "queue_growth": False,
+            "concurrent_preview": {"profile": "debt_status", "started": True, "passed": True,
+                                   "never_applied": True, "isolated_staging_only": True},
             "summary": {"metrics": metrics, "state": {"testRunDurationMs": duration * 1000}}, **extra}
 
 
@@ -46,7 +56,7 @@ def artifacts():
                      "generator_fingerprint": "3" * 64, "target_fingerprint": "4" * 64,
                      "historical": [run(vus) for vus in (1, 10, 25)],
                      "supplemental": [run(scenario=name, duration=900 if name == "soak" else 120,
-                                          customers=1431, roles=["OWNER", "OFFICER"])
+                                          customers=1431, roles=["OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"])
                                       for name in ("paged_ui", "mixed_roles", "import_concurrency", "soak")]},
         "financial": {"staging_isolated": True, "actual_input_files": True,
                       "rows_accounted": True, "cash_conserved": True,
@@ -54,7 +64,9 @@ def artifacts():
                       "book_preserved": True, "unexplained_differences": 0, "tests_failed": 0,
                       "input_files": [{"sha256": str(n) * 64} for n in (1, 2, 3)]},
         "usability": {"method": "simulated_debt_team", "score": 10, "critical": 0,
-                      "high": 0, "unexercised": 0, "feature_count": 19,
+                      "high": 0, "open_defects": 0, "failed": 0, "skipped": 0,
+                      "unexercised": 0, "feature_count": 19, "checkpoints_total": 33,
+                      "checkpoints_passed": 33, "roles_observed": ["OFFICER", "MANAGER", "OPS"],
                       "dimensions": {x: 2 for x in ("completion", "navigation", "financial_clarity",
                                                    "recovery", "accessibility")}},
         "offsite_recovery": {"simulated": False, "recovery_host_fingerprint": "5" * 64,
@@ -108,6 +120,7 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["capacity"].update(generator_fingerprint="4" * 64),
     lambda d: d["capacity"]["historical"].pop(),
     lambda d: d["capacity"]["historical"][2].update(legacy_unpaged_today=False),
+    lambda d: d["capacity"]["historical"][2].update(workload_sha256="f" * 64),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_read_ms"]["values"].update({"p(95)": 2000}),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_errors"]["values"].update(rate=.01),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["checks"]["values"].update(rate=.99),
@@ -119,9 +132,19 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["capacity"]["historical"][2].update(exit_code=False),
     lambda d: d["capacity"]["supplemental"][-1].update(duration_seconds=899),
     lambda d: d["capacity"]["supplemental"][-1].update(oom_observed=True),
+    lambda d: d["capacity"]["supplemental"][0]["summary"]["metrics"].pop("capacity_page_ms"),
+    lambda d: d["capacity"]["supplemental"][1]["summary"]["metrics"]["complete_action_ms"]["values"].update({"p(95)": 2000}),
+    lambda d: d["capacity"]["supplemental"][1]["summary"]["metrics"]["debt_mutations_committed"]["values"].update(count=0),
+    lambda d: d["capacity"]["supplemental"][1].update(roles=["OWNER", "OFFICER"]),
+    lambda d: d["capacity"]["supplemental"][2]["concurrent_preview"].update(passed=False),
     lambda d: d["financial"].update(cash_conserved=False),
     lambda d: d["financial"].update(actual_input_files=False),
     lambda d: d["usability"].update(unexercised=1),
+    lambda d: d["usability"].update(open_defects=1),
+    lambda d: d["usability"].update(feature_count=1),
+    lambda d: d["usability"].update(checkpoints_passed=32),
+    lambda d: d["usability"].update(failed=1),
+    lambda d: d["usability"].update(skipped=1),
     lambda d: d["usability"]["dimensions"].update(financial_clarity=1),
     lambda d: d["offsite_recovery"].update(recovery_host_fingerprint="6" * 64),
     lambda d: d["offsite_recovery"].update(simulated=True),

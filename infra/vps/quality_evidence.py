@@ -16,7 +16,8 @@ LIMITS = {"business_read_ms": ("p(95)", 2000, "p(95)<2000"),
           "business_write_ms": ("p(95)", 2000, "p(95)<2000"),
           "business_errors": ("rate", .01, "rate<0.01"),
           "checks": ("rate", .99, "rate>0.99"),
-          "idempotency_replay_errors": ("rate", 0, "rate==0")}
+            "idempotency_replay_errors": ("rate", 0, "rate==0")}
+HISTORICAL_WORKLOAD_SHA256 = "480b0646dd3ec6405c4d0afa7b2e94371e62a9c47f711978cfed5f3ee8ab7ec5"
 
 
 class QualityError(ValueError):
@@ -98,7 +99,8 @@ def capacity(data):
         require(len(runs) == 1, "Historical k6 matrix requires exactly one final run per VU level")
         run = runs[0]
         require(run.get("customers") == 500 and run.get("instalments_per_contract") == 96
-                and run.get("unchanged_workload") is True and run.get("legacy_unpaged_today") is True,
+                and run.get("unchanged_workload") is True and run.get("legacy_unpaged_today") is True
+                and run.get("workload_sha256") == HISTORICAL_WORKLOAD_SHA256,
                 "Historical k6 workload or payload was changed")
         native_capacity(run, 120, vus)
     supplemental = data.get("supplemental", [])
@@ -107,8 +109,27 @@ def capacity(data):
         runs = [run for run in supplemental if run.get("scenario") == name]
         require(len(runs) == 1, "Required capacity scenario is missing: " + name)
         native_capacity(runs[0], 900 if name == "soak" else 120, 25)
+        metrics = runs[0].get("summary", {}).get("metrics", {})
+        if name == "paged_ui":
+            require(0 < number(metrics.get("capacity_page_ms", {}).get("values", {}).get("p(95)")) < 2000
+                    and metrics.get("capacity_page_ms", {}).get("thresholds", {}).get("p(95)<2000", {}).get("ok") is True
+                    and 0 <= number(metrics.get("capacity_page_errors", {}).get("values", {}).get("rate")) < .01
+                    and metrics.get("capacity_page_errors", {}).get("thresholds", {}).get("rate<0.01", {}).get("ok") is True,
+                    "Paged UI native gates did not pass")
+        else:
+            require(0 < number(metrics.get("complete_action_ms", {}).get("values", {}).get("p(95)")) < 2000
+                    and metrics.get("complete_action_ms", {}).get("thresholds", {}).get("p(95)<2000", {}).get("ok") is True
+                    and number(metrics.get("debt_mutations_committed", {}).get("values", {}).get("count")) > 0
+                    and metrics.get("debt_mutations_committed", {}).get("thresholds", {}).get("count>0", {}).get("ok") is True,
+                    "Complete debt commands must be exercised and meet the original latency target")
         if name == "mixed_roles":
-            require(set(runs[0].get("roles", [])) >= {"OWNER", "OFFICER"}, "Mixed-role capacity was not tested")
+            require(set(runs[0].get("roles", [])) >= {"OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"},
+                    "Mixed-role capacity was not tested")
+        if name == "import_concurrency":
+            preview = runs[0].get("concurrent_preview", {})
+            require(all(preview.get(key) is True for key in ("started", "passed", "never_applied", "isolated_staging_only"))
+                    and preview.get("profile") in ("debt_status", "contract_supplement"),
+                    "Concurrent protected import preview did not pass")
         if name == "soak":
             require(number(runs[0].get("customers")) >= 1431, "Soak fixture must represent the current portfolio")
 
@@ -140,7 +161,11 @@ def validate_check(kind, data, now, production_fingerprint):
     elif kind == "usability":
         require(data.get("method") == "simulated_debt_team" and data.get("score") == 10
                 and zero(data.get("critical")) and zero(data.get("high"))
-                and zero(data.get("unexercised")) and number(data.get("feature_count")) > 0,
+                and zero(data.get("open_defects")) and zero(data.get("failed")) and zero(data.get("skipped"))
+                and zero(data.get("unexercised")) and number(data.get("feature_count")) >= 19
+                and number(data.get("checkpoints_total")) >= number(data.get("feature_count"))
+                and data.get("checkpoints_passed") == data.get("checkpoints_total")
+                and set(data.get("roles_observed", [])) >= {"OFFICER", "MANAGER", "OPS"},
                 "Debt-team usability estimate has not reached the agreed checkpoints")
         dimensions = data.get("dimensions", {})
         require(set(dimensions) == {"completion", "navigation", "financial_clarity", "recovery", "accessibility"}
