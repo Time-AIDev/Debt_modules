@@ -187,6 +187,7 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     principal = principal_from_instalment(pmt, term)
     due_by = instalments_due_by(first_due, term, as_of)
     status = payment_status_code(row.get("payment_status"))
+    evidence_only = bool(row.get("financial_evidence_only"))
     days_late = row.get("days_late") or 0
     late_cells = grid_cells(months, "LATE")
     link_sent_cells = grid_cells(months, "LINK_SENT")
@@ -213,6 +214,9 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
                      # 2026-09-20: when the sheet owner adds the value, it becomes the
                      # engine status of its own — never folded into CLOSED.
                      "TERMINATED": "TERMINATED"}.get(status, "ACTIVE")
+    if evidence_only:
+        # The maintained worksheet is contractual/status evidence, never a receipt.
+        paid_through, engine_status = 0, "ACTIVE"
     fixture = ContractFixture(uid, customer_uid, "LEASE", principal, term, first_due,
                               status=engine_status, paid_through=paid_through,
                               acceptance_date=_date(row.get("contract_signed"))).build()
@@ -229,6 +233,7 @@ def _lease_contract(uid, customer_uid, row, as_of, confirmation=None):
     # The sheet row travels with the contract so a customer with two contracts keeps
     # two grids, two PMTs and two notes (N2-03).
     fixture.requires_schedule_confirmation = True
+    fixture.requires_installation_confirmation = True
     fixture.schedule_confirmation = confirmation
     fixture.calendar_months = row.get("calendar_months") or []
     fixture.pmt = pmt
@@ -298,6 +303,15 @@ def _cash_contract(uid, customer_uid, row, invoices, as_of):
     fixture = make_cash_contract(uid, customer_uid, str(price), str(deposit), deposit_paid_on,
                                  balance_due, balance_paid=balance_paid, status=status,
                                  acceptance_date=signed)
+    if (row or {}).get("financial_evidence_only"):
+        fixture.status = "ACTIVE"
+        fixture.acceptance_date = None
+        fixture.requires_installation_confirmation = True
+        fixture.requires_schedule_confirmation = True
+        from . import schedule_confirmation
+        fixture.schedule_confirmation = schedule_confirmation.active().get(uid)
+        for line in fixture.instalments:
+            line.paid_principal = line.paid_interest = line.paid_fee = Decimal("0.00")
     fixture.derivation = {"deposit": deposit_note, "balance_due": str(balance_due),
                           "price": ("sum of the sheet's invoices" + (" (instalment %s — later invoices not yet issued)" % invoices[0]["instalment"]
                                                                      if invoices and invoices[0].get("instalment") else ""))

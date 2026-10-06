@@ -560,7 +560,7 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None):
     return rows, numbers
 
 
-def read_xlsx(raw: bytes):
+def read_xlsx(raw: bytes, selected_sheets=None):
     """Returns [{"name": tab name, "rows": [[cell,...],...]}], one per tab, in
     workbook order. Raises UploadRefused for every case §4.2 names as a refusal
     rather than a guess."""
@@ -573,13 +573,13 @@ def read_xlsx(raw: bytes):
                             "รองรับเฉพาะไฟล์ .csv และ .xlsx")
     with zf:
         try:
-            return _read_xlsx_archive(zf)
+            return _read_xlsx_archive(zf, selected_sheets=selected_sheets)
         except (ET.ParseError, zipfile.BadZipFile, ValueError, EOFError, RuntimeError) as exc:
             raise UploadRefused("/file", "The XLSX workbook is malformed and cannot be read.",
                                 "ไฟล์ XLSX เสียหายหรือรูปแบบไม่ถูกต้อง กรุณาบันทึกใหม่แล้วลองอีกครั้ง") from exc
 
 
-def _read_xlsx_archive(zf):
+def _read_xlsx_archive(zf, selected_sheets=None):
     budget = _XlsxBudget()
     infos = zf.infolist()
     if len(infos) > 2048 or len({info.filename for info in infos}) != len(infos):
@@ -612,6 +612,9 @@ def _read_xlsx_archive(zf):
     date_styles = _date_style_indices(zf)
     sheets = []
     for name, part in _workbook_sheets(zf):
+        if selected_sheets is not None and name.strip().lower() not in {
+                value.strip().lower() for value in selected_sheets}:
+            continue
         rows, numbers = _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget)
         sheets.append({"name": name, "rows": rows, "row_numbers": numbers})
     return sheets

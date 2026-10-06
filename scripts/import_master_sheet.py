@@ -375,13 +375,23 @@ def cash_instalment(row, hdr, i):
     says that. With no Status, an amount is a payment."""
     amount = cell(row, i)
     due = parse_date(cell(row, i - 1), day_first=True) if i and str(hdr[i - 1]).startswith("Due Date") else None
-    word = (cell(row, i + 1) or "").strip().lower() if hdr[i + 1:i + 2] == ["Status"] else ""
+    status_heading = str(cell(hdr, i + 1) or "").strip()
+    expected = "Status " + str(cell(hdr, i) or "").strip()
+    has_status = status_heading in ("Status", expected)
+    word = (cell(row, i + 1) or "").strip().lower() if has_status else ""
+    if has_status and not word:
+        # An amount with an empty maintained status is not a receipt.
+        return {"kind": "UNCONFIRMED", "amount": money(amount)}, due, True
     if not word:
         return month_cell(amount), due, not money(amount)
     if word == "paid":
         return month_cell(amount) or month_cell(word), due, False
     if word == "closed":
         return month_cell(amount), due, False
+    if word in ("partial", "not due", "not issued", "terminated"):
+        return {"kind": {"partial": "PARTIAL", "not due": "UPCOMING",
+                         "not issued": "UNISSUED", "terminated": "TERMINATED"}[word],
+                "amount": money(amount)}, due, word != "terminated"
     return month_cell(cell(row, i + 1)), due, word != "terminated"
 
 

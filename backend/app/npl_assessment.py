@@ -24,6 +24,9 @@ class Assessment:
     reason: Optional[str]
     label_th: Optional[str] = None
     label_en: Optional[str] = None
+    eligibility_review: bool = False
+    eligible_contracts: int = 0
+    exclusions: tuple = ()
 
 
 def assess(
@@ -32,6 +35,7 @@ def assess(
     as_of: date,
     contacts: Iterable[dict] = (),
     field_of: Optional[Callable] = None,
+    eligible_of: Optional[Callable] = None,
 ) -> Assessment:
     """Assess a customer's active schedules without mutating any workflow state.
 
@@ -43,9 +47,20 @@ def assess(
     max_missed = 0
     restructured = False
     assessment_hold = False
+    excluded = []
+    eligible_count = 0
+    accounting_dpd = 0
 
     for contract in contracts:
         lines = list(field_of(contract, "instalments") or ())
+        accounting_dpd = max(accounting_dpd, compute_dpd(lines, as_of=as_of, frozen_days=0) or 0)
+        eligibility = eligible_of(contract) if eligible_of else {
+            "eligible": field_of(contract, "status") not in ("CLOSED", "WRITTEN_OFF", "TERMINATED", "CANCELLED", "PRE_COLLECTION")}
+        if not eligibility["eligible"]:
+            excluded.append({"contract_uid": getattr(contract, "uid", None),
+                             "reason": eligibility.get("reason") or "CONTRACT_INELIGIBLE"})
+            continue
+        eligible_count += 1
         max_dpd = max(max_dpd, compute_dpd(lines, as_of=as_of, frozen_days=0) or 0)
         missed = sum(
             1 for line in lines
@@ -73,7 +88,7 @@ def assess(
         reason = "RESTRUCTURED_TWO_MISSES" if two_restructured_misses else "DPD_90_PLUS"
 
     return Assessment(
-        actual_dpd=max_dpd,
+        actual_dpd=accounting_dpd,
         missed_instalments=max_missed,
         restructured=restructured,
         automatic_npl=automatic_npl,
@@ -82,4 +97,7 @@ def assess(
         reason=reason,
         label_th="พักประเมิน NPL" if assessment_hold else None,
         label_en="NPL assessment paused" if assessment_hold else None,
+        eligibility_review=any(row["reason"] == "INSTALLATION_UNCONFIRMED" for row in excluded),
+        eligible_contracts=eligible_count,
+        exclusions=tuple(excluded),
     )

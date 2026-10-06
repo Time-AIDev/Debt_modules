@@ -357,6 +357,11 @@ def _landing_rows(conn, customers, orders, blocks, merged=()):
     peak_blocks = peak_writer.invoices_for_book(conn, served_nos=nos)
 
     rows = []
+    from . import debt_imports
+    supplements = debt_imports.supplements(conn)
+    supplements_by_customer = {value["customer_uid"]: value for value in supplements.values()}
+    statuses = debt_imports.observation_map(conn, ["sheet-" + str(customer.get("customer_no") or "")
+                                                 for customer in customers])
     for customer in customers:
         volt_id = customer["volt_id"]
         record = _as_fixture({key: customer.get(key) for key in landing.CUSTOMER_COLUMNS})
@@ -376,6 +381,15 @@ def _landing_rows(conn, customers, orders, blocks, merged=()):
             record["order"] = merged
         else:
             record["order"] = None
+        customer_uid = "sheet-" + str(customer.get("customer_no") or "")
+        supplement = supplements_by_customer.get(customer_uid)
+        if supplement:
+            block = "leasing" if supplement["product"] == "LEASE" else "cash"
+            # Preserve any existing authoritative contractual book, never replace it.
+            if not record.get(block):
+                record[block] = supplement["record"]
+                record["contract_supplement"] = supplement
+        record["debt_status_observations"] = statuses.get(customer_uid) or []
         rows.append(record)
     # 2026-10-01: the Odoo lead each merged sheet customer is, recorded by the crm.lead
     # pull before its ODOO landing row retired (pipelines/odoo_links). The served row

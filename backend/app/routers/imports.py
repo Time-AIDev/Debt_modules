@@ -170,9 +170,18 @@ def _validate_install_payload(payload):
                              message_th="ต้องตั้งค่าฐานข้อมูลก่อนนำเข้า", error_id="DEBT-IMP-0503")
 
 
-def _process_import(raw, filename, officer, role, install, confirm_retire, run_uid=None):
+def _process_import(raw, filename, officer, role, install, confirm_retire, run_uid=None, profile=None):
     parsed_run_uid = None
     try:
+        if profile:
+            from .. import debt_imports
+            if install:
+                raise debt_imports.problem("profile_apply", "ตรวจตัวอย่างก่อน แล้วใช้คำสั่งยืนยันแถวที่เลือก")
+            preview = debt_imports.stage(raw, filename, profile, officer or "officer")
+            result = {"preview": preview, "counts": preview["counts"], "installed": False}
+            if run_uid:
+                runs.mark_committed(run_uid)
+            return result
         if run_uid:
             runs.progress(run_uid, phase="parsing", processed=0, phase_total=None)
         run, payload = imports_domain.parse_upload(
@@ -252,7 +261,7 @@ async def _run_background(uid, context, work):
 
 
 @router.post("/v1/imports")
-async def create_import(request: Request, install: bool = False, confirm_retire: int = None,
+async def create_import(request: Request, install: bool = False, confirm_retire: int = None, profile: str = None,
                         x_volt_role: str = Header(default="OFFICER"),
                         x_volt_officer: str = Header(default=None),
                         x_volt_filename: str = Header(default=None)):
@@ -278,13 +287,13 @@ async def create_import(request: Request, install: bool = False, confirm_retire:
 
     try:
         return await run_in_threadpool(_process_import, raw, filename, x_volt_officer,
-                                       x_volt_role, install, confirm_retire)
+                                       x_volt_role, install, confirm_retire, None, profile)
     except imports_domain.UploadRefused as exc:
         raise _refused(exc)
 
 
 @router.post("/v1/imports:start", status_code=202)
-async def start_import(request: Request, install: bool = False, confirm_retire: int = None,
+async def start_import(request: Request, install: bool = False, confirm_retire: int = None, profile: str = None,
                        x_volt_role: str = Header(default="OFFICER"),
                        x_volt_officer: str = Header(default=None),
                        x_volt_filename: str = Header(default=None)):
@@ -316,7 +325,7 @@ async def start_import(request: Request, install: bool = False, confirm_retire: 
         await run_in_threadpool(enqueue_request, request, uid, raw)
         return JSONResponse(status_code=202, content=runs.get(uid))
     await _run_background(uid, contextvars.copy_context(), lambda: _process_import(
-        raw, filename, x_volt_officer, x_volt_role, install, confirm_retire, uid))
+        raw, filename, x_volt_officer, x_volt_role, install, confirm_retire, uid, profile))
     return JSONResponse(status_code=202, content=runs.get(uid))
 
 

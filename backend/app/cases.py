@@ -112,6 +112,11 @@ class CaseState:
         self._counter = 0
 
     def uid(self, prefix):
+        from . import business_records
+        allocate = getattr(business_records, "next_domain_id", None)
+        allocated = allocate(prefix, self._counter) if allocate else None
+        if allocated is not None:
+            return allocated
         self._counter += 1
         return "%s-%05d" % (prefix, self._counter)
 
@@ -1032,11 +1037,13 @@ def _payment_status_from_contracts(customer):
 
 def npl_assessment_for(customer, contacts=()):
     from .npl_assessment import assess
+    from .collection_eligibility import for_contract
     return assess(
         customer.contracts,
         as_of=settings.business_date,
         contacts=contacts,
         field_of=contract_field_of,
+        eligible_of=lambda contract: for_contract(contract, contract_field_of),
     )
 
 
@@ -1051,6 +1058,9 @@ def _assessment_payload(result):
         "reason": result.reason,
         "label_th": result.label_th,
         "label_en": result.label_en,
+        "eligibility_review": result.eligibility_review,
+        "eligible_contracts": result.eligible_contracts,
+        "exclusions": list(result.exclusions),
     }
 
 
@@ -1127,8 +1137,18 @@ def sheet_says(customer):
     is None when the tab holds no row for this customer or a word the map does not
     know; `word` is the sheet's own Category, verbatim."""
     sheet = getattr(customer, "sheet", None) or {}
+    observations = [row for row in sheet.get("debt_status_observations") or []
+                    if (row.get("record") or {}).get("kind") in ("LEASING_BOOK", "CASH_TAB")]
+    if observations:
+        observation = observations[-1]
+        code, word = observation.get("mapped_status"), observation.get("source_status")
+        # Closed, NPL and termination declarations require their existing reviewed
+        # financial/workflow gates. Importing a word cannot settle or write off debt.
+        return (code if code in ("CURRENT", "LATE") else None), word
     from .imports import _IMS
     leasing = sheet.get("leasing") or {}
+    if leasing.get("financial_evidence_only"):
+        return None, leasing.get("payment_status")
     if _IMS._done(leasing) and leasing.get("payment_status"):
         # Arina, 2026-09-25: Done - Collection's own Payment Status wins over any
         # other tab's word for the same customer.
@@ -1136,6 +1156,8 @@ def sheet_says(customer):
         word = str(leasing["payment_status"]).strip()
         return ("NPL" if word.startswith("NPL") else payment_status_code(word)), word
     cash = sheet.get("cash") or {}
+    if cash.get("financial_evidence_only"):
+        return None, cash.get("status_word")
     if _IMS._done(cash) and cash.get("status_word"):
         word = cash["status_word"]
         return {"closed": "CLOSED", "late": "LATE", "link sent": "LATE", "not due": "CURRENT",
