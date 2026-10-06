@@ -230,6 +230,14 @@ def reconcile_receipts(invoices, receipt_observations, *, _recover_snapshot_canc
         if not _identity_of(receipt) or str(_identity_of(receipt)) != str(_identity_of(inv)):
             continue
         components = receipt.get("payments") or previous_paid.get(receipt["doc_no"], (None, {}))[1].get("payments")
+        if not components:
+            # Older received cash can be evidenced in the dated invoice export
+            # even when the receipt export starts later. Only the exact receipt
+            # reference on this independently matched original invoice qualifies.
+            components = [part for part in inv.get('source_payments') or []
+                          if str(part.get('receipt_no') or '').strip() == receipt['doc_no']]
+            if components:
+                receipt['cancellation_evidence_source'] = 'DATED_INVOICE_PAYMENT_COMPONENTS'
         if components:
             historical = [part for part in components if part.get("on") and str(part["on"])[:10] <= cutoff]
             if not historical:

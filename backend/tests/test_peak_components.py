@@ -140,6 +140,22 @@ def test_cancellation_reverses_net_signed_historical_cash_once():
     assert result['allocations'] == [] and result['component_allocations'] == []
 
 
+def test_cancellation_uses_only_exact_same_customer_original_invoice_payment_evidence():
+    from app.payment_claims import reconcile_receipts
+    invoice = {'doc_no': 'IV-OLD', 'customer_no': 'C1', 'amount': '100', 'outstanding': '0',
+               'due_on': '2025-01-01', 'snapshot_as_of': '2026-09-14', 'source_payments': [
+                   {'receipt_no': 'RE-OLD', 'on': '2025-01-01', 'amount': '100'}]}
+    cancelled = {'doc_no': 'RE-OLD', 'invoice_ref': 'IV-OLD', 'customer_no': 'C1',
+                 'status': 'CANCELLED', 'paid_amount': None, 'paid_on': None, 'exported_at': '2026-09-30'}
+    result = reconcile_receipts([invoice], [cancelled, cancelled])
+    assert result['invoices']['IV-OLD']['confirmed_outstanding'] == '100.00'
+    assert result['allocations'] == [] and result['exceptions'] == []
+    for changed in ({'doc_no': 'RE-OTHER'}, {'customer_no': 'C2'}, {'invoice_ref': 'IV-OTHER'}):
+        refused = reconcile_receipts([invoice], [dict(cancelled, **changed)])
+        assert refused['invoices']['IV-OLD']['confirmed_outstanding'] == '0.00'
+        assert refused['allocations'] == []
+
+
 def test_different_customer_identity_inside_receipt_cannot_be_auto_matched():
     parsed = peak_receipt.parse(receipt_report([receipt_line(), receipt_line(**{"รหัสผู้ติดต่อ": "99999009999"})]))
     assert parsed["receipts"] == []
