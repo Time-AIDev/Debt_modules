@@ -13,7 +13,8 @@ function wrap(ui, { route = '/' } = {}, withCrumb = true) {
   // A deep-link screen must receive the same path parameters as the real App.
   // Rendering Record directly inside MemoryRouter gave useParams() an empty UID
   // while loose API mocks returned an unrelated fixture and concealed that gap.
-  const routed = withCrumb && route.split('?')[0].startsWith('/customers/')
+  const pathname = typeof route === 'string' ? route.split('?')[0] : route.pathname || '/'
+  const routed = withCrumb && pathname.startsWith('/customers/')
     ? <Routes><Route path="/customers/:uid" element={inner} /></Routes> : inner
   return render(
     <PrefsProvider>
