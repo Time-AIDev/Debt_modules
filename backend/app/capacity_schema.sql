@@ -60,3 +60,6 @@ CREATE INDEX IF NOT EXISTS customer_projection_dpd_idx
     ON app.customer_projection(generation,dpd DESC,customer_uid);
 CREATE INDEX IF NOT EXISTS customer_projection_next_idx
     ON app.customer_projection(generation,next_action_on,customer_uid);
+-- Case history reads use customer first, while the existing primary key is month first.
+CREATE INDEX IF NOT EXISTS customer_month_customer_idx
+    ON records.customer_month(customer_uid,month DESC);
