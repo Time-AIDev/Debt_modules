@@ -232,6 +232,53 @@ def test_complete_generation_matches_legacy_financial_rows_and_filters(capacity)
             main._VIEW_MEMO.reset(memo)
 
 
+def test_shadow_generation_publishes_new_collection_cases_before_scoped_http_reads(capacity, pg_url, monkeypatch):
+    from copy import deepcopy
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app import db, production_runtime
+    from app.production_unit import ProductionUnitMiddleware
+    from app.routers.today import case_detail
+    from tests.test_enriched_collection_cases import enriched
+
+    with unit(capacity):
+        original = cases.for_current()
+        old_cases = deepcopy(original.cases)
+        business_records.save(capacity, "cases.state", original)
+    customer = enriched()
+    monkeypatch.setattr(main, "CUSTOMERS", [*main.CUSTOMERS, customer])
+    monkeypatch.setattr(main, "BY_CUSTOMER", {**main.BY_CUSTOMER, customer.uid: customer})
+    monkeypatch.setattr(main, "BY_CONTRACT", {**main.BY_CONTRACT, customer.contracts[0].uid: (customer, customer.contracts[0])})
+    monkeypatch.setattr(production_runtime, "prepare_book", lambda **kwargs: None)
+    with unit(capacity):
+        assert customer.uid not in cases.for_current().cases
+        key = read_projection.rebuild(capacity)
+        saved, _ = business_records.load(capacity, "cases.state")
+        assert customer.uid in saved.cases
+        assert all(saved.cases[uid] == value for uid, value in old_cases.items())
+        assert capacity.execute(text("select count(*) from app.customer_projection where generation=:g and customer_uid=:u"),
+                                {"g": key, "u": customer.uid}).scalar_one() == 1
+    capacity.execute(text("update app.schema_version set version=3 where singleton"))
+    capacity.commit()
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    db.reset()
+    application = FastAPI()
+    @application.get("/v1/cases/by-customer/{uid}")
+    def customer_detail(uid: str):
+        return case_detail(uid)
+    application.add_middleware(ProductionUnitMiddleware, enabled=lambda: True)
+    try:
+        with TestClient(application) as client:
+            response = client.get("/v1/cases/by-customer/" + customer.uid)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload.get("identity_only") is not True
+        assert [contract["uid"] for contract in payload["contracts"]] == [customer.contracts[0].uid]
+        assert "x-volt-case-version" in response.headers
+    finally:
+        db.reset()
+
+
 def test_shadow_build_failure_never_publishes_partial_generation(capacity, monkeypatch):
     current = generation(capacity, [projected("a")])
     with unit(capacity):

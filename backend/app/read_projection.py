@@ -133,6 +133,8 @@ def _rebuild(conn):
         prepare_book(exclusive=True)
         source_epoch = int(conn.execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar_one())
         cs = cases.for_current()
+        cases.open_collection_cases(cs)
+        cs = cases.for_current()
         today = domain.build()
         domain.annotate_worked(today["items"], settings.business_date)
         today["meta"]["worked_today_count"] = sum(bool(row["worked_today"]) for row in today["items"])

@@ -525,10 +525,10 @@ def _blank_case(uid, customer_uid, customer_no, volt_id, product, officer_uid,
     }
 
 
-def _seed(state: CaseState):
+def _seed(state: CaseState, customers=None):
     d = dictionaries.for_current()
     bd = settings.business_date
-    for customer in book_customers():
+    for customer in book_customers() if customers is None else customers:
         sheet = getattr(customer, "sheet", None)
         product = getattr(customer, "product", None) or (customer.contracts[0].product if customer.contracts else None)
         row = (sheet or {}).get("leasing") or (sheet or {}).get("cash") or {}
@@ -663,6 +663,24 @@ def _seed(state: CaseState):
                 blocking=False,
             )
             case["npl_review_uid"] = review["uid"]
+
+
+def open_collection_cases(state):
+    """Give newly enriched contract holders their normal case, preserving existing work.
+
+    Identity-only leads have no collection case to refresh. A later approved
+    supplement can supply their first real contract, so the import/publication
+    transaction must seed these missing cases before publishing its read model.
+    """
+    missing = [customer for customer in book_customers()
+               if customer.contracts and customer.uid not in state.cases]
+    if missing:
+        _seed(state, customers=missing)
+        from . import request_context
+        reads = request_context.reads()
+        if reads is not None:
+            reads.pop(("cases.overlays", id(state)), None)
+    return len(missing)
 
 
 def open_pre_install_case(state, customer_uid, customer_no, display_name, volt_id,

@@ -95,7 +95,9 @@ def heal_session():
         cards = invoice_pipeline.reseed_from_book()
         # New cards open their cases (the cases factory's job) before the case snapshot
         # refresh walks them, so a card added by this import is caught up in the same pass.
-        cases._open_pipeline_cases(cases.for_current())
+        case_state = cases.for_current()
+        collection_cases_added = cases.open_collection_cases(case_state)
+        cases._open_pipeline_cases(case_state)
         summary = cases.follow_import_for_all()
         docs = peak_documents.reconcile(peak_documents.for_current(), jstate)
         from . import termination_archive
@@ -126,6 +128,7 @@ def heal_session():
             "cards_added": cards.get("added", 0),
             "cases_moved": summary.get("moved", 0),
             "cases_refreshed": summary.get("refreshed", 0),
+            "collection_cases_added": collection_cases_added,
             "documents_flagged": docs.get("flagged", 0),
         }
 

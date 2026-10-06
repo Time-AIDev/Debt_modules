@@ -1475,6 +1475,11 @@ def case_detail(customer_uid: str):
         # fabricated case. A uid the book does not hold at all still 404s.
         if customer is not None:
             audit.describe(subject=("customer", customer_uid))
+            if getattr(customer, "contracts", None):
+                raise errors.Problem("collection_case_not_ready", 503, "Reload the customer case",
+                                     "The contract is available but its collection case has not been published.",
+                                     "มีข้อมูลสัญญาแล้ว แต่เคสติดตามหนี้ยังไม่พร้อม กรุณาโหลดเคสใหม่",
+                                     "DEBT-CASE-503", retryable=True)
             return _identity_only_case_detail(cs, customer, customer_uid)
         raise problem_from(exc)
     audit.describe(subject=("customer", customer_uid))
