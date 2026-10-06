@@ -14,7 +14,7 @@ const COLUMN_KIND = FAMILIES.board[1]
  * stage is not an urgency). A card outside the served columns is reported in a
  * Problem box, never dropped.
  */
-export function Board({ columns, items, emptyText, onOpen, onLog, onMove, reconcile, moveLabel, moveDisabledTitle, openLabel, balanceLabel }) {
+export function Board({ columns, items, emptyText, onOpen, onLog, onMove, reconcile, laneCounts, moveLabel, moveDisabledTitle, openLabel, balanceLabel }) {
   const { t } = usePrefs()
   const known = new Set((columns || []).map((c) => c.id))
   const unknown = (items || []).filter((i) => !known.has(i.columnId))
@@ -29,7 +29,9 @@ export function Board({ columns, items, emptyText, onOpen, onLog, onMove, reconc
           errors: unknown.slice(0, 6).map((i) => ({ pointer: i.uid, message_th: i.name, message: i.name })),
         }} />
       )}
-      <div className="board" data-testid="board" data-reconciles={String((items || []).length - unknown.length === reconcile)}>
+      <div className="board" data-testid="board" data-loaded={String((items || []).length)}
+           data-total={String(reconcile ?? (items || []).length)}
+           data-reconciles={String(laneCounts ? Object.values(laneCounts).reduce((sum, n) => sum + Number(n), 0) === reconcile : (items || []).length - unknown.length === reconcile)}>
         {(columns || []).map((col) => {
           const cards = (items || []).filter((i) => i.columnId === col.id)
           const kind = col.kind || COLUMN_KIND[col.id]
@@ -38,11 +40,12 @@ export function Board({ columns, items, emptyText, onOpen, onLog, onMove, reconc
               <h2 className="board__head">
                 {kind ? <StatusIcon kind={kind} /> : null}
                 <span className="board__name">{col.label}</span>
-                <span className="board__count num">{cards.length}</span>
+                <span className="board__count num">{laneCounts?.[col.id] ?? cards.length}</span>
               </h2>
               <div className="board__body" role="group" aria-label={col.label} tabIndex={cards.length ? 0 : undefined}>
                 {cards.length === 0 ? (
-                  <p className="board__empty" data-testid={`board-empty-${col.id}`}>{emptyText || t('board.emptyColumn')}</p>
+                  <p className="board__empty" data-testid={`board-empty-${col.id}`}>{Number(laneCounts?.[col.id]) > 0
+                    ? t('board.notLoaded') : emptyText || t('board.emptyColumn')}</p>
                 ) : cards.map((card) => (
                   <BoardCard key={card.uid} card={card} onOpen={onOpen} onLog={onLog} onMove={onMove}
                              moveLabel={moveLabel} moveDisabledTitle={moveDisabledTitle}

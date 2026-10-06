@@ -3,6 +3,7 @@ import { api, AUTH_REQUIRED_EVENT } from '../lib/api.js'
 import { usePrefs } from '../lib/prefs.jsx'
 import { setSession } from '../lib/identity.jsx'
 import { Login } from '../screens/Login.jsx'
+import { setPublicRuntime } from '../lib/publicRuntime.js'
 
 /**
  * Login is on only when the server says so. Off — or an older API with no
@@ -21,11 +22,13 @@ export function AuthGate({ children }) {
     try {
       served = await api.authConfig()
     } catch (error) {
+      setPublicRuntime(null)
       setSession(null)
       setPhase(error?.status === 404 ? 'open' : 'failed')
       return
     }
     loaded.current = true
+    setPublicRuntime(served)
     setConfig(served)
     if (!served || served.mode !== 'on') { setSession(null); setPhase('open'); return }
     try {

@@ -12,7 +12,15 @@ import './history.css'
 
 export const causeLabel = (value) => ({ DEFAULT: 'ผิดนัด / เรียกคืน', CUSTOMER_REQUEST: 'ลูกค้าขอยุติ' }[value] || value || 'ไม่พบหลักฐาน')
 export const sourceLabel = (value) => ({ SHEET: 'ข้อมูลนำเข้า', PERSON: 'ดำเนินการในระบบ', MIXED: 'หลายแหล่งข้อมูล', UNKNOWN: 'ไม่พบหลักฐาน' }[value] || value || '—')
-export const thaiTime = (value) => value ? new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : 'ไม่พบหลักฐาน'
+export const thaiTime = (value) => {
+  if (!value) return 'ไม่พบหลักฐาน'
+  const raw = String(value).replace(' ', 'T')
+  const aware = /(?:Z|[+-]\d{2}:?\d{2})$/i.test(raw)
+  const normalized = aware ? raw : `${raw.length === 10 ? `${raw}T00:00:00` : raw}+07:00`
+  const instant = new Date(normalized)
+  return Number.isNaN(instant.getTime()) ? 'ไม่พบหลักฐาน'
+    : new Intl.DateTimeFormat('th-TH', { timeZone: 'Asia/Bangkok', dateStyle: 'medium', timeStyle: 'short' }).format(instant)
+}
 
 // A request owns its result. Navigation cannot display the previous customer's file.
 export function useHistoryRead(key, read) {
@@ -42,7 +50,7 @@ export function Terminated() {
   const [params, setParams] = useSearchParams()
   const location = useLocation()
   const query = params.toString()
-  const { data, problem, loading, retry } = useHistoryRead(query, () => api.terminated(Object.fromEntries(params)))
+  const { data, problem, loading, retry } = useHistoryRead(query, () => api.terminated({ ...Object.fromEntries(params), history: true }))
   useHistoryScroll(data, location)
   const [actors, setActors] = useState([])
   const origin = location.state?.origin
@@ -57,7 +65,7 @@ export function Terminated() {
   const page = Number(params.get('page') || 1)
   return <div className="stack">
     {back ? <Link className="scr-meta" to={back.to} state={{ ...back.state, restoreScroll: back.scrollY }}>← กลับหน้าเคส</Link> : null}
-    <div className="lensbar"><h1 className="lensbar__title">สัญญาที่ยุติ</h1><span className="lensbar__meta">{data ? `${data.meta.total} ลูกค้า` : ''}</span></div>
+    <div className="lensbar"><h1 className="lensbar__title">สัญญาที่ยุติ</h1><span className="lensbar__meta">{data ? `${data.meta.total} รายการประวัติ` : ''}</span></div>
     <ActionLogNav />
     <p className="scr-meta">ค้นหาเหตุผลและเปิดข้อมูลเคสที่เก็บไว้ย้อนหลัง • ไม่รวมการชำระครบตามปกติ</p>
     <section className="card">

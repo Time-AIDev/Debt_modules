@@ -41,7 +41,7 @@ describe('production write transport', () => {
     await api.addCaseNote('customer', { note: 'ตรวจหลัง fallback' })
     expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('9')
   })
-  it('uses the case version for notes while other writes retain their numeric version', async () => {
+  it('uses the case version for audited customer writes', async () => {
     const detail = response({ customer: { uid: 'customer' } }, 7)
     detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
       : name === 'x-volt-state-version' ? '7' : null
@@ -51,7 +51,34 @@ describe('production write transport', () => {
     await api.addCaseNote('customer', { note: 'ตรวจยอด' })
     expect(fetch.mock.calls[1][1].headers['If-Match']).toBe('case:customer:2')
     await api.setNextAction('customer', { next_action: 'CALL' })
+    expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('case:customer:2')
+  })
+
+  it('keeps attachment and service-ticket commands on the numeric global version', async () => {
+    const detail = response({ customer: { uid: 'customer' } }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce(response({}, 8)).mockResolvedValueOnce(response({}, 9))
+    await api.caseDetail('customer')
+    await api.addCaseNote('customer', { note: 'ตรวจหลักฐาน', attachment_uids: ['synthetic-file'] })
+    expect(fetch.mock.calls[1][1].headers['If-Match']).toBe('7')
+    await api.logCaseContact('customer', { result: 'REACHED_SERVICE_ISSUE', issue: { reason: 'ตรวจระบบ' } })
     expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('8')
+  })
+
+  it('binds a PTP command to its verified case and retains its stale-edit fence across data changes', async () => {
+    const detail = response({ customer: { uid: 'customer' }, ptps: [{ uid: 'ptp-one', customer_uid: 'customer' }] }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce(response({}, 8)).mockResolvedValueOnce(response({}, 9))
+    await api.caseDetail('customer')
+    await api.closeCasePtp('ptp-one', { outcome: 'BROKEN' })
+    expect(fetch.mock.calls[1][1].headers['If-Match']).toBe('case:customer:2')
+    window.dispatchEvent(new CustomEvent('volt:data-epoch'))
+    await api.closeCasePtp('ptp-one', { outcome: 'CANCELLED' })
+    expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('case:customer:2')
   })
 
   it('reuses an idempotency key after a connection failure', async () => {

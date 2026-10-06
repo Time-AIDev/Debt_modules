@@ -180,7 +180,10 @@ def test_unpaged_today_preserves_all_items_for_historical_k6(capacity):
 
 
 def test_unrecognized_mutations_keep_global_barrier_and_version_contract():
-    assert customer_scope({"path": "/v1/cases/by-customer/synthetic/notes", "method": "POST"}) == "synthetic"
+    from app.customer_transactions import plan
+    request = {"path": "/v1/cases/by-customer/synthetic/notes", "method": "POST"}
+    request['volt_customer_plan'] = plan(request, {'text': 'Synthetic note'})
+    assert customer_scope(request) == "synthetic"
     assert customer_scope({"path": "/v1/cases/by-customer/synthetic/payment-status", "method": "PATCH"}) is None
     assert case_token("synthetic", 3) == "case:synthetic:3"
 
@@ -273,9 +276,9 @@ def test_case_etags_allow_other_customer_edits_but_reject_same_case_stale_write(
             b = client.get("/v1/cases/by-customer/" + second)
             assert a.status_code == b.status_code == 200
             token_a, token_b = a.headers["x-volt-case-version"], b.headers["x-volt-case-version"]
-            assert client.post("/v1/cases/by-customer/" + first + "/notes", headers={"If-Match": token_a}).status_code == 201
-            assert client.post("/v1/cases/by-customer/" + second + "/notes", headers={"If-Match": token_b}).status_code == 201
-            assert client.post("/v1/cases/by-customer/" + first + "/notes", headers={"If-Match": token_a}).status_code == 409
+            assert client.post("/v1/cases/by-customer/" + first + "/notes", headers={"If-Match": token_a}, json={'text': 'Synthetic A'}).status_code == 201
+            assert client.post("/v1/cases/by-customer/" + second + "/notes", headers={"If-Match": token_b}, json={'text': 'Synthetic B'}).status_code == 201
+            assert client.post("/v1/cases/by-customer/" + first + "/notes", headers={"If-Match": token_a}, json={'text': 'Stale A'}).status_code == 409
     finally:
         db.reset()
 

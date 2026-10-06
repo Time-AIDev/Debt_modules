@@ -26,6 +26,17 @@ const CARD = {
 }
 
 describe('Board', () => {
+  it('uses full queue counts and distinguishes unloaded cards from an empty lane', () => {
+    renderScreen(<Board columns={COLUMNS} items={[CARD]} reconcile={51}
+      laneCounts={{ col_01H8X: 50, col_01H8Y: 0, col_01H8Z: 1, col_01H90: 0 }} />)
+    const board = screen.getByTestId('board')
+    expect(board).toHaveAttribute('data-loaded', '1')
+    expect(board).toHaveAttribute('data-total', '51')
+    expect(board).toHaveAttribute('data-reconciles', 'true')
+    expect(within(screen.getByRole('region', { name: 'โทรวันนี้' })).getByText('50')).toBeInTheDocument()
+    expect(screen.getByTestId('board-empty-col_01H8X')).toHaveTextContent('ยังไม่ได้โหลด')
+    expect(screen.getByTestId('board-empty-col_01H8Y')).not.toHaveTextContent('ยังไม่ได้โหลด')
+  })
   it('heads each served status column with its own status icon', () => {
     const { container } = renderScreen(<Board columns={COLUMNS} items={[]} reconcile={0} />)
     expect(laneIcons(container)).toEqual(['st--do', 'st--idle', 'st--moving-2', 'st--problem'])

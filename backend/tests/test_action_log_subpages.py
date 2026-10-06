@@ -73,6 +73,13 @@ def test_history_keeps_archived_customer_and_does_not_mutate_stored_evidence(his
     assert [row, historical] == before
 
 
+def test_naive_history_time_is_legacy_bangkok_time_not_utc(history):
+    client, row, _ = history
+    row["accounting"]["history"][0]["at"] = "2026-10-07T08:00:00"
+    result = client.get("/v1/service-deferrals/history", params={"customer_uid": row["customer_uid"]}).json()
+    assert [entry["note"] for entry in result["entries"]] == ["second finding", "first finding"]
+
+
 @pytest.mark.parametrize("query", [{"page": 0}, {"page_size": 0}, {"page_size": 201},
                                     {"customer_uid": ""}, {"contract_uid": "x" * 201}])
 def test_history_rejects_invalid_pagination_and_identifiers(history, query):
@@ -96,3 +103,22 @@ def test_termination_history_uses_exact_customer_uid_not_name_search(monkeypatch
     assert response.json()["entries"][0]["customer_uid"] == "customer-one"
     assert "snapshot" not in response.json()["entries"][0]
     assert client.get("/v1/terminated-customers", params={"customer_uid": "customer"}).json()["meta"]["total"] == 0
+
+
+def test_history_keeps_repeated_archives_when_customer_has_new_active_contract(monkeypatch):
+    from types import SimpleNamespace
+    rows = [{"archive_uid": "archive-%d" % n, "customer_uid": "same-customer",
+             "customer_name": "Synthetic", "captured_at": "2026-10-0%dT00:00:00Z" % n,
+             "terminated_on": "2026-10-0%d" % n, "causes": ["DEFAULT"],
+             "actor": "synthetic", "source": "PERSON", "snapshot": {"immutable": n}}
+            for n in (1, 2)]
+    monkeypatch.setattr(terminated.archive, "records", lambda: rows)
+    monkeypatch.setattr(journey, "customer_by_uid", lambda uid: SimpleNamespace(
+        contracts=[SimpleNamespace(status="ACTIVE")]))
+    monkeypatch.setattr(terminated.cases, "contract_field_of", lambda item, field: getattr(item, field))
+    client = TestClient(main.app)
+    assert client.get("/v1/terminated-customers", params={"customer_uid": "same-customer"}).json()["meta"]["total"] == 0
+    result = client.get("/v1/terminated-customers", params={"customer_uid": "same-customer", "history": True}).json()
+    assert result["meta"]["total"] == 2
+    assert [row["archive_uid"] for row in result["entries"]] == ["archive-2", "archive-1"]
+    assert all("snapshot" not in row for row in result["entries"])

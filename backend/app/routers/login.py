@@ -45,8 +45,14 @@ def _signed_in(session, config):
 
 @router.get("/v1/auth/config")
 def auth_config():
+    import os
+    from .. import db
     config = auth.current_config()
+    aliases = {'prd': 'production', 'production': 'production', 'prod': 'production',
+               'stg': 'staging', 'staging': 'staging', 'uat': 'staging', 'dev': 'development'}
     return {**({"session_policy": "tab"} if config.session_policy == "tab" else {}),
+            'environment': aliases.get(os.environ.get('ENV'), 'local'),
+            'data_mode': 'shared' if db.configured() else 'fixtures',
             "mode": "on" if config.on else "off",
             "google_client_id": config.google_client_id if config.on else None,
             "password_enabled": bool(config.on and config.test_accounts)}

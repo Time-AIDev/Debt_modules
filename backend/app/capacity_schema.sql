@@ -63,3 +63,24 @@ CREATE INDEX IF NOT EXISTS customer_projection_next_idx
 -- Case history reads use customer first, while the existing primary key is month first.
 CREATE INDEX IF NOT EXISTS customer_month_customer_idx
     ON records.customer_month(customer_uid,month DESC);
+
+-- Immutable customer evidence avoids scanning a full reconciliation JSON book
+-- for each case read. Source versions remain the monetary authority.
+CREATE TABLE IF NOT EXISTS records.customer_payment_evidence (
+    sequence bigint NOT NULL REFERENCES records.payment_reconciliation_version(sequence),
+    customer_uid text NOT NULL,
+    payload jsonb NOT NULL,
+    PRIMARY KEY(sequence, customer_uid)
+);
+DROP TRIGGER IF EXISTS customer_payment_evidence_no_change ON records.customer_payment_evidence;
+CREATE TRIGGER customer_payment_evidence_no_change
+    BEFORE UPDATE OR DELETE ON records.customer_payment_evidence
+    FOR EACH ROW EXECUTE FUNCTION records.payment_reconciliation_no_change();
+CREATE TABLE IF NOT EXISTS records.customer_payment_evidence_publication (
+    sequence bigint PRIMARY KEY REFERENCES records.payment_reconciliation_version(sequence),
+    completed_at timestamptz NOT NULL DEFAULT now()
+);
+DROP TRIGGER IF EXISTS customer_payment_evidence_publication_no_change ON records.customer_payment_evidence_publication;
+CREATE TRIGGER customer_payment_evidence_publication_no_change
+    BEFORE UPDATE OR DELETE ON records.customer_payment_evidence_publication
+    FOR EACH ROW EXECUTE FUNCTION records.payment_reconciliation_no_change();

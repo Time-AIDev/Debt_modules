@@ -169,3 +169,12 @@ running it. Keep the incident JSON receiver configuration private; verify real
 incident and recovery acknowledgments plus the external watchdog before go-live.
 Unit command simulations establish guard behavior, not actual offsite restoration
 or alert delivery.
+
+On the independent monitoring host, configure `/etc/volt-debt/watchdog.json` and
+private S3 read credentials before using `install-operations.py --apply
+--activate-watchdog`. The configuration includes the verified production machine
+SHA256, `recovery_point_remote`, `rclone_config`, `alerts_config`, and a private
+`state_path`. Activation refuses the production host. The installed executable
+wrapper launches the private Python helper; it checks HTTPS/readiness and the
+encrypted recovery point every minute, and uses the same acknowledged incident
+and recovery transport. An enabled timer alone does not satisfy the alert gate.

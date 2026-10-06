@@ -37,15 +37,23 @@ _VERSION = 0
 # _VERSION guard drops it when a write in this process lands mid-request. A write
 # from another process mid-request is seen on the next request, the same window every
 # request-scoped read has.
-_READ_CACHE: contextvars.ContextVar = contextvars.ContextVar("payment_claims_read_cache", default=None)
-
-
 def _read_cache():
-    cache = _READ_CACHE.get()
-    if cache is None:
-        cache = {}
-        _READ_CACHE.set(cache)
-    return cache
+    from . import request_context
+    from .production_unit import CURRENT
+    reads = request_context.reads()
+    if reads is not None:
+        return reads.setdefault('payment_claims_reads', {})
+    unit = CURRENT.get()
+    if unit is not None:
+        return unit.setdefault('payment_claims_reads', {})
+    # Standalone callers have no bounded request lifetime. A cached parent
+    # context must never leak into subsequent requests or another database.
+    return {}
+
+
+def _customer_scope():
+    from .production_unit import CURRENT
+    return (CURRENT.get() or {}).get('customer_uid')
 
 
 def _money(value, pointer="/amount"):
@@ -506,20 +514,22 @@ def list_all(state=None):
                              title="Invalid payment claim state", detail="unknown claim state",
                              message_th="สถานะรายการรับชำระไม่ถูกต้อง", error_id="DEBT-PAY-0426")
     cache = _read_cache()
-    key = (_VERSION, state)
+    customer_uid = _customer_scope()
+    key = (_VERSION, state, customer_uid)
     if key in cache:
         return cache[key]
     if not db.configured():
-        rows = _memory_claims()
+        rows = _memory_claims(customer_uid)
         result = [row for row in rows if not state or row["state"] == state]
     else:
         from sqlalchemy import text
         conn = db.connect()
         try:
-            where = "where state=:state" if state else ""
+            conditions = (["state=:state"] if state else []) + (["customer_uid=:customer_uid"] if customer_uid else [])
+            where = 'where ' + ' and '.join(conditions) if conditions else ''
             rows = conn.execute(text(
                 "select * from records.payment_claim %s order by created_at desc, uid desc" % where),
-                {"state": state} if state else {}).mappings().all()
+                {"state": state, "customer_uid": customer_uid}).mappings().all()
             ids = [row["uid"] for row in rows]
             targets = conn.execute(text(
                 "select * from records.payment_claim_target where claim_uid = any(:ids) "
@@ -538,7 +548,7 @@ def pending_by_customer():
     """PENDING claims grouped by customer_uid — the read `cases._apply_payment_claims`
     repeats per case. Built once per request on top of the memoised `list_all`."""
     cache = _read_cache()
-    key = (_VERSION, "PENDING_BY_CUSTOMER")
+    key = (_VERSION, "PENDING_BY_CUSTOMER", _customer_scope())
     if key in cache:
         return cache[key]
     grouped = {}
@@ -1251,6 +1261,8 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
                                 "as_of": invoice_as_of,
                                 "inputs": json.dumps(input_payload, ensure_ascii=False, default=str),
                                 "outputs": json.dumps(output_payload, ensure_ascii=False, default=str)}).scalar()
+    from . import financial_evidence
+    financial_evidence.publish(conn, reconciliation_id, input_payload, output_payload)
     _VERSION += 1
     return dict(summary, reconciliation_version=reconciliation_id)
 

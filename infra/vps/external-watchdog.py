@@ -4,23 +4,46 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
+import re
 import subprocess
 import sys
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from incident_alerts import AlertError, NoRedirect, config, private_json, publish
+from recovery_support import RecoveryError, private_file
 
 
 def machine_fingerprint():
     return hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
 
 
+def independent(settings):
+    production = settings.get("production_fingerprint", "")
+    if not re.fullmatch(r"[a-f0-9]{64}", production):
+        raise ValueError("A verified production host fingerprint is required")
+    if machine_fingerprint() == production:
+        raise ValueError("External watchdog must run on a host independent of production")
+
+
+def configuration(path):
+    settings = private_json(path)
+    independent(settings)
+    remote = settings.get("recovery_point_remote", "")
+    if not re.fullmatch(r"[A-Za-z0-9_-]+:[^\s]+", remote) or ".." in remote.split(":", 1)[1].split("/"):
+        raise ValueError("A configured offsite recovery point is required")
+    private_file(Path(settings.get("rclone_config", "/etc/volt-debt/rclone.conf")), maximum=1048576)
+    receiver = config(settings["alerts_config"])
+    if not receiver.get("url"):
+        raise ValueError("An incident receiver is required")
+    return settings
+
+
 def inspect(settings, *, now=None, opener=None, command=subprocess.run):
     now = now or datetime.now(timezone.utc)
-    if machine_fingerprint() == settings.get("production_fingerprint"):
-        raise ValueError("External watchdog must run on a host independent of production")
+    independent(settings)
     failures = []
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
@@ -48,14 +71,15 @@ def main():
     parser.add_argument("--config", required=True, type=Path)
     args = parser.parse_args()
     try:
-        settings = private_json(args.config)
+        settings = configuration(args.config)
+        os.environ['RCLONE_CONFIG'] = settings.get('rclone_config', '/etc/volt-debt/rclone.conf')
         failures = inspect(settings)
         receiver = config(settings["alerts_config"])
         receiver.update(service="volt-debt-external-watchdog")
         outcome = publish(failures, receiver, settings["state_path"])
         print(json.dumps({"healthy": not failures, "alerts": outcome}))
         return 1 if failures else 0
-    except (AlertError, ValueError, OSError, KeyError):
+    except (AlertError, RecoveryError, ValueError, OSError, KeyError):
         print("External watchdog configuration or delivery failed; inspect private configuration", file=sys.stderr)
         return 1
 

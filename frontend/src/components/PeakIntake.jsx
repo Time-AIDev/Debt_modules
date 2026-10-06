@@ -6,7 +6,7 @@ import { date, when, int } from '../lib/format.js'
 import { runStatus } from '../lib/status.js'
 import { StatusIcon, StatusPill } from './StatusIcon.jsx'
 import { Icon } from './Icon.jsx'
-import { Problem } from './Problem.jsx'
+import { LoadError, Problem } from './Problem.jsx'
 import { SegmentedControl } from './SegmentedControl.jsx'
 import { FailedRun, ReceiptIntake } from './ReceiptIntake.jsx'
 import { ConflictList } from './ConflictList.jsx'
@@ -31,6 +31,10 @@ export function PeakIntake({ onSummary }) {
   const toast = useToast()
 
   const [last, setLast] = useState(null)
+  const [lastProblem, setLastProblem] = useState(null)
+  const [deskProblems, setDeskProblems] = useState({})
+  const [watchProblem, setWatchProblem] = useState(null)
+  const [conflictProblem, setConflictProblem] = useState(null)
   const [door, setDoor] = useState(null)
   const [schemas, setSchemas] = useState(null)
   const [run, setRun] = useState(null)
@@ -54,11 +58,33 @@ export function PeakIntake({ onSummary }) {
   const [uploadTask, setUploadTask] = useState(null)
 
   const loadLast = useCallback(() => {
-    api.peakReportLastRun().then(setLast).catch(() => setLast(null))
+    setLastProblem(null)
+    api.peakReportLastRun().then(setLast)
+      .catch((error) => setLastProblem(error.problem || { code: 'request_failed', message_th: 'อ่านสถานะการนำเข้าใบแจ้งหนี้ไม่ได้ กรุณาลองใหม่' }))
   }, [])
   const loadLinks = useCallback(() => {
-    api.peakLinks().then((d) => setLinks(d?.links || [])).catch(() => setLinks([]))
+    return api.peakLinks().then((d) => {
+      setLinks(d?.links || [])
+      setDeskProblems((previous) => ({ ...previous, links: null }))
+    }).catch((error) => setDeskProblems((previous) => ({ ...previous, links: error.problem || {
+      code: 'request_failed', message_th: 'อ่านรหัสจับคู่ PEAK ไม่ได้ กรุณาลองใหม่',
+    } })))
   }, [])
+  const loadDesk = useCallback(() => {
+    loadLinks()
+    api.peakReportDoors().then((d) => {
+      setDoor((d?.doors || []).find((x) => x.door === 'api') || null)
+      setDeskProblems((previous) => ({ ...previous, door: null }))
+    }).catch((error) => setDeskProblems((previous) => ({ ...previous, door: error.problem || {
+      code: 'request_failed', message_th: 'อ่านสถานะการเชื่อมต่อ PEAK ไม่ได้ กรุณาลองใหม่',
+    } })))
+    api.peakReportSchemas().then((d) => {
+      setSchemas(d)
+      setDeskProblems((previous) => ({ ...previous, schema: null }))
+    }).catch((error) => setDeskProblems((previous) => ({ ...previous, schema: error.problem || {
+      code: 'request_failed', message_th: 'อ่านรูปแบบไฟล์ PEAK ไม่ได้ กรุณาลองใหม่',
+    } })))
+  }, [loadLinks])
   const loadRows = useCallback((runId, verdict, offset = 0) => {
     if (!runId || !verdict) return
     api.peakReportRows(runId, { verdict, limit: PAGE, offset }).then((page) => {
@@ -74,23 +100,22 @@ export function PeakIntake({ onSummary }) {
 
   useEffect(() => {
     loadLast()
-    loadLinks()
-    api.peakReportDoors()
-      .then((d) => setDoor((d?.doors || []).find((x) => x.door === 'api') || null))
-      .catch(() => setDoor(null))
-    api.peakReportSchemas().then(setSchemas).catch(() => setSchemas(null))
-  }, [loadLast, loadLinks])
+    loadDesk()
+  }, [loadLast, loadDesk])
 
   useEffect(() => {
     if (!isRunActive(run)) return undefined
     const timer = setInterval(() => {
       api.peakReportRun(run.uid).then((next) => {
+        setWatchProblem(null)
         setRun(next)
         if (!isRunActive(next)) {
           loadLast()
           if (next.run_id) { loadRows(next.run_id, 'CANDIDATE'); loadRows(next.run_id, 'UNMATCHED') }
         }
-      }).catch(() => {})
+      }).catch((error) => setWatchProblem(error.problem || {
+        code: 'request_failed', message_th: 'อ่านความคืบหน้าการนำเข้าไม่ได้ ระบบกำลังลองอ่านใหม่ ห้ามส่งไฟล์ซ้ำจนกว่าจะทราบผล',
+      }))
     }, 2000)
     return () => clearInterval(timer)
   }, [run, loadLast, loadRows])
@@ -153,9 +178,12 @@ export function PeakIntake({ onSummary }) {
   useEffect(() => {
     if (!reviewId) { setConflictInfo(null); return undefined }
     let alive = true
+    setConflictProblem(null)
     api.peakConflicts(reviewId, { limit: 1 })
       .then((body) => { if (alive) setConflictInfo({ total: body.total ?? 0, undecided: body.undecided_fields ?? 0 }) })
-      .catch(() => { if (alive) setConflictInfo(null) })
+      .catch((error) => { if (alive) setConflictProblem(error.problem || {
+        code: 'request_failed', message_th: 'อ่านข้อมูลขัดแย้งของรายงานไม่ได้ กรุณาลองใหม่ก่อนนำไปใช้',
+      }) })
     return () => { alive = false }
   }, [reviewId, applied, conflictTick])
 
@@ -291,7 +319,10 @@ export function PeakIntake({ onSummary }) {
   )
 
   if (upload === 'receipt') {
-    return <div className="imp-peak" id="peak-report"><ReceiptIntake modes={modes} schema={schemas?.receipt} /></div>
+    return <div className="imp-peak" id="peak-report">
+      {Object.entries(deskProblems).filter(([, value]) => value).map(([key, value]) => <LoadError key={key} problem={value} onRetry={loadDesk} />)}
+      <ReceiptIntake modes={modes} schema={schemas?.receipt} />
+    </div>
   }
 
   const tabs = [
@@ -303,6 +334,10 @@ export function PeakIntake({ onSummary }) {
 
   return (
     <div className="imp-peak" id="peak-report">
+      {lastProblem ? <LoadError problem={lastProblem} onRetry={loadLast} /> : null}
+      {Object.entries(deskProblems).filter(([, value]) => value).map(([key, value]) => <LoadError key={key} problem={value} onRetry={loadDesk} />)}
+      {conflictProblem ? <LoadError problem={conflictProblem} onRetry={() => setConflictTick((current) => current + 1)} /> : null}
+      {watchProblem ? <Problem problem={watchProblem} /> : null}
       <div className="imp-peak__top">
         <div className="imp-peak__bar">
           {modes}
@@ -311,7 +346,7 @@ export function PeakIntake({ onSummary }) {
             <Icon name="upload" />{t('peak.upload')}
           </button>
           {waiting ? (
-            <button type="button" className="btn btn--primary" disabled={busy}
+            <button type="button" className="btn btn--primary" disabled={busy || !!lastProblem || !!conflictProblem}
                     onClick={() => { setApplyProblem(null); setAllowOlder(false); setApplyOpen(true) }}>
               {t('peak.apply')}
             </button>

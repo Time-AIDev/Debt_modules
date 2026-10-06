@@ -210,12 +210,17 @@ def test_operations_install_copies_dependencies_exactly_with_private_modes(tmp_p
     wrapper = root/'usr/local/sbin/volt-debt-health'
     assert '/usr/local/lib/volt-debt-ops/healthcheck.py' in wrapper.read_text()
     assert wrapper.stat().st_mode & 0o777 == 0o755
+    watchdog = root/'usr/local/sbin/volt-debt-external-watchdog'
+    assert watchdog.stat().st_mode & 0o777 == 0o755
+    assert '/usr/bin/python3 /usr/local/lib/volt-debt-ops/external-watchdog.py' in watchdog.read_text()
+    assert 'ExecStart=/usr/local/sbin/volt-debt-external-watchdog' in (root/'etc/systemd/system/volt-debt-watchdog.service').read_text()
 
 
 def test_operations_install_refuses_symlink_targets_and_test_root_activation(tmp_path):
     root = tmp_path/'linked'; root.symlink_to(tmp_path, target_is_directory=True)
     with pytest.raises(ValueError): installer.install(root, apply=True)
     with pytest.raises(ValueError): installer.install(tmp_path, apply=True, activate=True)
+    with pytest.raises(ValueError): installer.install(tmp_path, apply=True, activate_watchdog=True)
 
 
 @pytest.mark.parametrize('mutate_source', [False, True])

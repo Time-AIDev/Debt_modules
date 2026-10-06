@@ -112,11 +112,11 @@ def test_external_watchdog_refuses_production_and_checks_rpo(monkeypatch):
     spec = importlib.util.spec_from_file_location("external_watchdog_test", DIRECTORY / "external-watchdog.py")
     watchdog = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(watchdog)
-    monkeypatch.setattr(watchdog, "machine_fingerprint", lambda: "same-host")
-    config = {"production_fingerprint": "same-host", "recovery_point_remote": "offsite:latest.json"}
+    monkeypatch.setattr(watchdog, "machine_fingerprint", lambda: "a"*64)
+    config = {"production_fingerprint": "a"*64, "recovery_point_remote": "offsite:latest.json"}
     with pytest.raises(ValueError, match="independent"):
         watchdog.inspect(config, now=NOW)
-    monkeypatch.setattr(watchdog, "machine_fingerprint", lambda: "different-host")
+    monkeypatch.setattr(watchdog, "machine_fingerprint", lambda: "b"*64)
     class Ready(Response):
         status = 200
         def read(self, limit): return b'{"status":"ready"}'
@@ -127,3 +127,5 @@ def test_external_watchdog_refuses_production_and_checks_rpo(monkeypatch):
             "captured_at_utc": (NOW - timedelta(hours=25)).isoformat()}))
     assert watchdog.inspect(config, now=NOW, opener=Probe(), command=storage) == [
         "encrypted offsite recovery point exceeds 24-hour RPO"]
+    with pytest.raises(ValueError, match='fingerprint'):
+        watchdog.inspect({**config, 'production_fingerprint': ''}, now=NOW)

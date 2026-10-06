@@ -1,6 +1,7 @@
 """Officers confirm service deferrals; accounting review is tracked separately."""
 from copy import deepcopy
 from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Body, Header, Query
 
@@ -79,7 +80,7 @@ def accounting_queue(accounting_status: str = Query(default=None)):
 def _history_time(value):
     try:
         result = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
-        return result.replace(tzinfo=timezone.utc) if result.tzinfo is None else result
+        return result.replace(tzinfo=ZoneInfo("Asia/Bangkok")) if result.tzinfo is None else result
     except (ValueError, TypeError):
         return datetime.min.replace(tzinfo=timezone.utc)
 

@@ -5,11 +5,12 @@ import { atLeast } from '../lib/identity.jsx'
 import { date, int, money } from '../lib/format.js'
 import { StatusIcon, StatusPill } from './StatusIcon.jsx'
 import { Icon } from './Icon.jsx'
-import { Problem } from './Problem.jsx'
+import { LoadError, Problem } from './Problem.jsx'
 import { useToast } from './Toast.jsx'
 import { ApplyDialog, Dropzone, Fig, FileInput, Progress, ReviewRows, RowSheet, runProblem } from './import/parts.jsx'
 import { SchemaFeedback } from './import/SchemaFeedback.jsx'
 import { isRunActive } from '../lib/operation.js'
+import { RejectedDocuments } from './import/RejectedDocuments.jsx'
 
 const PAGE = 100
 
@@ -43,6 +44,8 @@ export function ReceiptIntake({ modes, schema }) {
   const { t } = usePrefs()
   const toast = useToast()
   const [last, setLast] = useState(null)
+  const [lastProblem, setLastProblem] = useState(null)
+  const [watchProblem, setWatchProblem] = useState(null)
   const [run, setRun] = useState(null)
   const [rowsBy, setRowsBy] = useState({ CANDIDATE: null, UNMATCHED: null })
   const [tab, setTab] = useState(null)
@@ -59,7 +62,9 @@ export function ReceiptIntake({ modes, schema }) {
   const [uploadTask, setUploadTask] = useState(null)
 
   const loadLast = useCallback(() => {
-    api.peakReceiptLastRun().then(setLast).catch(() => setLast(null))
+    setLastProblem(null)
+    api.peakReceiptLastRun().then(setLast)
+      .catch((error) => setLastProblem(error.problem || { code: 'request_failed', message_th: 'อ่านสถานะการนำเข้าใบเสร็จไม่ได้ กรุณาลองใหม่' }))
   }, [])
   const loadRows = useCallback((runId, verdict, offset = 0) => {
     if (!runId || !verdict) return
@@ -80,6 +85,7 @@ export function ReceiptIntake({ modes, schema }) {
     if (!isRunActive(run)) return undefined
     const timer = setInterval(() => {
       api.peakReceiptRun(run.uid).then((next) => {
+        setWatchProblem(null)
         setRun(next)
         if (!isRunActive(next)) {
           loadLast()
@@ -88,7 +94,9 @@ export function ReceiptIntake({ modes, schema }) {
             loadRows(next.run_id, 'UNMATCHED')
           }
         }
-      }).catch(() => {})
+      }).catch((error) => setWatchProblem(error.problem || {
+        code: 'request_failed', message_th: 'อ่านความคืบหน้าการนำเข้าไม่ได้ ระบบกำลังลองอ่านใหม่ ห้ามส่งไฟล์ซ้ำจนกว่าจะทราบผล',
+      }))
     }, 2000)
     return () => clearInterval(timer)
   }, [run, loadLast, loadRows])
@@ -243,12 +251,14 @@ export function ReceiptIntake({ modes, schema }) {
             <Icon name="upload" />{t('peak.upload')}
           </button>
           {waiting ? (
-            <button type="button" className="btn btn--primary" disabled={busy}
+            <button type="button" className="btn btn--primary" disabled={busy || !!lastProblem}
                     onClick={() => { setApplyProblem(null); setAllowOlder(false); setApplyOpen(true) }}>
               {t('peak.apply')}
             </button>
           ) : alreadyApplied ? <StatusPill kind="done">{t('peak.applied')}</StatusPill> : null}
         </div>
+        {lastProblem ? <LoadError problem={lastProblem} onRetry={loadLast} /> : null}
+        {watchProblem ? <Problem problem={watchProblem} /> : null}
         <FileInput inputRef={fileRef} label={t('peak.chooseReceipt')} disabled={busy || reading} onFile={start} />
         <p className="imp-peak__report">
           <span className="eyebrow">{t('peak.uploadReceipt')}</span>
@@ -300,7 +310,7 @@ export function ReceiptIntake({ modes, schema }) {
 
       {manifest && !reading ? (
         <div className="imp-figs">
-          <Fig label={t('peak.linesRead')} value={int(counts.read)} />
+          <Fig label={t('peak.linesRead')} value={int(meta.source_read ?? counts.read)} />
           <Fig label={t('peak.receiptsRead')} value={int(receipts)} />
           <Fig label={t('peak.settled')} value={int(matched)} />
           <Fig label={t('peak.receiptOnly')} value={int(manifest.receipt_only ?? run?.receipt_only ?? 0)} />
@@ -329,6 +339,8 @@ export function ReceiptIntake({ modes, schema }) {
                     onOpen={(r) => { setSheetProblem(null); setSheetRow(r) }}
                     onMore={() => loadRows(reviewId, activeTab, (rowsBy[activeTab]?.rows || []).length)} />
       ) : null}
+
+      {rejected > 0 && reviewId && !reading ? <RejectedDocuments key={reviewId} runId={reviewId} /> : null}
 
       {sheetRow ? (
         <RowSheet key={sheetRow.doc_no} row={sheetRow} busy={busy} problem={sheetProblem}

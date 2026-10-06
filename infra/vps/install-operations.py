@@ -22,6 +22,7 @@ ENTRYPOINTS = {'volt-debt-health': ('python3', 'healthcheck.py'),
               'volt-debt-package-release': ('python3', 'package-release.py'),
               'volt-debt-cold-restore': ('python3', 'cold-restore.py'),
               'volt-debt-offsite-backup': ('python3', 'offsite-backup.py')}
+ENTRYPOINTS['volt-debt-external-watchdog'] = ('python3', 'external-watchdog.py')
 UNITS = ('volt-debt-health.service', 'volt-debt-health.timer', 'volt-debt-backup.service',
          'volt-debt-backup.timer', 'volt-debt-resume-writers.service', 'volt-debt-resume-writers.timer',
          'volt-debt-offsite.service', 'volt-debt-offsite.timer',
@@ -49,15 +50,20 @@ def install_file(path, contents, mode):
         Path(name).unlink(missing_ok=True)
 
 
-def install(root=Path('/'), *, apply=False, activate=False, activate_offsite=False):
+def install(root=Path('/'), *, apply=False, activate=False, activate_offsite=False, activate_watchdog=False):
     root = safe(root)
-    if (activate or activate_offsite) and (not apply or root != Path('/')):
+    if (activate or activate_offsite or activate_watchdog) and (not apply or root != Path('/')):
         raise ValueError('Activation requires an actual host installation')
     if activate_offsite:
         import importlib.util
         spec = importlib.util.spec_from_file_location('volt_install_offsite', SOURCE/'offsite-backup.py')
         offsite = importlib.util.module_from_spec(spec); spec.loader.exec_module(offsite)
         offsite.configuration(Path('/etc/volt-debt/offsite.json'))
+    if activate_watchdog:
+        import importlib.util
+        spec = importlib.util.spec_from_file_location('volt_install_watchdog', SOURCE/'external-watchdog.py')
+        watchdog = importlib.util.module_from_spec(spec); spec.loader.exec_module(watchdog)
+        watchdog.configuration(Path('/etc/volt-debt/watchdog.json'))
     items = {}
     for name in MODULES:
         source = SOURCE/name
@@ -71,6 +77,7 @@ def install(root=Path('/'), *, apply=False, activate=False, activate_offsite=Fal
     for name in UNITS:
         items['etc/systemd/system/'+name] = ((SOURCE/name).read_bytes(), 0o644)
     report = {'format': 'volt-operations-install-v1', 'applied': apply, 'activated': False, 'offsite_activated': False,
+              'watchdog_activated': False,
               'files': {name: {'sha256': hashlib.sha256(contents).hexdigest(), 'mode': oct(mode)}
                         for name, (contents, mode) in items.items()}}
     if apply:
@@ -102,6 +109,11 @@ def install(root=Path('/'), *, apply=False, activate=False, activate_offsite=Fal
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             report['offsite_activated'] = True
             install_file(library/'installed-manifest.json', json.dumps(report, indent=2, sort_keys=True).encode()+b'\n', 0o600)
+        if activate_watchdog:
+            subprocess.run(['systemctl', 'enable', '--now', 'volt-debt-watchdog.timer'], check=True, timeout=60,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            report['watchdog_activated'] = True
+            install_file(library/'installed-manifest.json', json.dumps(report, indent=2, sort_keys=True).encode()+b'\n', 0o600)
     return report
 
 
@@ -110,9 +122,11 @@ def main():
     parser.add_argument('--root', type=Path, default=Path('/'), help='Alternate root for installation tests')
     parser.add_argument('--apply', action='store_true'); parser.add_argument('--activate', action='store_true')
     parser.add_argument('--activate-offsite', action='store_true')
+    parser.add_argument('--activate-watchdog', action='store_true', help='Only on the independent monitoring host')
     args = parser.parse_args(); os.umask(0o077)
     try:
-        report = install(args.root, apply=args.apply, activate=args.activate, activate_offsite=args.activate_offsite)
+        report = install(args.root, apply=args.apply, activate=args.activate, activate_offsite=args.activate_offsite,
+                         activate_watchdog=args.activate_watchdog)
     except Exception as error:
         print('Operations installation failed ('+type(error).__name__+').')
         return 1

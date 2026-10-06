@@ -18,7 +18,7 @@ from types import SimpleNamespace
 from sqlalchemy import text
 
 from . import clock, db, errors, imports, request_context
-from .config import settings
+from .config import resolve_business_date
 
 PROFILES = ("debt_status", "contract_supplement")
 TABS = ("Done - Collection", "Done - Cash", "Repossessed 1")
@@ -374,7 +374,7 @@ def stage(raw, filename, profile, actor, customers=None):
             raise problem("source_changed", "ข้อมูลต้นทางเปลี่ยนระหว่างตรวจ กรุณาตรวจตัวอย่างใหม่", 409)
         payload = {"uid": "dimp-" + uuid.uuid4().hex, "actor": actor, "profile": profile,
                    "fingerprint": hashlib.sha256(raw).hexdigest(), "filename": filename,
-                   "state": "STAGED", "created_at": clock.stamp(), "epoch": epoch, "entries": entries,
+                   "state": "STAGED", "created_at": clock.stamp(resolve_business_date()), "epoch": epoch, "entries": entries,
                    "counts": {"rows": len(records), "entries": len(entries),
                        "matched": sum(bool(entry["customer_uid"]) for entry in entries),
                        "eligible": sum(entry["eligible"] for entry in entries),
@@ -580,7 +580,7 @@ def pipeline_installation_evidence(items, customer_uid, contract_uid, *, sole_co
         event = outcomes[-1] if outcomes else {}
         actor = str(event.get("by") or "").strip()
         scope = item.get("contract_uid") == contract_uid or sole_contract_uid == contract_uid
-        if (not scope or not completed or completed > str(settings.business_date) or
+        if (not scope or not completed or completed > str(resolve_business_date()) or
                 event.get("act") != "INSTALL_INSTALLED" or not actor or
                 actor.upper() in ("SYSTEM", "SEED", "SHEET", "ODOO", "IMPORT")):
             continue
@@ -648,7 +648,7 @@ def confirm_installation(contract, body, actor, role):
     if role not in ("OFFICER", "SUPERVISOR", "MANAGER", "OWNER", "OPS"):
         raise problem("forbidden", "ไม่มีสิทธิ์ยืนยันผลติดตั้ง", 403)
     completed = _date(body.get("completed_on"))
-    if not completed or completed > str(settings.business_date):
+    if not completed or completed > str(resolve_business_date()):
         raise problem("installation_date", "ต้องระบุวันติดตั้งสำเร็จจริง ไม่เกินวันทำการปัจจุบัน")
     if not all(isinstance(body.get(key), str) and body[key].strip() and len(body[key]) <= (200 if key == "idempotency_key" else 1000)
                and "\x00" not in body[key] for key in

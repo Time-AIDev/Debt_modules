@@ -92,6 +92,14 @@ def apply(conn):
     for statement in statements(capacity_schema):
         conn.execute(text(statement))
         executed.append(statement.splitlines()[0])
+    latest = conn.execute(text('select version.sequence,version.inputs,version.outputs '
+        'from records.payment_reconciliation_version version '
+        'where version.sequence=(select max(sequence) from records.payment_reconciliation_version) '
+        'and not exists(select 1 from records.customer_payment_evidence_publication '
+        'where sequence=version.sequence)')).mappings().first()
+    if latest:
+        from . import financial_evidence
+        financial_evidence.publish(conn, latest['sequence'], latest['inputs'], latest['outputs'])
     from .runtime_policy import SCHEMA_VERSION
     conn.execute(text("update app.schema_version set version=:version where singleton=true"),
                  {"version": SCHEMA_VERSION})
@@ -148,7 +156,8 @@ RUNTIME_GRANTS = [
     # Reviewed source evidence and installation proofs are insertion-only. The
     # preview's apply result remains mutable, but past facts cannot be rewritten.
     "REVOKE UPDATE ON records.contract_supplement, records.debt_status_observation, "
-    "records.installation_confirmation FROM %s",
+    "records.installation_confirmation, records.customer_payment_evidence, "
+    "records.customer_payment_evidence_publication FROM %s",
 ]
 
 

@@ -134,6 +134,7 @@ function signalAuth(status, body) {
   clearPendingMutations()
   resourceVersions.clear()
   caseVersions.clear()
+  caseResourceOwners.clear()
   seenStateVersion = null
   try {
     if (typeof window !== 'undefined' && typeof window.CustomEvent === 'function') {
@@ -155,6 +156,7 @@ const responseMutations = new WeakMap()
 const backgroundResponses = new WeakSet()
 const resourceVersions = new Map()
 const caseVersions = new Map()
+const caseResourceOwners = new Map()
 let seenStateVersion = null
 
 function resourceKey(path) {
@@ -167,11 +169,12 @@ function resourceKey(path) {
 
 function noteState(response, path) {
   const scope = /^\/v1\/cases\/by-customer\/([^/]+)/.exec(path)
+  const owner = scope ? decodeURIComponent(scope[1]) : caseResourceOwners.get(path.split('?')[0])
   const token = response.headers?.get?.('x-volt-case-version')
-  if (scope && typeof token === 'string' && token.startsWith(`case:${decodeURIComponent(scope[1])}:`)
+  if (owner && typeof token === 'string' && token.startsWith(`case:${owner}:`)
       && /^case:[A-Za-z0-9_.:-]{1,200}:\d{1,20}$/.test(token)
       && response.ok && !backgroundResponses.has(response)) {
-    caseVersions.set(decodeURIComponent(scope[1]), token)
+    caseVersions.set(owner, token)
   } else if (scope && /^\/v1\/cases\/by-customer\/[^/]+$/.test(path.split('?')[0])
       && response.ok && !backgroundResponses.has(response)) {
     // A successful fallback read has numeric versions; do not reuse an opaque
@@ -243,6 +246,7 @@ function acceptAuthenticatedLogin(body) {
   clearPendingMutations()
   resourceVersions.clear()
   caseVersions.clear()
+  caseResourceOwners.clear()
   seenStateVersion = null
   return acceptLogin(body)
 }
@@ -293,7 +297,25 @@ async function fileIdentity(file) {
   return { value: metadata, trustworthy: false }
 }
 
-function mutationHeaders(path, signature) {
+function safeCustomerBody(path, wire) {
+  try {
+    const body = JSON.parse(wire)
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return false
+    if (path.split('?')[0].endsWith('/contacts') && (body.issue || body.service_issue || body.service_ticket)) return false
+    const pending = [body]
+    while (pending.length) {
+      const next = pending.pop()
+      if (!next || typeof next !== 'object') continue
+      for (const [key, value] of Object.entries(next)) {
+        if (['attachment_uids', 'attachments'].includes(key) && (Array.isArray(value) ? value.length : value)) return false
+        if (value && typeof value === 'object') pending.push(value)
+      }
+    }
+    return true
+  } catch { return false }
+}
+
+function mutationHeaders(path, signature, wire) {
   const headers = roleHeaders()
   if (signature === null) return headers
   if (pendingStorageCorrupt) throw pendingProblem('operation_outcome_unknown', 'ข้อมูลตรวจสอบงานก่อนหน้าอ่านไม่ได้ กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
@@ -306,9 +328,12 @@ function mutationHeaders(path, signature) {
     if (pendingMutations.size >= PENDING_MAX_ENTRIES || totalBytes > PENDING_MAX_BYTES) {
       throw pendingProblem('pending_operations_full', 'มีงานที่ผลลัพธ์ยังไม่ยืนยันมากเกินไป กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
     }
-    const caseNote = /^\/v1\/cases\/by-customer\/([^/]+)\/notes(?:\?|$)/.exec(path)
+    const safeCase = safeCustomerBody(path, wire)
+    const caseNote = safeCase ? /^\/v1\/cases\/by-customer\/([^/]+)\/(?:notes|next-action|dc-status|contacts)(?:\?|$)/.exec(path) : null
+    const childOwner = safeCase && /^\/v1\/case-ptps\/[^/]+:close(?:\?|$)/.test(path) ? caseResourceOwners.get(path.split('?')[0]) : null
     operation = { key: uploadId(), at: Date.now(),
       expectedVersion: (caseNote && caseVersions.get(decodeURIComponent(caseNote[1])))
+        || (childOwner && caseVersions.get(childOwner))
         || resourceVersions.get(resourceKey(path)) || seenStateVersion,
       persistent: !signature.startsWith('volatile:') }
     pendingMutations.set(signature, operation)
@@ -327,7 +352,7 @@ async function mutationFetch(method, path, body, extra = {}) {
   if (extra.signal?.aborted) throw new DOMException('aborted', 'AbortError')
   const response = await fetch(BASE + path, {
     ...options, method, body,
-    headers: { ...mutationHeaders(path, signature), ...extra.headers },
+    headers: { ...mutationHeaders(path, signature, body), ...extra.headers },
   })
   if (signature !== null) responseMutations.set(response, { signature, path })
   return response
@@ -673,7 +698,17 @@ export const api = {
   workbook: (params) => get('/v1/workbook', params),
   workbookExportUrl: (params) => withQuery('/v1/workbook:export', params),
   workbookExport: (params) => exportCsv('/v1/workbook:export', params),
-  caseDetail: (customerUid) => get(`/v1/cases/by-customer/${customerUid}`),
+  caseDetail: async (customerUid) => {
+    const result = await get(`/v1/cases/by-customer/${customerUid}`)
+    if (result?.customer?.uid === customerUid) {
+      for (const child of result.ptps || []) {
+        if (typeof child.uid === 'string' && (!child.customer_uid || child.customer_uid === customerUid)) {
+          caseResourceOwners.set(`/v1/case-ptps/${child.uid}:close`, customerUid)
+        }
+      }
+    }
+    return result
+  },
   setNextAction: (customerUid, payload) => post(`/v1/cases/by-customer/${customerUid}/next-action`, payload),
   setDcStatus: (customerUid, payload) => post(`/v1/cases/by-customer/${customerUid}/dc-status`, payload),
   // Arina, 2026-09-14: a person's payment status, with a reason (spec 2026-09-14).
@@ -815,6 +850,7 @@ export const api = {
   peakReceiptRun: (uid) => get(`/v1/pipelines/peak-receipt/runs/${uid}`),
   peakReceiptLastRun: () => get('/v1/pipelines/peak-receipt/last-run'),
   peakReceiptRows: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rows`, params),
+  peakReceiptRejectedDocuments: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rejected-documents`, params),
   peakReceiptApply: (runId, body) => post(`/v1/pipelines/peak-receipt/landing-runs/${runId}:apply`, body || {}),
   peakConflicts: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts`, params),
   peakConflictsDecide: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts:decide`, body),
@@ -871,6 +907,7 @@ export const api = {
     clearPendingMutations()
     resourceVersions.clear()
     caseVersions.clear()
+    caseResourceOwners.clear()
     seenStateVersion = null
     return result
   },

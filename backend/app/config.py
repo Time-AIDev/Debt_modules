@@ -361,11 +361,11 @@ def resolve_business_date():
 
 class _SettingsProxy:
     def __getattr__(self, name):
-        current = _store.for_current()
         from .runtime_policy import shared_state_enabled
         if shared_state_enabled():
             if name == "business_date": return resolve_business_date()
             if name == "penalty_invoicing_enabled": return False
+        current = _store.for_current()
         if name == "business_date":
             # An explicit set (tests only — no route edits it) wins; old pickles never
             # carry `business_date_set`, so their stale default is never read.

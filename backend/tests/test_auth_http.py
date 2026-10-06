@@ -38,7 +38,9 @@ def _login(client, username, password):
 
 def test_off_by_default_headers_still_decide():
     client = TestClient(app)
-    assert client.get("/v1/auth/config").json() == {"mode": "off", "google_client_id": None, "password_enabled": False}
+    assert client.get("/v1/auth/config").json() == {
+        "mode": "off", "google_client_id": None, "password_enabled": False,
+        "environment": "development", "data_mode": "fixtures"}
     assert client.get("/v1/workbook").status_code == 200
     assert client.get("/v1/auth/me").json()["code"] == "auth_off"
 

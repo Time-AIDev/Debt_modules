@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from './api.js'
 import { useReloadOnEpoch } from './dataEpoch.jsx'
 
@@ -6,16 +6,27 @@ import { useReloadOnEpoch } from './dataEpoch.jsx'
 export function useCaseDetail(uid) {
   const [data, setData] = useState(null)
   const [problem, setProblem] = useState(null)
+  const requestVersion = useRef(0)
 
   const load = useCallback(() => {
+    const version = ++requestVersion.current
     setProblem(null)
+    if (!uid) return
     api.caseDetail(uid)
-      .then(setData)
-      .catch((e) => setProblem(e?.problem || { code: 'request_failed' }))
+      .then((next) => {
+        if (version !== requestVersion.current) return
+        if (next?.customer?.uid !== uid) throw { problem: { code: 'case_response_mismatch', message_th: 'ข้อมูลเคสไม่ตรงกับลูกค้าที่เลือก กรุณาโหลดใหม่' } }
+        setData(next)
+      })
+      .catch((e) => {
+        if (version !== requestVersion.current) return
+        if (e?.problem?.code === 'case_response_mismatch') setData(null)
+        setProblem(e?.problem || { code: 'request_failed' })
+      })
   }, [uid])
 
-  useEffect(() => { load() }, [load])
+  useEffect(() => { load(); return () => { requestVersion.current += 1 } }, [load])
   useReloadOnEpoch(load)
 
-  return { data, problem, load }
+  return { data: data?.customer?.uid === uid ? data : null, problem, load }
 }

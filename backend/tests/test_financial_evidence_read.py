@@ -133,8 +133,7 @@ def test_indexed_customer_publication_is_atomic_idempotent_and_case_scoped(pg_co
     finally:
         event.remove(engine, 'before_cursor_execute', no_book_blob)
         engine.dispose()
-        pg_conn.execute(text('delete from records.customer_payment_evidence where sequence=:seq'), {'seq': sequence})
-        pg_conn.execute(text('delete from records.payment_reconciliation_version where sequence=:seq'), {'seq': sequence})
+        pg_conn.execute(text('truncate records.payment_reconciliation_version restart identity cascade'))
         pg_conn.commit()
 
 

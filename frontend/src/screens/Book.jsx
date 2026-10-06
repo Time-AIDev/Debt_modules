@@ -57,6 +57,7 @@ export function Book() {
   const [exportProblem, setExportProblem] = useState(null)
   const [busy, setBusy] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
+  const [recordReload, setRecordReload] = useState(0)
   const requestSeq = useRef(0)
 
   const query = useCallback(() => {
@@ -142,18 +143,39 @@ export function Book() {
 
   const rows = data?.rows || []
   const selUid = params.get('sel')
-  const sel = rows.find((r) => r.customer.uid === selUid) || rows[0]
+  const selectedUid = selUid || rows[0]?.customer.uid
+  const sel = rows.find((r) => r.customer.uid === selectedUid)
+    || (selectedUid ? { customer: record?.customer?.uid === selectedUid ? record.customer : { uid: selectedUid } } : null)
 
   useEffect(() => {
-    if (!sel) { setRecord(null); return undefined }
+    if (selUid || !rows[0]?.customer.uid) return
+    const next = new URLSearchParams(params)
+    next.set('sel', rows[0].customer.uid)
+    setParams(next, { replace: true })
+  }, [selUid, rows, params, setParams])
+
+  useEffect(() => {
+    if (!selectedUid) { setRecord(null); return undefined }
     let alive = true
     setRecord(null)
     setRecordProblem(null)
-    api.caseDetail(sel.customer.uid)
-      .then((d) => { if (alive) setRecord(d) })
+    api.caseDetail(selectedUid)
+      .then((d) => {
+        if (!alive) return
+        if (d?.customer?.uid !== selectedUid) {
+          setRecordProblem({ code: 'case_response_mismatch', message_th: 'ข้อมูลที่ได้รับไม่ตรงกับลูกค้าที่เลือก กรุณาลองใหม่' })
+          return
+        }
+        setRecord(d)
+      })
       .catch((e) => { if (alive) setRecordProblem(e?.problem || { code: 'request_failed' }) })
     return () => { alive = false }
-  }, [sel?.customer.uid])
+  }, [selectedUid, recordReload])
+
+  function refreshSelected() {
+    load()
+    setRecordReload((current) => current + 1)
+  }
 
   const grouped = useMemo(() => {
     const by = new Map()
@@ -266,8 +288,8 @@ export function Book() {
           data={record}
           problem={recordProblem}
           businessDate={data?.meta?.business_date}
-          onRetry={() => sel && api.caseDetail(sel.customer.uid).then(setRecord).catch(() => {})}
-          onChanged={() => { load(); if (sel) api.caseDetail(sel.customer.uid).then(setRecord).catch(() => {}) }}
+          onRetry={() => setRecordReload((current) => current + 1)}
+          onChanged={refreshSelected}
           onLogContact={() => setContactFor(sel?.customer)}
         />
       </div>
@@ -279,7 +301,7 @@ export function Book() {
         businessDate={data?.meta?.business_date}
         summary={contactSummary(record?.customer?.uid === contactFor?.uid ? record : null)}
         promise={openPromise(record?.customer?.uid === contactFor?.uid ? record : null)}
-        onSaved={() => { load(); if (sel) api.caseDetail(sel.customer.uid).then(setRecord).catch(() => {}) }}
+        onSaved={refreshSelected}
       />
 
       <Drawer

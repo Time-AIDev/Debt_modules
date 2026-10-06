@@ -29,16 +29,11 @@ LOCK_KEY = 0x564F4C54505244
 
 def customer_scope(scope):
     """Only audited customer-owned routes may use the partitioned write model."""
-    path = scope.get("path", "")
     if os.environ.get("VOLT_CUSTOMER_SCOPES_ENABLED", "true") != "true":
         return None
-    match = re.fullmatch(r"/v1/cases/by-customer/([^/]+)(?:/(invoices|peak-codes|notes))?", path)
-    if not match:
-        return None
-    method = scope.get("method")
-    if method in ("GET", "HEAD") or (method == "POST" and match[2] == "notes"):
-        return match[1]
-    return None
+    from . import customer_transactions
+    planned = scope.get('volt_customer_plan') or customer_transactions.plan(scope)
+    return planned.customer_uid if planned else None
 
 
 def case_token(customer_uid, version):
@@ -299,8 +294,40 @@ class ProductionUnitMiddleware:
                 return await auth.auth_required().response()(scope, receive, send)
         try:
             receive = auth.bounded_receive(scope, receive)
+            from . import customer_transactions
+            if os.environ.get('VOLT_CUSTOMER_SCOPES_ENABLED', 'true') == 'true' and customer_transactions.captures_json(scope):
+                chunks = []
+                while True:
+                    message = await receive()
+                    if message['type'] == 'http.disconnect':
+                        raise auth.body_problem('request_disconnected', 400)
+                    chunks.append(message.get('body', b''))
+                    if not message.get('more_body'):
+                        break
+                body = b''.join(chunks)
+                try:
+                    parsed = json.loads(body)
+                    planned = customer_transactions.plan(scope, parsed)
+                    if planned is None and customer_transactions.PTP_CLOSE.fullmatch(scope['path']):
+                        with db.connect() as plan_conn:
+                            if plan_conn.execute(text("select to_regclass('app.customer_version') is not null")).scalar():
+                                planned = customer_transactions.plan(scope, parsed, plan_conn)
+                    scope['volt_customer_plan'] = planned
+                except (ValueError, UnicodeDecodeError, RecursionError):
+                    scope['volt_customer_plan'] = None
+                original_receive = receive
+                replayed = False
+                async def planned_receive():
+                    nonlocal replayed
+                    if replayed:
+                        return await original_receive()
+                    replayed = True
+                    return {'type': 'http.request', 'body': body, 'more_body': False}
+                receive = planned_receive
         except errors.Problem as problem:
             return await problem.response()(scope, receive, send)
+        except db.DatabaseUnreachable:
+            return await self.problem('production_write_unavailable', 503).response()(scope, receive, send)
         queued = time.monotonic()
         # Controls only touch SQL operational state, never the mutable shared book.
         # Their independent request slot is cleaned without touching another slot.
@@ -366,6 +393,8 @@ class ProductionUnitMiddleware:
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock_shared(:k)"), {"k": LOCK_KEY})
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(hashtextextended(:uid,0))"),
                                              {"uid": "volt-customer:" + scoped_customer})
+                    from . import customer_transactions
+                    await run_in_threadpool(customer_transactions.revalidate, conn, scope.get('volt_customer_plan'))
                 else:
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
             version = await run_in_threadpool(lambda: conn.execute(text(

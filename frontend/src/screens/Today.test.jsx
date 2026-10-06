@@ -53,6 +53,34 @@ beforeEach(() => {
 })
 
 describe('Today', () => {
+  it('requests whole-queue arrears sorting on the first and subsequent pages', async () => {
+    api.today.mockResolvedValueOnce({ ...TODAY, items: [TODAY.items[0]], page: { next_cursor: 'arrears-page' } })
+      .mockResolvedValueOnce({ ...TODAY, items: [TODAY.items[1]], page: { next_cursor: null } })
+    const user = userEvent.setup()
+    renderScreen(<Today />, { route: '/?entity=SPV&sort=arrears' })
+    await waitFor(() => expect(api.today).toHaveBeenCalledWith({ entity: 'SPV', sort: 'arrears', limit: 50 }))
+    await user.click(await screen.findByRole('button', { name: 'โหลดลูกค้าเพิ่มเติม' }))
+    await waitFor(() => expect(api.today).toHaveBeenLastCalledWith({ entity: 'SPV', sort: 'arrears', limit: 50, cursor: 'arrears-page' }))
+  })
+
+  it('opens a selected customer outside the first page without substituting another case', async () => {
+    api.today.mockResolvedValue({ ...TODAY, items: [TODAY.items[0]], page: { next_cursor: 'next' } })
+    renderScreen(<Today />, { route: '/?sel=c-2&entity=SPV' })
+    await waitFor(() => expect(api.caseDetail).toHaveBeenCalledWith('c-2'))
+    expect(api.caseDetail).not.toHaveBeenCalledWith('c-1')
+    expect(await screen.findByRole('heading', { name: 'สมศรี พงษ์ไพบูลย์' })).toBeInTheDocument()
+  })
+
+  it('reports board metadata failures and retries them', async () => {
+    api.boardColumns.mockRejectedValueOnce({ problem: { code: 'request_failed', message_th: 'อ่านคอลัมน์ไม่ได้' } })
+      .mockResolvedValueOnce(BOARD_COLUMNS)
+    const user = userEvent.setup()
+    renderScreen(<Today />)
+    expect(await screen.findByRole('alert')).toHaveTextContent('อ่านคอลัมน์ไม่ได้')
+    await user.click(screen.getByRole('button', { name: 'ลองใหม่' }))
+    await waitFor(() => expect(api.boardColumns).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument())
+  })
   it('restores company filtering from the URL and loads a second cursor page with the same filter', async () => {
     const first = { ...TODAY, items: [TODAY.items[0]], page: { next_cursor: 'next' } }
     const second = { ...TODAY, items: [TODAY.items[1]], page: { next_cursor: null } }

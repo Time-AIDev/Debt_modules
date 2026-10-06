@@ -5,6 +5,7 @@ import { usePrefs } from '../lib/prefs.jsx'
 import { useIdentity, setRole, ROLES, roleLabel } from '../lib/identity.jsx'
 import { Popover } from './Popover.jsx'
 import { SegmentedControl } from './SegmentedControl.jsx'
+import { usePublicRuntime } from '../lib/publicRuntime.js'
 
 /** Search trigger, breadcrumbs, env chip, View popover, identity menu. */
 export function Topbar({ crumb, searchLabel, onSearch }) {
@@ -13,6 +14,7 @@ export function Topbar({ crumb, searchLabel, onSearch }) {
     setLang, setTheme, setDensity, setRailWidth, setRailOpen, railOpen,
   } = usePrefs()
   const identity = useIdentity()
+  const runtime = usePublicRuntime()
   const [viewOpen, setViewOpen] = useState(false)
   const [idOpen, setIdOpen] = useState(false)
   const parent = crumb?.parent
@@ -39,7 +41,7 @@ export function Topbar({ crumb, searchLabel, onSearch }) {
 
       <span className="envchip">
         <span className="envchip__dot" aria-hidden="true" />
-        {t('shell.env')}
+        {t(`shell.environment.${runtime.environment}`)}{runtime.data_mode === 'fixtures' ? ` · ${t('shell.sampleData')}` : ''}
       </span>
 
       <div className="topbar__menu">

@@ -128,7 +128,7 @@ def publish(conn, reconciliation_id, input_payload, output_payload):
     batch = []
     written = 0
     for uid, payload in customer_payloads(input_payload, output_payload, sources, _reconciliation(row)):
-        batch.append({"sequence": reconciliation_id, "uid": uid, "payload": json.dumps(payload, ensure_ascii=False)})
+        batch.append({"sequence": reconciliation_id, "uid": uid, "payload": json.dumps(payload, ensure_ascii=False, default=str)})
         if len(batch) == 100:
             conn.execute(text("insert into records.customer_payment_evidence(sequence,customer_uid,payload) "
                 "values(:sequence,:uid,cast(:payload as jsonb)) on conflict(sequence,customer_uid) do nothing"), batch)
@@ -138,6 +138,8 @@ def publish(conn, reconciliation_id, input_payload, output_payload):
         conn.execute(text("insert into records.customer_payment_evidence(sequence,customer_uid,payload) "
             "values(:sequence,:uid,cast(:payload as jsonb)) on conflict(sequence,customer_uid) do nothing"), batch)
         written += len(batch)
+    conn.execute(text('insert into records.customer_payment_evidence_publication(sequence) values(:sequence) '
+                      'on conflict(sequence) do nothing'), {'sequence': reconciliation_id})
     return {"sequence": reconciliation_id, "customers": written}
 
 
@@ -150,7 +152,7 @@ def for_customer(customer_uid):
             return None
         if conn.execute(text("select to_regclass('records.customer_payment_evidence')")).scalar():
             indexed = conn.execute(text("select version.sequence,evidence.payload,exists("
-                "select 1 from records.customer_payment_evidence published where published.sequence=version.sequence) as published "
+                "select 1 from records.customer_payment_evidence_publication published where published.sequence=version.sequence) as published "
                 "from (select sequence from records.payment_reconciliation_version order by sequence desc limit 1) version "
                 "left join records.customer_payment_evidence evidence on evidence.sequence=version.sequence "
                 "and evidence.customer_uid=:uid"), {"uid": customer_uid}).mappings().first()

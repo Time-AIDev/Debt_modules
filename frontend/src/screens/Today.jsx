@@ -46,10 +46,12 @@ export function Today() {
   const [problem, setProblem] = useState(null)
   const [columns, setColumns] = useState(null)
   const [officers, setOfficers] = useState([])
+  const [metadataProblem, setMetadataProblem] = useState(null)
   const [record, setRecord] = useState(null)
   const [recordProblem, setRecordProblem] = useState(null)
+  const [recordReload, setRecordReload] = useState(0)
   const [closed, setClosed] = useState({})
-  const [sortRisk, setSortRisk] = useState(false)
+  const sortRisk = params.get('sort') === 'arrears'
   const [contactFor, setContactFor] = useState(null)
   const [moveFor, setMoveFor] = useState(null)
   const [moveProblem, setMoveProblem] = useState(null)
@@ -63,7 +65,20 @@ export function Today() {
   const [splitOpen, setSplitOpen] = useState(false)
   const [workedOpen, setWorkedOpen] = useState(false)
   // Final design: the board opens a customer in the case pop-up ({ uid, log }).
-  const [sheet, setSheet] = useState(null)
+  const sheetUid = params.get('sheet')
+  const sheet = sheetUid ? { uid: sheetUid, log: params.get('sheet_log') === '1' } : null
+  function setSheet(value) {
+    const nextValue = typeof value === 'function' ? value(sheet) : value
+    const next = new URLSearchParams(params)
+    if (nextValue?.uid) {
+      next.set('sheet', nextValue.uid)
+      nextValue.log ? next.set('sheet_log', '1') : next.delete('sheet_log')
+    } else {
+      next.delete('sheet')
+      next.delete('sheet_log')
+    }
+    setParams(next, { replace: true })
+  }
   const [exportOpen, setExportOpen] = useState(false)
   const [exportReason, setExportReason] = useState('')
   const [exportProblem, setExportProblem] = useState(null)
@@ -81,13 +96,15 @@ export function Today() {
     const query = officer === '__unassigned__' ? { unassigned: 1 } : officer ? { officer } : {}
     if (entity) query.entity = entity
     if (!preInstall) query.limit = 50
+    if (!preInstall && sortRisk) query.sort = 'arrears'
     return query
-  }, [officer, entity, preInstall])
+  }, [officer, entity, preInstall, sortRisk])
   const load = useCallback(() => {
     const version = ++loadVersion.current
     setProblem(null)
     setPayload(null)
     setRecord(null)
+    setRecordReload((current) => current + 1)
     setSelected(new Set())
     setLoadingMore(false)
     // feedback-r2 TASK-015: the "ยังไม่มอบหมาย" option filters through the server's
@@ -123,6 +140,8 @@ export function Today() {
     const next = new URLSearchParams(params)
     value ? next.set(key, value) : next.delete(key)
     next.delete('sel')
+    next.delete('sheet')
+    next.delete('sheet_log')
     loadVersion.current += 1
     setSelected(new Set())
     setRecord(null)
@@ -136,10 +155,16 @@ export function Today() {
     return () => { loadVersion.current += 1 }
   }, [load])
   useReloadOnEpoch(load)
-  useEffect(() => {
-    api.boardColumns().then((d) => setColumns(d?.columns || [])).catch(() => setColumns([]))
-    api.officers().then((d) => setOfficers(d?.officers || [])).catch(() => setOfficers([]))
+  const loadMetadata = useCallback(() => {
+    setMetadataProblem(null)
+    return Promise.all([
+      api.boardColumns().then((d) => setColumns(d?.columns || [])),
+      api.officers().then((d) => setOfficers(d?.officers || [])),
+    ]).catch((error) => setMetadataProblem(error.problem || {
+      code: 'request_failed', message_th: 'อ่านคอลัมน์งานหรือรายชื่อเจ้าหน้าที่ไม่ได้ กรุณาลองใหม่',
+    }))
   }, [])
+  useEffect(() => { loadMetadata() }, [loadMetadata])
 
   const items = payload?.items || []
   const meta = payload?.meta || {}
@@ -179,26 +204,32 @@ export function Today() {
   // The first row on load is the first one on screen still to work (the sort toggle
   // included); once shown it is pinned in the URL, so a saved contact keeps it
   // selected (it only moves into the worked group).
-  const sel = items.find((it) => itemUid(it) === selUid)
-    || (preInstall ? preInstallGroups[0]?.rows[0] : unworkedGroups[0]?.rows[0])
+  const firstItem = (preInstall ? preInstallGroups[0]?.rows[0] : unworkedGroups[0]?.rows[0])
     || workedRows[0]
     || items[0]
+  const selectedUid = selUid || itemUid(firstItem)
+  const sel = items.find((it) => itemUid(it) === selectedUid) || (selectedUid
+    ? preInstall ? { customer_uid: selectedUid, display_name: record?.customer?.display_name }
+      : { customer: record?.customer || { uid: selectedUid } } : undefined)
   useEffect(() => {
-    const uid = itemUid(sel)
-    if (uid && uid !== selUid) select(uid)
+    if (selectedUid && !selUid) select(selectedUid)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sel, selUid, itemUid])
+  }, [selectedUid, selUid])
 
   useEffect(() => {
-    if (!sel) { setRecord(null); return undefined }
+    if (!selectedUid) { setRecord(null); return undefined }
     let alive = true
     setRecord(null)
     setRecordProblem(null)
-    api.caseDetail(itemUid(sel))
-      .then((d) => { if (alive) setRecord(d) })
+    api.caseDetail(selectedUid)
+      .then((d) => {
+        if (!alive) return
+        if (d?.customer?.uid !== selectedUid) throw { problem: { code: 'case_response_mismatch', message_th: 'ข้อมูลเคสไม่ตรงกับลูกค้าที่เลือก กรุณาโหลดใหม่' } }
+        setRecord(d)
+      })
       .catch((e) => { if (alive) setRecordProblem(e?.problem || { code: 'request_failed' }) })
     return () => { alive = false }
-  }, [sel, itemUid])
+  }, [selectedUid, recordReload])
 
   const officerName = useCallback((uid) => {
     const o = officers.find((x) => x.uid === uid)
@@ -246,6 +277,8 @@ export function Today() {
     const next = new URLSearchParams(params)
     next.set('workstream', value)
     next.delete('sel')
+    next.delete('sheet')
+    next.delete('sheet_log')
     setSelected(new Set())
     setRecord(null)
     setPayload(null)
@@ -459,6 +492,7 @@ export function Today() {
         {board ? <InfoPopover align="right">{t('board.moveNote')}</InfoPopover> : null}
       </div>
 
+      {metadataProblem ? <LoadError problem={metadataProblem} onRetry={loadMetadata} /> : null}
       {board ? (
         <>
           <div className="today__boardFilters">{filterControls}</div>
@@ -469,6 +503,7 @@ export function Today() {
               columns={boardColumns}
               items={boardItems}
               reconcile={meta.total}
+              laneCounts={meta.board_counts}
               onOpen={(uid) => setSheet({ uid, log: false })}
               onLog={(card) => setSheet({ uid: card.uid, log: true })}
               onMove={(card) => { setMoveProblem(null); setMoveFor(card) }}
@@ -483,7 +518,7 @@ export function Today() {
             hideTitle
             sub={preInstall ? t('pipeline.sub') : t('today.sub', { date: businessDate ? date(businessDate) : '—' })}
             sort={!preInstall ? (
-              <button type="button" className="btn btn--quiet btn--sm" onClick={() => setSortRisk(!sortRisk)} title={t('today.sortTitle')}>
+              <button type="button" className="btn btn--quiet btn--sm" onClick={() => updateFilter('sort', sortRisk ? '' : 'arrears')} title={t('today.sortTitle')}>
                 <Icon name="sort" />{sortRisk ? t('today.sortRisk') : t('today.sortOrder')}
               </button>
             ) : undefined}
@@ -572,9 +607,9 @@ export function Today() {
                 data={record}
                 problem={recordProblem}
                 businessDate={businessDate}
-                onRetry={() => api.caseDetail(itemUid(sel)).then(setRecord).catch(() => {})}
+                onRetry={() => setRecordReload((current) => current + 1)}
                 onChanged={afterWrite}
-                onLogContact={() => setContactFor(preInstall ? (record?.customer || { uid: itemUid(sel), display_name: sel.display_name }) : sel.customer)}
+                onLogContact={() => { if (record?.customer?.uid === selectedUid) setContactFor(record.customer) }}
               />
             ) : payload ? <p className="today__none">{t('today.noCase')}</p> : null}
           </div>
