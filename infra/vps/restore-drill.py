@@ -77,7 +77,7 @@ WHERE table_schema IN ('app','audit','landing','records') AND table_type='BASE T
                         "--set=ON_ERROR_STOP=1", "--command", query], capture=True)
             counts = dict(line.split("\t") for line in rows.splitlines())
             counts = {key: int(value) for key, value in counts.items()}
-            if counts["schema_version"] not in (1, 2):
+            if counts["schema_version"] not in (1, 2, 3):
                 raise ValueError("restored schema version does not match application")
             expected_file = backup / "database-counts.tsv"
             if expected_file.is_file():

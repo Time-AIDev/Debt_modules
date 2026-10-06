@@ -933,3 +933,26 @@ CREATE INDEX IF NOT EXISTS upload_session_retention ON app.upload_session(create
 ALTER TABLE app.upload_part ADD COLUMN IF NOT EXISTS sha256 text;
 -- Set only after every preceding additive migration succeeded in this transaction.
 UPDATE app.schema_version SET version=2 WHERE singleton=true AND version<2;
+
+-- Matched debt-status evidence and independently confirmed installation.
+
+create table if not exists records.debt_import_preview (
+ uid text primary key, actor text not null, profile text not null,
+ payload jsonb not null, created_at timestamptz not null default now()
+);
+create table if not exists records.contract_supplement (
+ contract_uid text primary key, customer_uid text not null, payload jsonb not null,
+ updated_at timestamptz not null default now()
+);
+create index if not exists contract_supplement_customer on records.contract_supplement(customer_uid);
+create table if not exists records.debt_status_observation (
+ sequence bigserial primary key, customer_uid text not null, preview_uid text not null,
+ entry_key text not null, payload jsonb not null, created_at timestamptz not null default now(),
+ unique(preview_uid,entry_key)
+);
+create index if not exists debt_status_customer on records.debt_status_observation(customer_uid,sequence desc);
+create table if not exists records.installation_confirmation (
+ contract_uid text primary key, customer_uid text not null, payload jsonb not null,
+ updated_at timestamptz not null default now()
+);
+

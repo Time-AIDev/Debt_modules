@@ -16,7 +16,7 @@ from . import db
 SCHEMA_PATH = Path(__file__).with_name("schema.sql")
 
 
-def statements():
+def statements(schema_path=None):
     """schema.sql split on the semicolons that END a statement.
 
     Comments are stripped BEFORE the split, not after. Splitting first looks
@@ -32,7 +32,7 @@ def statements():
     only as clever as it has to be: it tracks single-quoted literals (with '' as
     an escaped quote) and $tag$ bodies, and splits nowhere else.
     """
-    lines = [line for line in SCHEMA_PATH.read_text(encoding="utf-8").splitlines()
+    lines = [line for line in (schema_path or SCHEMA_PATH).read_text(encoding="utf-8").splitlines()
              if not line.strip().startswith("--")]
     sql = "\n".join(lines)
 
@@ -88,6 +88,13 @@ def apply(conn):
     for statement in statements():
         conn.execute(text(statement))
         executed.append(statement.splitlines()[0])
+    capacity_schema = Path(__file__).with_name("capacity_schema.sql")
+    for statement in statements(capacity_schema):
+        conn.execute(text(statement))
+        executed.append(statement.splitlines()[0])
+    from .runtime_policy import SCHEMA_VERSION
+    conn.execute(text("update app.schema_version set version=:version where singleton=true"),
+                 {"version": SCHEMA_VERSION})
     return executed
 
 
@@ -138,6 +145,10 @@ RUNTIME_GRANTS = [
     "GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA records TO %s",
     "ALTER DEFAULT PRIVILEGES IN SCHEMA records GRANT SELECT, INSERT, UPDATE ON TABLES TO %s",
     "ALTER DEFAULT PRIVILEGES IN SCHEMA records GRANT USAGE, SELECT ON SEQUENCES TO %s",
+    # Reviewed source evidence and installation proofs are insertion-only. The
+    # preview's apply result remains mutable, but past facts cannot be rewritten.
+    "REVOKE UPDATE ON records.contract_supplement, records.debt_status_observation, "
+    "records.installation_confirmation FROM %s",
 ]
 
 

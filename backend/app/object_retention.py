@@ -23,7 +23,8 @@ def cleanup(apply=False):
     cache_hours = max(1, int(env("REQUEST_RESULT_RETENTION_HOURS", "24")))
     cutoff = time.time() - grace_hours * 3600
     summary = {"applied": apply, "upload_sessions": 0, "request_results": 0,
-               "revoked_sessions": 0, "expired_sessions": 0, "objects": 0, "bytes": 0}
+               "revoked_sessions": 0, "expired_sessions": 0, "projection_cursors": 0,
+               "objects": 0, "bytes": 0}
     with db.connect() as conn, conn.begin():
         if not conn.execute(text("select pg_try_advisory_xact_lock(:k)"), {"k": LOCK_KEY}).scalar_one():
             return dict(summary, busy=True)
@@ -36,6 +37,12 @@ def cleanup(apply=False):
         summary["request_results"] = conn.execute(text(
             "select count(*) from app.request_result where created_at < now()-:h * interval '1 hour'"
         ), {"h": cache_hours}).scalar_one()
+        if conn.execute(text("select to_regclass('app.projection_cursor')")).scalar():
+            summary["projection_cursors"] = conn.execute(text(
+                "select count(*) from app.projection_cursor where expires_at < now()"
+            )).scalar_one()
+            if apply:
+                conn.execute(text("delete from app.projection_cursor where expires_at < now()"))
         summary["revoked_sessions"] = conn.execute(text(
             "select count(*) from app.auth_session where revoked_at < now()-interval '7 days'"
         )).scalar_one()

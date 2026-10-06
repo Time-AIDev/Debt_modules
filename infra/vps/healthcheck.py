@@ -7,6 +7,9 @@ import subprocess
 import sys
 import time
 import urllib.request
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+sys.path.insert(0, "/usr/local/lib/volt-debt-ops")
+from incident_alerts import AlertError, configured_notification
 
 
 def main():
@@ -52,6 +55,10 @@ def main():
             failures.append("no completed backup in the last 26 hours")
     except (OSError, ValueError, KeyError):
         failures.append("capacity or backup inspection failed")
+    try:
+        configured_notification(failures)
+    except AlertError:
+        failures.append("incident notification was not acknowledged; pending retry retained")
     if failures:
         print("FAILED: " + "; ".join(failures), file=sys.stderr)
         return 1

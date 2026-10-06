@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Volt Debt from outside production every minute
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=1min
+Unit=volt-debt-watchdog.service
+Persistent=true
+
+[Install]
+WantedBy=timers.target

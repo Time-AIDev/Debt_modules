@@ -151,6 +151,10 @@ class JourneyState:
 
     def uid(self, prefix):
         self._counter += 1
+        from .business_records import next_domain_id
+        durable_uid = next_domain_id(prefix, self._counter)
+        if durable_uid is not None:
+            return durable_uid
         return "%s-%04d" % (prefix, self._counter)
 
 

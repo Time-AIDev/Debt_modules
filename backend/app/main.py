@@ -122,6 +122,9 @@ async def _lifespan(app_):
         except _errors.Problem as problem:
             print("user list not read at start-up: %s; Google sign-in and Google sessions refuse until it is"
                   % problem.code, file=sys.stderr)
+    if shared_state_enabled():
+        from .production_runtime import warm_projections
+        await run_in_threadpool(warm_projections)
     try:
         yield
     finally:
@@ -1981,6 +1984,7 @@ from .routers.reports import router as reports_router  # noqa: E402
 # Round-5 ruling 71: the officer's own upload, raw-body (see routers/imports.py's
 # own note on why — no python-multipart, no UploadFile).
 from .routers.imports import router as imports_router  # noqa: E402
+from .routers.debt_imports import router as debt_imports_router  # noqa: E402
 from .routers.pipelines import router as pipelines_router  # noqa: E402
 from .routers.peak_pipeline import router as peak_pipeline_router  # noqa: E402
 # Task 22: evidence files on a contact or a note — guard, scan, store (F7/F8).
@@ -2011,6 +2015,7 @@ app.include_router(payments_router)
 app.include_router(migration_router)
 app.include_router(reports_router)
 app.include_router(imports_router)
+app.include_router(debt_imports_router)
 app.include_router(pipelines_router)
 app.include_router(peak_pipeline_router)
 app.include_router(attachments_router)

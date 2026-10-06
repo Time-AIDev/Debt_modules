@@ -1,0 +1,16 @@
+[Unit]
+Description=Volt Debt external readiness and encrypted recovery-point watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+UMask=0077
+ExecStart=/usr/local/lib/volt-debt-ops/external-watchdog.py --config /etc/volt-debt/watchdog.json
+TimeoutStartSec=90
+StateDirectory=volt-debt-ops
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes

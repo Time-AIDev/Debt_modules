@@ -1,9 +1,10 @@
 """Runtime defaults shared by local, staging and production release scripts."""
 import os
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 DEFAULTS = {
     "CRM_WON_ONLY": "true",
+    "VOLT_INDEXED_READS_ENABLED": "true", "VOLT_CUSTOMER_SCOPES_ENABLED": "true",
     "AUTH_SESSION_POLICY": "tab", "AUTH_TAB_ABSOLUTE_SECONDS": "28800",
     "AUTH_REAUTH_SECONDS": "0", "REQUEST_JSON_MAX_BYTES": "1048576",
     "REQUEST_UPLOAD_MAX_BYTES": "104857600", "REQUEST_BODY_TIMEOUT_SECONDS": "30",
