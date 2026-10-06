@@ -7,7 +7,7 @@ import pytest
 from sqlalchemy import text
 
 from app import business_records, cases, main, migrate, read_projection, session
-from app.production_unit import CURRENT, case_token, customer_scope
+from app.production_unit import CURRENT, case_token, customer_scope, independent_control
 
 
 @pytest.fixture
@@ -196,6 +196,16 @@ def test_compatible_fallback_uses_legacy_calculations_without_old_codec(monkeypa
     assert customer_scope({"path": "/v1/cases/by-customer/synthetic/notes", "method": "POST"}) is None
 
 
+@pytest.mark.parametrize("query,expected", [
+    (b"profile=debt_status", True), (b"profile=contract_supplement", True),
+    (b"profile=debt_status&profile=full", False), (b"profile=full", False),
+    (b"profile=", False), (b"profile=unknown", False), (b"", False),
+])
+def test_only_owned_preview_profiles_bypass_publication_lock(query, expected):
+    assert independent_control({"path": "/v1/imports", "method": "POST", "query_string": query}) is expected
+    assert independent_control({"path": "/v1/imports/example:apply", "method": "POST", "query_string": query}) is False
+
+
 def test_complete_generation_matches_legacy_financial_rows_and_filters(capacity):
     from app import request_context
     from app.routers.today import _legacy_workbook
@@ -299,3 +309,96 @@ def test_customer_idempotency_replay_keeps_exact_response_and_commits_once(capac
         assert capacity.execute(text("select version from app.customer_version where customer_uid=:u"), {"u": first}).scalar_one() == 1
     finally:
         db.reset()
+
+
+def test_schema3_fallback_reads_and_mutates_new_codec_with_numeric_tokens(capacity, pg_url, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app import db
+    from app.production_unit import ProductionUnitMiddleware
+    value, first, second = state()
+    with unit(capacity):
+        business_records.save(capacity, "cases.state", value)
+    generation(capacity, [projected(first), projected(second)])
+    capacity.execute(text("update app.schema_version set version=3 where singleton"))
+    capacity.commit()
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setenv("VOLT_INDEXED_READS_ENABLED", "false")
+    monkeypatch.setenv("VOLT_CUSTOMER_SCOPES_ENABLED", "false")
+    monkeypatch.setattr(read_projection, "finish_write", lambda conn: None)
+    db.reset()
+    app = FastAPI()
+    @app.get("/v1/cases/by-customer/{uid}")
+    def get_case(uid: str):
+        return cases._store.for_current().cases[uid]
+    @app.post("/v1/cases/by-customer/{uid}/notes", status_code=201)
+    def note(uid: str):
+        row = cases._store.for_current().cases[uid]
+        row["note"] = "Synthetic fallback note"
+        return row
+    app.add_middleware(ProductionUnitMiddleware, enabled=lambda: True)
+    try:
+        with TestClient(app) as client:
+            first_read = client.get("/v1/cases/by-customer/" + first)
+            assert first_read.status_code == 200
+            assert "x-volt-case-version" not in first_read.headers and "etag" not in first_read.headers
+            updated = client.post("/v1/cases/by-customer/" + first + "/notes", headers={
+                "If-Match": first_read.headers["x-volt-state-version"]})
+            assert updated.status_code == 201
+            assert "x-volt-case-version" not in updated.headers
+            assert client.get("/v1/cases/by-customer/" + first).json()["note"] == "Synthetic fallback note"
+            assert "note" not in client.get("/v1/cases/by-customer/" + second).json()
+    finally:
+        db.reset()
+
+
+def test_global_publication_invalidates_every_case_token(capacity, monkeypatch):
+    capacity.execute(text("insert into app.customer_version(customer_uid,version) values('a',1),('b',4)"))
+    monkeypatch.setattr(read_projection, "rebuild", lambda conn: 1)
+    with unit(capacity, mutation=True):
+        read_projection.finish_write(capacity)
+    assert dict(capacity.execute(text("select customer_uid,version from app.customer_version")).all()) == {"a": 2, "b": 5}
+
+
+def test_case_note_does_not_invalidate_unrelated_collection_pages(capacity):
+    from app import request_context
+    with unit(capacity):
+        memo = main._VIEW_MEMO.set({})
+        reads = request_context.begin_read()
+        try:
+            read_projection.rebuild(capacity)
+        finally:
+            request_context.end_read(reads)
+            main._VIEW_MEMO.reset(memo)
+    before = capacity.execute(text("select ordering_version from app.projection_current where singleton")).scalar_one()
+    uid = main.CUSTOMERS[0].uid
+    with unit(capacity, uid):
+        memo = main._VIEW_MEMO.set({})
+        reads = request_context.begin_read()
+        try:
+            cs = cases.for_current()
+            cs.events.append({"kind": "NOTE", "case_uid": cs.cases[uid]["uid"], "text": "Synthetic note"})
+            business_records.save(capacity, "cases.state", cs)
+            read_projection.refresh_customers(capacity, {uid})
+        finally:
+            request_context.end_read(reads)
+            main._VIEW_MEMO.reset(memo)
+    after = capacity.execute(text("select ordering_version from app.projection_current where singleton")).scalar_one()
+    assert after == before
+
+
+def test_scoped_case_preserves_related_contract_payment_status(capacity, monkeypatch):
+    from types import SimpleNamespace
+    from app import journey
+    from app.routers.today import _related_cases
+    first = SimpleNamespace(uid="a", customer_no="a", volt_id=None, display_name="Synthetic Person")
+    other = SimpleNamespace(uid="b", customer_no="b", volt_id=None, display_name="Synthetic Person")
+    row = projected("b")
+    row["payment_status"] = "CLOSED"
+    generation(capacity, [row])
+    current = cases.CaseState()
+    current.cases = {"a": {"payment_status": "LATE"}}
+    monkeypatch.setattr(journey, "book_customers", lambda: [first, other])
+    with unit(capacity, "a"):
+        related = _related_cases(first, current)
+    assert len(related) == 1 and related[0]["payment_status"] == "CLOSED"

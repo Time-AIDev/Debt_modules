@@ -15,6 +15,7 @@ import copy
 import threading
 from collections import OrderedDict
 from contextvars import ContextVar
+from urllib.parse import parse_qs
 
 import anyio
 from sqlalchemy import text
@@ -42,6 +43,21 @@ def customer_scope(scope):
 
 def case_token(customer_uid, version):
     return 'case:%s:%d' % (customer_uid, version)
+
+
+def independent_control(scope):
+    if scope.get("path", "").startswith("/v1/operation-runs/"):
+        return True
+    if scope.get("path") != "/v1/imports" or scope.get("method") != "POST":
+        return False
+    try:
+        profiles = parse_qs(scope.get("query_string", b"").decode("ascii"), keep_blank_values=True).get("profile", [])
+    except (ValueError, UnicodeDecodeError):
+        return False
+    # These audited finance profiles parse/stage an owned preview only. Duplicate
+    # selectors, legacy full-sheet imports, and every apply route retain the
+    # exclusive business-publication barrier.
+    return len(profiles) == 1 and profiles[0] in ("debt_status", "contract_supplement")
 
 
 class _StoreTemplates:
@@ -257,7 +273,7 @@ class ProductionUnitMiddleware:
         queued = time.monotonic()
         # Controls only touch SQL operational state, never the mutable shared book.
         # Their independent request slot is cleaned without touching another slot.
-        if scope.get("path", "").startswith("/v1/operation-runs/"):
+        if independent_control(scope):
             return await self._request(scope, receive, send, queued, 0)
         scoped_customer = customer_scope(scope)
         projection_read = scope.get("method") in ("GET", "HEAD") and scope.get("path") in (
@@ -307,8 +323,8 @@ class ProductionUnitMiddleware:
             await run_in_threadpool(conn.execute, text("set local lock_timeout='5s'"))
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
-            control_request = scope.get("path", "").startswith("/v1/operation-runs/")
-            if not mutation_request:
+            control_request = independent_control(scope)
+            if not mutation_request or control_request:
                 await run_in_threadpool(conn.execute, text("set transaction isolation level repeatable read"))
             capacity = bool(await run_in_threadpool(lambda: conn.execute(text(
                 "select to_regclass('app.projection_current') is not null and "
@@ -363,7 +379,7 @@ class ProductionUnitMiddleware:
                 unit.pop("owner_baselines", None)
             projection_read = capacity and os.environ.get("VOLT_INDEXED_READS_ENABLED", "true") == "true" and not mutation_request and scope["path"] in (
                 "/v1/workbook", "/v1/today", "/v1/reports/monthly")
-            if auth_session and not projection_read and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
+            if auth_session and not projection_read and not control_request and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):
                 from .production_runtime import prepare_book
                 await run_in_threadpool(prepare_book, exclusive=book_exclusive)
                 from .production_runtime import book_marker as marker

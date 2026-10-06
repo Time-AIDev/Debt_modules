@@ -131,6 +131,15 @@ def rebuild(conn):
         rows = [_row(row["customer"]["uid"], row, today_rows.get(row["customer"]["uid"]), cs,
                      str(settings.business_date)) for row in workbook["rows"]]
         _save_rows(conn, generation, rows)
+        conn.execute(text("insert into app.customer_version(customer_uid) "
+                          "select customer_uid from app.customer_projection where generation=:g "
+                          "on conflict do nothing"), {"g": generation})
+        # Pre-install cases live outside the collection/book projection but still
+        # expose case ETags. Register them so a later global edit invalidates all
+        # previously opened case files, including those without a money row.
+        if cs.cases:
+            conn.execute(text("insert into app.customer_version(customer_uid) "
+                              "select unnest(cast(:uids as text[])) on conflict do nothing"), {"uids": list(cs.cases)})
         # Publish seeded stores once. Scoped requests restore indexed rows thereafter.
         from .production_unit import flush
         flush()
@@ -187,6 +196,10 @@ def refresh_customers(conn, customer_uids):
     workbook_rows = {row["customer"]["uid"]: row for row in workbook["rows"]}
     wanted = set(customer_uids)
     rows = []
+    removed = False
+    previous = {row["customer_uid"]: row for row in conn.execute(text(
+        "select * from app.customer_projection where generation=:g and customer_uid=any(:uids)"),
+        {"g": pointer.generation, "uids": list(wanted)}).mappings()}
     for uid in wanted:
         row = workbook_rows.get(uid)
         customer = journey.customer_by_uid(uid)
@@ -195,10 +208,14 @@ def refresh_customers(conn, customer_uids):
         if row is not None:
             rows.append(_row(uid, row, today_rows.get(uid), cs, str(settings.business_date)))
         else:
-            conn.execute(text("delete from app.customer_projection where generation=:g and customer_uid=:u"),
-                         {"g": pointer.generation, "u": uid})
-    _save_rows(conn, pointer.generation, rows)
-    conn.execute(text("update app.projection_current set ordering_version=ordering_version+1 where singleton"))
+            removed = bool(conn.execute(text("delete from app.customer_projection where generation=:g and customer_uid=:u"),
+                                       {"g": pointer.generation, "u": uid}).rowcount) or removed
+    changed = [row for row in rows if row["customer_uid"] not in previous or any(
+        previous[row["customer_uid"]].get(key) != (json.loads(value) if key in ("workbook", "today") and value is not None else value)
+        for key, value in row.items())]
+    _save_rows(conn, pointer.generation, changed)
+    if changed or removed:
+        conn.execute(text("update app.projection_current set ordering_version=ordering_version+1 where singleton"))
 
 
 def finish_write(conn):
@@ -206,6 +223,10 @@ def finish_write(conn):
     if not unit or not unit.get("capacity"):
         return
     if unit.get("projection_all") or not unit.get("customer_uid"):
+        # An unaudited/global action may change any customer's case. Invalidate
+        # every scoped token conservatively; the exclusive legacy barrier makes
+        # this one atomic publication with the source/projection transaction.
+        conn.execute(text("update app.customer_version set version=version+1"))
         invalidate_all(conn)
         rebuild(conn)
     else:

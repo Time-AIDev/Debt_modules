@@ -1753,8 +1753,15 @@ def _related_cases(customer, cs):
         if other.uid == customer.uid or (other.display_name or "").strip() != name:
             continue
         case = cs.cases.get(other.uid)
+        payment_status = case["payment_status"] if case else None
+        from .. import read_projection
+        if case is None and read_projection.enabled():
+            from sqlalchemy import text
+            payment_status = read_projection._unit()["conn"].execute(text(
+                "select p.payment_status from app.customer_projection p join app.projection_current c "
+                "on c.generation=p.generation where c.singleton and p.customer_uid=:u"), {"u": other.uid}).scalar()
         rows.append({"customer_uid": other.uid, "customer_no": other.customer_no, "volt_id": getattr(other, "volt_id", None),
-                     "display_name": other.display_name, "payment_status": case["payment_status"] if case else None,
+                     "display_name": other.display_name, "payment_status": payment_status,
                      "note_th": "อีกสัญญาหนึ่งของลูกค้ารายเดียวกัน (VOLT id %s) — เงินและตารางเดือนแยกกัน" % getattr(other, "volt_id", other.customer_no),
                      "note_en": "Another contract of the same customer (VOLT id %s) — money and months are kept separately" % getattr(other, "volt_id", other.customer_no)})
     return rows
