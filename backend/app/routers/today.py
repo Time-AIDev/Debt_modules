@@ -302,9 +302,14 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
         officer = _valid_choice("officer", officer, known, "ไม่รู้จักเจ้าหน้าที่ที่ระบุ")
         dc_status = _valid_choice("dc_status", dc_status, [row["code"] for row in dictionaries.for_current().list("DC_STATUS")],
                                   "ไม่รู้จักสถานะติดตามที่ระบุ")
-        return _json(read_projection.today({"officer": officer, "ladder_indicative": rung, "tier": tier,
+        filters = {"officer": officer, "ladder_indicative": rung, "tier": tier,
             "payment_status": payment_status, "dc_status": dc_status, "product": product, "entity": entity,
-            "q": q, "unassigned": bool(unassigned)}, limit, cursor, sort))
+            "q": q, "unassigned": bool(unassigned)}
+        if limit is None and cursor is None:
+            from .. import projection_wire
+            return projection_wire.today_response(conn, pointer, filters, sort,
+                lambda: _json(read_projection.today(filters, sort=sort)))
+        return _json(read_projection.today(filters, limit, cursor, sort))
     cs = cases_domain.for_current()
     # Feedback Round 1 / B2: every filter is validated BEFORE the broken-PTP sweep or any
     # row is built. A filter that matched everything — or nothing — on a typo would be
