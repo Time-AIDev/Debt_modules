@@ -96,6 +96,9 @@ Release packaging uses `git archive` of the pinned deployed commit. A clean
 checkout may be at a different revision; the selected commit must exist locally
 and match both application image labels. Scheduled offsite exports use the
 captured backup binding rather than images discovered after writers restart.
+The scanner signature capture uses its immutable captured container ID. Bundle
+directories include a hash of all five image IDs so infrastructure image updates
+at the same application revision create a new bundle and retain the earlier one.
 
 ## Restore drill: isolated instance only
 

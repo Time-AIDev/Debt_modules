@@ -31,16 +31,18 @@ stack_module = load('cold_recovery_stack_tests', 'restore-stack.py')
 offsite = load('scheduled_offsite_tests', 'offsite-backup.py')
 IMAGES = {name: 'sha256:'+str(index)*64 for index, name in enumerate(('api', 'web', 'db', 'scanner', 'edge'), 1)}
 REVISION = 'a'*40
+CONTAINERS = {name: f'{index:064x}' for index, name in enumerate(('api', 'worker', 'web', 'db', 'scanner', 'edge'), 1)}
 
 
-def bundle(root):
+def bundle(root, images=None):
+    images = images or IMAGES
     root.mkdir(mode=0o700)
     with tarfile.open(root/'source.tar.gz', 'w:gz', format=tarfile.PAX_FORMAT, pax_headers={'comment': REVISION}) as archive:
         member = tarfile.TarInfo('source/app.py'); member.size = 4
         archive.addfile(member, io.BytesIO(b'pass'))
     (root/'docker-images.tar').write_bytes(b'simulated image archive; not a real image')
     (root/'clamav.tar.gz').write_bytes(b'simulated scanner archive')
-    manifest = {'format': 'volt-debt-release-bundle-v1', 'revision': REVISION, 'images': IMAGES,
+    manifest = {'format': 'volt-debt-release-bundle-v1', 'revision': REVISION, 'images': images,
                 'production_host_fingerprint': 'f'*64,
                 'files': {name: sha(root/name) for name in ('source.tar.gz', 'docker-images.tar', 'clamav.tar.gz')}}
     write_json(root/'manifest.json', manifest); (root/'COMPLETE').write_text(now().isoformat())
@@ -291,7 +293,7 @@ def test_export_rejects_release_images_that_differ_from_captured_runtime(monkeyp
     (backup/'manifest.txt').write_text('source_commit='+REVISION+'\n')
     (backup/'database-image-id.txt').write_text(IMAGES['db']+'\n')
     write_json(backup/'runtime-binding.json', {'format': 'volt-backup-runtime-v1',
-               'revision': REVISION, 'images': dict(IMAGES, api='sha256:'+'0'*64)})
+               'revision': REVISION, 'images': dict(IMAGES, api='sha256:'+'0'*64), 'containers': CONTAINERS})
     monkeypatch.setenv('BACKUP_AGE_RECIPIENT', 'age1simulationpublicrecipient')
     monkeypatch.setenv('BACKUP_REMOTE', 'offsite:backups')
     monkeypatch.setattr(exporter, 'remote_backend', lambda value: 's3')
@@ -300,10 +302,17 @@ def test_export_rejects_release_images_that_differ_from_captured_runtime(monkeyp
         exporter.export(backup, release)
 
 
-def test_scheduled_export_packages_captured_images_without_rediscovering_later_runtime(monkeypatch, tmp_path):
+@pytest.mark.parametrize('rotate_infrastructure', [False, True])
+def test_scheduled_export_packages_captured_images_without_rediscovering_later_runtime(monkeypatch, tmp_path, rotate_infrastructure):
     """Only sequencing is simulated; this cannot certify an offsite gate."""
     backup_root = tmp_path/'backups'; backup_root.mkdir(mode=0o700)
     backup = backup_root/'backup1'
+    images = dict(IMAGES, scanner='sha256:'+'9'*64) if rotate_infrastructure else IMAGES
+    old_bundle = None
+    if rotate_infrastructure:
+        bundles = backup_root/'release-bundles'; bundles.mkdir(mode=0o700)
+        old_bundle = bundle(bundles/offsite.bundle_name(REVISION, IMAGES))
+        old_checksum = sha(old_bundle/'manifest.json')
     remote = tmp_path/'rclone.conf'; remote.write_text('simulated private provider'); remote.chmod(0o600)
     config = tmp_path/'config.json'
     write_json(config, {'remote': 'offsite:backups', 'recipient': 'age1public',
@@ -318,9 +327,9 @@ def test_scheduled_export_packages_captured_images_without_rediscovering_later_r
             if arguments[:2] == ['systemctl', 'start']:
                 backup.mkdir(mode=0o700); (backup/'COMPLETE').write_text(now().isoformat())
                 write_json(backup/'runtime-binding.json', {'format': 'volt-backup-runtime-v1',
-                           'revision': REVISION, 'images': IMAGES})
+                           'revision': REVISION, 'images': images, 'containers': CONTAINERS})
             elif 'package-release.py' in arguments[1]:
-                bundle(Path(arguments[arguments.index('--output')+1]))
+                bundle(Path(arguments[arguments.index('--output')+1]), images)
             elif 'backup-export.py' in arguments[1]:
                 write_json(backup/'recovery-point.json', {'captured_at_utc': now().isoformat(),
                            'archive_sha256': '1'*64, 'revision': REVISION})
@@ -329,5 +338,12 @@ def test_scheduled_export_packages_captured_images_without_rediscovering_later_r
     result = offsite.run(config, backup_root)
     command = next(value for value in calls if len(value) > 1 and 'package-release.py' in value[1])
     assert command[command.index('--revision')+1] == REVISION
-    for name, image in IMAGES.items(): assert command[command.index('--'+name+'-image')+1] == image
+    assert command[command.index('--scanner-container')+1] == CONTAINERS['scanner']
+    for name, image in images.items(): assert command[command.index('--'+name+'-image')+1] == image
+    packaged = Path(command[command.index('--output')+1])
+    assert packaged.name == offsite.bundle_name(REVISION, images)
+    assert packaged.name == offsite.bundle_name(REVISION, dict(reversed(list(images.items()))))
+    if old_bundle:
+        assert packaged != old_bundle and old_bundle.is_dir()
+        assert sha(old_bundle/'manifest.json') == old_checksum
     assert result['status'] == 'passed' and result['revision'] == REVISION

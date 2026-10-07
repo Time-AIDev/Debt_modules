@@ -17,6 +17,7 @@ spec = importlib.util.spec_from_file_location('backup_runtime_package_tests', OP
 packager = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(packager)
 IMAGES = {name: 'sha256:'+str(index)*64 for index, name in enumerate(('api', 'web', 'db', 'scanner', 'edge'), 1)}
+CONTAINERS = {name: f'{index:064x}' for index, name in enumerate(('api', 'worker', 'web', 'db', 'scanner', 'edge'), 1)}
 
 
 @pytest.fixture
@@ -57,14 +58,14 @@ class DockerFixture(Commands):
                            if value.startswith('label=com.docker.compose.service='))
             service = service.rsplit('=', 1)[-1]
             if '--all' not in arguments and not self.running_by_service.get(service, self.running): return ''
-            return '\n'.join('fixture-'+service for _ in range(self.counts.get(service, 1)))
+            return '\n'.join(CONTAINERS[service] for _ in range(self.counts.get(service, 1)))
         if arguments[1:3] == ['image', 'inspect']:
             image = arguments[3]
             return json.dumps([{'Id': image, 'Config': {'Labels': {
                 'org.opencontainers.image.revision': self.revisions.get(image)}, 'Env': ['PG_MAJOR=16']}}])
         if arguments[1] == 'inspect':
-            service = 'scanner' if arguments[2] == 'volt-debt-scanner-1' else arguments[2].removeprefix('fixture-')
-            return json.dumps([{'Id': 'fixture-'+service, 'Image': self.images[service],
+            service = 'scanner' if arguments[2] == 'volt-debt-scanner-1' else next(name for name, value in CONTAINERS.items() if value == arguments[2])
+            return json.dumps([{'Id': CONTAINERS[service], 'Image': self.images[service],
                                'State': {'Running': self.running_by_service.get(service, self.running)}, 'Config': {'Labels': {
                                    'com.docker.compose.project': 'volt-debt',
                                    'com.docker.compose.service': service,
@@ -128,9 +129,13 @@ def test_stopped_writers_can_be_bound_without_starting_them(tmp_path):
     {'revision': 'main'}, {'images': dict(IMAGES, api='latest')},
     {'images': {key: value for key, value in IMAGES.items() if key != 'web'}},
     {'format': 'unknown'},
+    {'containers': {}}, {'containers': dict(CONTAINERS, scanner='volt-debt-scanner-1')},
+    {'containers': dict(CONTAINERS, scanner='g'*64)},
+    {'containers': dict(CONTAINERS, worker=CONTAINERS['api'])},
+    {'containers': dict(CONTAINERS, scanner=[])},
 ])
 def test_recorded_binding_rejects_unpinned_or_incomplete_images(tmp_path, change):
-    value = {'format': 'volt-backup-runtime-v1', 'revision': 'a'*40, 'images': IMAGES}
+    value = {'format': 'volt-backup-runtime-v1', 'revision': 'a'*40, 'images': IMAGES, 'containers': CONTAINERS}
     value.update(change)
     path = tmp_path/'binding.json'; write_json(path, value)
     with pytest.raises(RecoveryError): recorded_binding(path)
@@ -146,3 +151,24 @@ def test_package_uses_deployed_commit_available_in_a_different_clean_head(checko
     result = packager.package(arguments)
     assert result['revision'] == revision
     assert release_bundle(output, revision=revision, images=IMAGES)['revision'] == revision
+
+
+def test_captured_scanner_id_survives_a_replacement_of_its_mutable_name(checkout, tmp_path, monkeypatch):
+    import tarfile
+    root, revision, _ = checkout
+    class ReplacedName(DockerFixture):
+        def run(self, arguments, **kwargs):
+            if arguments[:2] == ['docker', 'cp']:
+                captured = arguments[2].startswith(CONTAINERS['scanner']+':')
+                value = b'captured scanner snapshot' if captured else b'replacement scanner snapshot'
+                for name in ('main.cvd', 'daily.cvd'): (Path(arguments[-1])/name).write_bytes(value)
+                return None
+            return super().run(arguments, **kwargs)
+    monkeypatch.setattr(packager, 'Commands', lambda log: ReplacedName(log, revision))
+    output = tmp_path/'release1'
+    arguments = SimpleNamespace(source=root, revision=revision, output=output,
+                                scanner_container=CONTAINERS['scanner'],
+                                **{name+'_image': image for name, image in IMAGES.items()})
+    packager.package(arguments)
+    with tarfile.open(output/'clamav.tar.gz') as archive:
+        assert archive.extractfile('clamav/main.cvd').read() == b'captured scanner snapshot'

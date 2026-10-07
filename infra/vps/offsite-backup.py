@@ -2,6 +2,8 @@
 """Scheduled coordinated capture, restore check, release package and encrypted S3 export."""
 import argparse
 import fcntl
+import hashlib
+import json
 import os
 from pathlib import Path
 import shutil
@@ -11,6 +13,11 @@ from recovery_support import (Commands, RecoveryError, now, private_directory, p
 from backup_runtime import recorded_binding
 
 HERE = Path(__file__).resolve().parent
+
+
+def bundle_name(revision, images):
+    digest = hashlib.sha256(json.dumps(images, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+    return 'release-'+revision+'-'+digest
 
 
 def configuration(path):
@@ -58,12 +65,13 @@ def run(path, backup_root=Path('/srv/volt-debt-backups')):
             images, revision = binding['images'], binding['revision']
             bundles = Path(settings.get('bundle_root', str(backup_root/'release-bundles')))
             private_directory(bundles, create=True)
-            bundle = bundles/('release-'+str(revision))
+            bundle = bundles/bundle_name(revision, images)
             if bundle.exists():
                 release_bundle(bundle, revision=revision, images=images)
             else:
                 command = ['/usr/bin/python3', str(HERE/'package-release.py'), '--source', settings.get('source', '/srv/volt-debt-platform'),
-                           '--revision', revision, '--output', str(bundle)]
+                           '--revision', revision, '--output', str(bundle),
+                           '--scanner-container', binding['containers']['scanner']]
                 for name, image in images.items(): command += ['--'+name+'-image', image]
                 commands.run(command, timeout=4800)
             status['stage'] = 'encrypt_export'; write_json(status_path, status)

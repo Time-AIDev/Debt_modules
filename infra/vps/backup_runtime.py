@@ -2,20 +2,27 @@
 import argparse
 import json
 from pathlib import Path
+import re
 import tarfile
 
 from recovery_support import Commands, IMAGE, REVISION, RecoveryError, private_directory, read_json, write_json
 
 SERVICES = ('api', 'worker', 'web', 'db', 'scanner', 'edge')
+CONTAINER = re.compile(r'[a-f0-9]{64}')
 
 
 def recorded_binding(path):
     value = read_json(path, maximum=16384)
     images = value.get('images', {}) if isinstance(value, dict) else {}
+    containers = value.get('containers', {}) if isinstance(value, dict) else {}
     if (not isinstance(value, dict) or value.get('format') != 'volt-backup-runtime-v1'
             or not isinstance(value.get('revision'), str) or not REVISION.fullmatch(value['revision'])
             or not isinstance(images, dict) or set(images) != set(SERVICES)-{'worker'}
-            or any(not isinstance(image, str) or not IMAGE.fullmatch(image) for image in images.values())):
+            or any(not isinstance(image, str) or not IMAGE.fullmatch(image) for image in images.values())
+            or not isinstance(containers, dict) or set(containers) != set(SERVICES)
+            or any(not isinstance(identifier, str) or not CONTAINER.fullmatch(identifier)
+                   for identifier in containers.values())
+            or len(set(containers.values())) != len(SERVICES)):
         raise RecoveryError('Backup runtime evidence is invalid')
     return value
 
@@ -41,7 +48,8 @@ def runtime_binding(commands):
         if (service == 'db' and not container.get('State', {}).get('Running')
                 or labels.get('com.docker.compose.project') != 'volt-debt'
                 or labels.get('com.docker.compose.service') != service
-                or not IMAGE.fullmatch(container.get('Image', ''))):
+                or not isinstance(container.get('Id'), str) or not CONTAINER.fullmatch(container['Id'])
+                or not isinstance(container.get('Image'), str) or not IMAGE.fullmatch(container['Image'])):
             raise RecoveryError('Backup runtime container binding is invalid')
         containers[service] = container['Id']
         images[service] = container['Image']
@@ -55,6 +63,7 @@ def runtime_binding(commands):
     revision = revisions['api']
     if (not isinstance(revision, str) or not REVISION.fullmatch(revision)
             or any(value != revision for value in revisions.values())
+            or len(set(containers.values())) != len(SERVICES)
             or images['worker'] != images['api']):
         raise RecoveryError('Backup application images must share one committed release')
     return {'format': 'volt-backup-runtime-v1', 'revision': revision,
