@@ -11,6 +11,16 @@ def isolated_archive(tmp_path, monkeypatch):
     client.cookies.set('volt_session', 'shared')
 def target():
     return next(c for c in cases.for_current().cases.values() if c['customer_no'] == 'C-002032')['customer_uid']
+
+def active_recovery(customer_uid, strategy, recovery_uid):
+    state = journey.for_current()
+    contract = journey.customer_by_uid(customer_uid).contracts[0]
+    rec = journey.make_recovery(state, 'PAYMENT_STATUS:' + customer_uid, contract.uid, strategy, contract.entity)
+    state.recovery_cases.pop(rec['uid'])
+    rec.update(uid=recovery_uid, customer_uid=customer_uid)
+    state.recovery_cases[recovery_uid] = rec
+    return rec
+
 def end(monkeypatch):
     monkeypatch.setattr(cases, 'termination_gate', lambda customer: ([], []))
     uid = target()
@@ -103,16 +113,14 @@ def test_backfill_idempotent_and_missing_evidence():
 @pytest.mark.parametrize('strategy,outcome,cause', [('REPOSSESSION','FULL','DEFAULT'), ('COOP_DECOMMISSION','PARTIAL','CUSTOMER_REQUEST'), ('LEGAL','CLOSED_WRITE_OFF','DEFAULT')])
 def test_recovery_routes_capture_final_state(strategy, outcome, cause):
     uid = target()
-    k = journey.customer_by_uid(uid).contracts[0]
-    state = journey.for_current()
-    state.recovery_cases['rec-archive'] = {'uid': 'rec-archive', 'contract_uid': k.uid, 'customer_uid': uid, 'strategy': strategy, 'status': 'OPEN'}
+    rec = active_recovery(uid, strategy, 'rec-archive')
     response = client.post('/v1/recovery-cases/rec-archive:resolve', json={'outcome': outcome, 'role': 'OWNER', 'reason': 'เหตุผลจริง'})
     assert response.status_code == 200, response.text
     row = client.get('/v1/terminated-customers', params={'q': uid}).json()['entries'][0]
     assert row['causes'] == [cause]
     assert row['reason'] == 'เหตุผลจริง'
     assert client.get('/v1/terminated-customers/' + row['archive_uid']).json()['snapshot']['case']['payment_status'] == 'TERMINATED'
-    assert state.recovery_cases['rec-archive']['status'] == 'RESOLVED'
+    assert rec['status'] == 'RESOLVED'
 
 
 def test_partial_case_shared_facts_only_archive_after_final_contract():
@@ -242,8 +250,8 @@ def test_backfill_prefers_evidenced_reason_across_accounts_without_inventing_fie
 
 
 def test_audit_search_resolves_recovery_reference_after_session_state_disappears():
-    uid = target(); customer = journey.customer_by_uid(uid); k = customer.contracts[0]
-    journey.for_current().recovery_cases['gone-recovery'] = {'uid': 'gone-recovery', 'contract_uid': k.uid, 'customer_uid': uid, 'strategy': 'LEGAL', 'status': 'OPEN'}
+    uid = target(); customer = journey.customer_by_uid(uid)
+    active_recovery(uid, 'LEGAL', 'gone-recovery')
     assert client.post('/v1/recovery-cases/gone-recovery:resolve', json={'outcome': 'CLOSED_WRITE_OFF', 'role': 'OWNER', 'reason': 'proof'}).status_code == 200
     journey.for_current().recovery_cases.clear()
     result = client.get('/v1/audit', params={'q': customer.display_name, 'act': 'RECOVERY_RESOLVED'}).json()['entries']

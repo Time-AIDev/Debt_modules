@@ -418,6 +418,7 @@ export default {
   'record.paySaved': 'Payment status updated',
   'record.claimTitle': 'Report payment received',
   'record.claimNote': 'Save a provisional claim without changing confirmed balances; a PEAK receipt export confirms it.',
+  'record.claimRoleHint': 'OPS can attach evidence. The debt team records and cancels payment claims.',
   'record.claimAmount': 'Amount paid by customer',
   'record.claimPaidOn': 'Payment date',
   'record.claimReference': 'Referenced invoice',

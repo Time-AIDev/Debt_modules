@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { api } from '../lib/api.js'
 import { usePrefs } from '../lib/prefs.jsx'
+import { useIdentity } from '../lib/identity.jsx'
 import { money, when } from '../lib/format.js'
 import { downloadBlob } from '../lib/download.js'
 import { paymentStatus } from '../lib/status.js'
@@ -18,12 +19,14 @@ const claimKey = () => globalThis.crypto?.randomUUID?.()
 
 /**
  * Case-side amount-led payment journey. Any operational role can attach evidence,
- * preview invoice allocation and save a provisional claim. Confirmed balances are
+ * while collection roles can preview and save a provisional claim. Confirmed balances are
  * never edited here; an applied PEAK receipt export resolves the claim later.
  * The lower section retains the existing PEAK identity-link repair tools.
  */
 export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = [], position, onChanged }) {
   const { t } = usePrefs()
+  const identity = useIdentity()
+  const canRecordPayments = ['OFFICER', 'SUPERVISOR', 'MANAGER', 'OWNER'].includes(identity.role)
   const toast = useToast()
   const attachTo = `case:${customerUid}`
   const [files, setFiles] = useState(null)
@@ -151,7 +154,7 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
   }
 
   async function previewClaim() {
-    if (!amount || !paidOn) return
+    if (!canRecordPayments || !amount || !paidOn) return
     setBusy(true)
     setWriteProblem(null)
     try {
@@ -169,7 +172,7 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
   }
 
   async function saveClaim() {
-    if (!allocation || !note.trim()) return
+    if (!canRecordPayments || !allocation || !note.trim()) return
     setBusy(true)
     setWriteProblem(null)
     try {
@@ -195,6 +198,7 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
   }
 
   async function cancelClaim(uid) {
+    if (!canRecordPayments) return
     setBusy(true)
     setWriteProblem(null)
     try {
@@ -353,24 +357,25 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
               </span>
             ) : null}
           </div>
+          {!canRecordPayments ? <p className="case__rowNote">{t('record.claimRoleHint')}</p> : null}
           {governed ? <p className="case__empty">{t('record.claimGoverned')}</p> : (
             <div className="mim__foldBody">
               <div className="mim__pick">
                 <label className="label mim__grow">
                   <span>{t('record.claimAmount')}<span className="req" aria-hidden="true">*</span></span>
                   <input className="field num" type="number" min="0.01" step="0.01" value={amount}
-                         aria-label={t('record.claimAmount')} aria-required="true" disabled={busy}
+                         aria-label={t('record.claimAmount')} aria-required="true" disabled={busy || !canRecordPayments}
                          onChange={(e) => { setAmount(e.target.value); setAllocation(null) }} />
                 </label>
                 <label className="label mim__grow">
                   <span>{t('record.claimPaidOn')}<span className="req" aria-hidden="true">*</span></span>
                   <input className="field num" type="date" value={paidOn}
-                         aria-label={t('record.claimPaidOn')} aria-required="true" disabled={busy}
+                         aria-label={t('record.claimPaidOn')} aria-required="true" disabled={busy || !canRecordPayments}
                          onChange={(e) => { setPaidOn(e.target.value); setAllocation(null) }} />
                 </label>
                 <label className="label mim__grow">
                   {t('record.claimReference')}
-                  <select className="field" value={reference} disabled={busy}
+                  <select className="field" value={reference} disabled={busy || !canRecordPayments}
                           aria-label={t('record.claimReference')}
                           onChange={(e) => { setReference(e.target.value); setAllocation(null) }}>
                     <option value="">{t('record.claimFifo')}</option>
@@ -385,12 +390,12 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
               <label className="label">
                 <span>{t('record.claimNoteLabel')}<span className="req" aria-hidden="true">*</span></span>
                 <textarea className="field" rows={2} value={note} aria-label={t('record.claimNoteLabel')}
-                          required aria-required="true" disabled={busy} onChange={(e) => setNote(e.target.value)} />
+                          required aria-required="true" disabled={busy || !canRecordPayments} onChange={(e) => setNote(e.target.value)} />
               </label>
               <div className="mim__actions">
-                <button type="button" className="btn" disabled={busy || !amount || !paidOn}
+                <button type="button" className="btn" disabled={busy || !canRecordPayments || !amount || !paidOn}
                         onClick={previewClaim}>{busy ? t('common.loading') : t('record.claimPreview')}</button>
-                <button type="button" className="btn btn--primary" disabled={busy || !allocation || !note.trim()}
+                <button type="button" className="btn btn--primary" disabled={busy || !canRecordPayments || !allocation || !note.trim()}
                         onClick={saveClaim}>{t('record.claimSave')}</button>
               </div>
               <div aria-live="polite">
@@ -426,7 +431,7 @@ export function ManualInvoiceMatch({ customerUid, kase, invoices = [], claims = 
                   </StatusPill>
                   <span className="mim__grow num">{money(claim.amount)} · {claim.paid_on}</span>
                   {claim.state === 'PENDING' ? (
-                    <button type="button" className="btn btn--quiet btn--sm" disabled={busy}
+                    <button type="button" className="btn btn--quiet btn--sm" disabled={busy || !canRecordPayments}
                             onClick={() => cancelClaim(claim.uid)}>{t('common.cancel')}</button>
                   ) : null}
                 </li>

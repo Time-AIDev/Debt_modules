@@ -419,6 +419,7 @@ export default {
   'record.paySaved': 'ปรับสถานะการชำระแล้ว',
   'record.claimTitle': 'แจ้งรับชำระ',
   'record.claimNote': 'บันทึกเป็นรอยืนยันก่อน โดยยังไม่เปลี่ยนยอดจริง ระบบจะยืนยันจากไฟล์ใบเสร็จ PEAK',
+  'record.claimRoleHint': 'OPS แนบหลักฐานได้ ส่วนการแจ้งรับชำระและยกเลิกรายการให้ทีมติดตามหนี้ดำเนินการ',
   'record.claimAmount': 'ยอดที่ลูกค้าชำระ',
   'record.claimPaidOn': 'วันที่รับเงิน',
   'record.claimReference': 'ใบแจ้งหนี้อ้างอิง',

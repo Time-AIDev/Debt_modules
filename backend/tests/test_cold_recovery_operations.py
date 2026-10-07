@@ -146,6 +146,7 @@ def test_checksum_manifest_rejects_unlisted_traversal(tmp_path):
 
 def test_private_directory_never_chmods_an_existing_shared_parent(tmp_path):
     shared = tmp_path/'shared'; shared.mkdir(mode=0o755)
+    shared.chmod(0o755)  # Keep the intended shared fixture independent of the caller's umask.
     with pytest.raises(RecoveryError): private_directory(shared, create=True)
     assert shared.stat().st_mode & 0o777 == 0o755
 
