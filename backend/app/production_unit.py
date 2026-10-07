@@ -466,6 +466,7 @@ class ProductionUnitMiddleware:
                         (session.TOUCHED.get() or set()).discard(store)
                 unit.pop("record_baselines", None)
                 unit.pop("owner_baselines", None)
+                unit.pop("sequence_baselines", None)
             projection_read = capacity and os.environ.get("VOLT_INDEXED_READS_ENABLED", "true") == "true" and not mutation_request and scope["path"] in (
                 "/v1/workbook", "/v1/today", "/v1/reports/monthly")
             if auth_session and not projection_read and not control_request and not scope["path"].startswith(("/v1/auth/", "/v1/operation-runs/")):

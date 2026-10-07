@@ -213,6 +213,26 @@ def passing_metrics(rules):
                    "thresholds": {rule: {"ok": True}}} for name, rule in rules.items()}
 
 
+def test_approved_latency_policy_does_not_reinterpret_older_native_failures(tmp_path):
+    evidence = fixture(tmp_path)
+    prefix = evidence / 'diagnostic/results/k6-aaaaaaa-historical-25vu'
+    metrics = passing_metrics(report.APPROVED_THRESHOLDS)
+    for name in ('business_read_ms', 'business_write_ms'):
+        metrics[name]['values']['p(95)'] = 2500
+    write(Path(str(prefix) + '-summary.json'), {'metrics': metrics})
+    write(Path(str(prefix) + '-meta.json'), {'revision': REV, 'api_image': 'sha256:' + 'd' * 64,
+          'latency_policy': report.APPROVED_LATENCY_POLICY, 'latency_limit_ms': 3000,
+          'process_return_code': 0, 'exit_code': 0, 'generator_co_located': True})
+    runs = report.build_aggregate(evidence, REV)['k6']
+    current = next(row for row in runs if row['revision'] == REV)
+    prior = next(row for row in runs if row['revision'] == OLD)
+    assert current['approved_thresholds_passed'] is True and current['original_thresholds_passed'] is None
+    assert current['diagnostic_run_passed'] is True
+    assert prior['native_exit_code'] == 99 and prior['original_thresholds_passed'] is False
+    assert prior['latency_policy'] == 'legacy-2s' and prior['approved_thresholds_passed'] is None
+    assert current['capacity_acceptance_certified'] is False
+
+
 def test_import_failure_and_complete_action_failure_are_not_hidden_by_original_gates(tmp_path):
     evidence = fixture(tmp_path)
     metrics = {**passing_metrics(report.THRESHOLDS), **passing_metrics(report.SUPPLEMENTAL["debt-workflow"])}

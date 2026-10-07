@@ -25,6 +25,10 @@ THRESHOLDS = {"business_read_ms": "p(95)<2000", "business_write_ms": "p(95)<2000
 SUPPLEMENTAL = {"paged": {"capacity_page_ms": "p(95)<2000", "capacity_page_errors": "rate<0.01"},
                 "debt-workflow": {"complete_action_ms": "p(95)<2000", "debt_mutations_committed": "count>0",
                                   "role_denial_errors": "rate==0"}}
+APPROVED_LATENCY_POLICY = "user-approved-3s-20261007"
+APPROVED_THRESHOLDS = {**THRESHOLDS, "business_read_ms": "p(95)<3000", "business_write_ms": "p(95)<3000"}
+APPROVED_SUPPLEMENTAL = {profile: {key: "p(95)<3000" if key.endswith("_ms") else rule
+                                 for key, rule in rules.items()} for profile, rules in SUPPLEMENTAL.items()}
 INPUTS = ("S3 configuration", "age recipient/key custodian", "recovery host", "independent load generator",
           "HTTP JSON webhook configuration", "Git write credentials")
 ROLES = {"OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"}
@@ -235,8 +239,9 @@ def k6_runs(directory, runtime, revision):
                 result[name] = {"value": observed, "threshold": rule,
                                "native_threshold_passed": native_gate if isinstance(native_gate, bool) else None}
             return result
-        metrics = measured(THRESHOLDS)
-        supplemental = measured(SUPPLEMENTAL.get(match[2], {}))
+        approved = meta.get("latency_policy") == APPROVED_LATENCY_POLICY and meta.get("latency_limit_ms") == 3000
+        metrics = measured(APPROVED_THRESHOLDS if approved else THRESHOLDS)
+        supplemental = measured((APPROVED_SUPPLEMENTAL if approved else SUPPLEMENTAL).get(match[2], {}))
         passed = all(value["native_threshold_passed"] is True and value["value"] is not None for value in metrics.values())
         supplemental_passed = all(value["native_threshold_passed"] is True and value["value"] is not None
                                   for value in supplemental.values()) if supplemental else None
@@ -261,7 +266,11 @@ def k6_runs(directory, runtime, revision):
             "revision": full, "api_image": measured_image if bound else None,
             "binding": "MATCHING_REPORT_REVISION" if bound and full == revision else "OLDER_REVISION" if bound else "UNBOUND",
             "classification": "COLOCATED_PROVISIONAL" if meta.get("generator_co_located") is True else "GENERATOR_LOCATION_UNVERIFIED",
-            "native_exit_code": number(meta.get("process_return_code"), integer=True), "original_thresholds_passed": passed,
+            "native_exit_code": number(meta.get("process_return_code"), integer=True),
+            "latency_policy": APPROVED_LATENCY_POLICY if approved else "legacy-2s",
+            "latency_limit_ms": 3000 if approved else 2000,
+            "original_thresholds_passed": passed if not approved else None,
+            "approved_thresholds_passed": passed if approved else None,
             "orchestration_exit_code": number(meta.get("exit_code"), integer=True),
             "capacity_acceptance_certified": False, "metrics": metrics, "supplemental_metrics": supplemental,
             "supplemental_thresholds_passed": supplemental_passed, "concurrent_preview": safe_preview,
@@ -272,6 +281,7 @@ def k6_runs(directory, runtime, revision):
             "dataset": {key: number(dataset.get(key), integer=True) for key in ("customers", "contracts", "instalments_per_contract")},
             "actor_roles": roles, "workload_sha256": identifier(meta.get("workload_sha256"), SHA),
             "historical_workload_sha256": identifier(meta.get("historical_workload_sha256"), SHA),
+            "baseline_workload_sha256": identifier(meta.get("baseline_workload_sha256"), SHA),
             "summary_sha256": hashlib.sha256(summary.read_bytes()).hexdigest(),
             "meta_sha256": hashlib.sha256(meta_path.read_bytes()).hexdigest() if meta_path.exists() else None})
     return runs
@@ -293,6 +303,8 @@ def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test
         "manifest_revision": identifier(progress.get("committed_revision") or progress.get("integration_head"), REVISION),
         "scope": "Implementation evidence snapshot; completion/deployment not certified",
         "completion_certified": False, "deployment_certified": False, "capacity_acceptance_certified": False,
+        "current_latency_policy": {"name": APPROVED_LATENCY_POLICY, "read_write_p95_ms": 3000,
+                                   "changed_by_user_on": "2026-10-07", "older_native_failures_reinterpreted": False},
         "google_login_status": google, "go_live_enabled_reported": progress.get("go_live_enabled") is True,
         "offsite_restore_verified_reported": progress.get("offsite_restore_verified") is True,
         "pending_external_inputs": pending,
@@ -334,19 +346,21 @@ def render_docx(data, output):
     doc.add_paragraph("เอกสารนี้รายงานหลักฐานการพัฒนาและทดสอบ ไม่รับรองว่างานทั้งหมดเสร็จ เปิด go-live หรือ deploy production แล้ว")
     doc.add_paragraph("Google login: " + data["google_login_status"] + ". คำยืนยันจากผู้ใช้แยกจากการตรวจ browser บน revision สุดท้าย")
     doc.add_paragraph("ผล load บน VPS เดียวกับตัวสร้างโหลดเป็น COLOCATED_PROVISIONAL จึงใช้วิเคราะห์คอขวด และยังไม่ใช่หลักฐานยอมรับ capacity จากเครื่องอิสระ")
-    doc.add_heading("k6 — เกณฑ์เดิมและผลจริง", 1)
-    doc.add_paragraph("อ่าน/เขียน p95 <2,000 ms; business errors <1%; checks >99%; idempotency replay errors =0. ไม่มีการผ่อนเกณฑ์")
+    doc.add_heading("k6 — เกณฑ์ที่อนุมัติและผลจริง", 1)
+    doc.add_paragraph("เกณฑ์ที่ผู้ใช้ปรับเมื่อ 7 ตุลาคม 2026: อ่าน/เขียนและคำสั่งครบกระบวนการ p95 <3,000 ms; business errors <1%; checks >99%; idempotency replay errors =0. ผลเดิมที่ใช้เกณฑ์ 2 วินาทีคงผล native เดิม ไม่เปลี่ยนย้อนหลังเป็นผ่าน")
     rows = []
     for run in data["k6"]:
         m = run["metrics"]
         def fmt(name, rate=False):
             value = m[name]["value"]
             return None if value is None else ("%.3f%%" % (value * 100) if rate else "%.2f" % value)
-        label = run["profile"] + (" / " + run["scenario"] if run["scenario"] else "")
+        label = run["profile"] + (" / " + run["scenario"] if run["scenario"] else "") + " (%sms)" % run["latency_limit_ms"]
+        native_passed = (run["approved_thresholds_passed"] if run["latency_policy"] == APPROVED_LATENCY_POLICY
+                         else run["original_thresholds_passed"])
         rows.append((label, run["vus"], fmt("business_read_ms"), fmt("business_write_ms"),
                      fmt("business_errors", True), fmt("checks", True), fmt("idempotency_replay_errors", True),
-                     "PASS" if run["original_thresholds_passed"] else "FAIL / incomplete", run["binding"]))
-    table(doc, ("Profile", "VUs", "Read p95 ms", "Write p95 ms", "Error rate", "Checks rate", "Replay rate", "Original gates", "Revision binding"), rows)
+                     "PASS" if native_passed else "FAIL / incomplete", run["binding"]))
+    table(doc, ("Profile / policy", "VUs", "Read p95 ms", "Write p95 ms", "Error rate", "Checks rate", "Replay rate", "Native gates", "Revision binding"), rows)
     for run in data["k6"]:
         doc.add_paragraph("%s / %s VUs: revision %s · API %s · %s · exit %s" %
                           (run["profile"], run["vus"], run["revision"], run["api_image"], run["classification"], run["native_exit_code"]))

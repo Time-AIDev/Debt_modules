@@ -12,10 +12,13 @@ locals {
     DOCS_BUCKET            = google_storage_bucket.private["documents"].name,
     SCANNER_URL            = local.scanner_url,
     DB_POOL_SIZE           = "5", DB_MAX_OVERFLOW = "2", SLOW_SQL_MS = "100", SLOW_REQUEST_MS = "1200",
+    # Cloud Run's single-CPU API profile uses one process; the two-CPU VPS uses
+    # the shared measured two-worker default. Both run the same entrypoint.
+    API_WORKERS            = "1",
     PROD_GO_LIVE_ENABLED   = tostring(var.go_live), PROD_CANDIDATE_TEST_SUBJECTS = join(",", var.candidate_test_subjects)
   }
   services = {
-    api     = { image = var.api_image, min = 1, max = 3, concurrency = 4, cpu = "1", memory = "2Gi", command = ["uvicorn"], args = ["app.main:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"], private = false }
+    api     = { image = var.api_image, min = 1, max = 3, concurrency = 4, cpu = "1", memory = "2Gi", command = ["python"], args = ["-m", "app.serve_api"], private = false }
     web     = { image = var.web_image, min = 0, max = 2, concurrency = 80, cpu = "1", memory = "256Mi", command = [], args = [], private = false }
     worker  = { image = var.api_image, min = 0, max = 1, concurrency = 1, cpu = "1", memory = "2Gi", command = ["uvicorn"], args = ["app.worker:app", "--host", "0.0.0.0", "--port", "8080"], private = true }
     scanner = { image = var.scanner_image, min = 0, max = 1, concurrency = 1, cpu = "1", memory = "3Gi", command = [], args = [], private = true }

@@ -21,6 +21,7 @@ DEFAULTS = {
     "XLSX_MAX_KEPT_TEXT_BYTES": "67108864", "XLSX_MAX_SHARED_STRINGS": "250000",
     "XLSX_MAX_SHARED_STRING_BYTES": "16777216", "PEAK_OUTBOUND_ENABLED": "false",
     "DB_POOL_SIZE": "5", "DB_MAX_OVERFLOW": "2",
+    "API_WORKERS": "2",
     "REQUIRE_DEPENDENCY_READINESS": "true",
     "PROD_READ_CONCURRENCY": "4", "PROD_STORE_CACHE_ENABLED": "true",
     "PROD_STORE_CACHE_BYTES": "8388608", "PROD_STORE_CACHE_ENTRIES": "16",
@@ -30,6 +31,19 @@ DEFAULTS = {
 def shared_state_enabled(environ=None):
     environ = os.environ if environ is None else environ
     return environ.get("ENV") == "prd" or environ.get("VOLT_SHARED_STATE_ENABLED") == "true"
+
+
+def api_command(environ=None):
+    """Use the same measured API launch policy in every container profile."""
+    environ = os.environ if environ is None else environ
+    try:
+        workers = int(environ.get("API_WORKERS", DEFAULTS["API_WORKERS"]))
+        port = int(environ.get("PORT", "8080"))
+    except (TypeError, ValueError):
+        raise ValueError("API_WORKERS and PORT must be integers") from None
+    if not 1 <= workers <= 4 or not 1 <= port <= 65535:
+        raise ValueError("API_WORKERS or PORT is outside its permitted range")
+    return ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port), "--workers", str(workers)]
 
 
 def environment_defaults(environment, state="shared"):

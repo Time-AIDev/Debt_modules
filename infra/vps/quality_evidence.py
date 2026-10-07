@@ -12,12 +12,15 @@ import re
 
 REQUIRED = ("lint", "regression", "capacity", "financial", "usability",
             "offsite_recovery", "alerts", "rollback")
-LIMITS = {"business_read_ms": ("p(95)", 2000, "p(95)<2000"),
-          "business_write_ms": ("p(95)", 2000, "p(95)<2000"),
+LATENCY_POLICY = "user-approved-3s-20261007"
+LATENCY_LIMIT_MS = 3000
+LIMITS = {"business_read_ms": ("p(95)", LATENCY_LIMIT_MS, "p(95)<3000"),
+          "business_write_ms": ("p(95)", LATENCY_LIMIT_MS, "p(95)<3000"),
           "business_errors": ("rate", .01, "rate<0.01"),
           "checks": ("rate", .99, "rate>0.99"),
             "idempotency_replay_errors": ("rate", 0, "rate==0")}
 HISTORICAL_WORKLOAD_SHA256 = "480b0646dd3ec6405c4d0afa7b2e94371e62a9c47f711978cfed5f3ee8ab7ec5"
+APPROVED_WORKLOAD_SHA256 = "add942ed8720539def2a0b1edd4aa2bc15ac1a1382e73755f1799a715c07d27f"
 # Required IDs from tests/dataflow/coverage-map.json. This validator also runs
 # from the installed operations directory, where the test inventory is absent.
 REGRESSION_FLOWS = frozenset((
@@ -101,6 +104,8 @@ def regression(data):
 
 
 def native_capacity(run, minimum_duration, minimum_vus):
+    require(run.get("latency_policy") == LATENCY_POLICY and run.get("latency_limit_ms") == LATENCY_LIMIT_MS,
+            "Capacity evidence must declare the user-approved three-second policy")
     require(zero(run.get("exit_code")), "k6 exited without passing its thresholds")
     require(number(run.get("duration_seconds")) >= minimum_duration
             and number(run.get("vus")) >= minimum_vus, "k6 duration or VUs do not meet policy")
@@ -146,8 +151,9 @@ def capacity(data):
         require(len(runs) == 1, "Historical k6 matrix requires exactly one final run per VU level")
         run = runs[0]
         require(run.get("customers") == 500 and run.get("instalments_per_contract") == 96
-                and run.get("unchanged_workload") is True and run.get("legacy_unpaged_today") is True
-                and run.get("workload_sha256") == HISTORICAL_WORKLOAD_SHA256,
+                and run.get("historical_payload_unchanged") is True and run.get("legacy_unpaged_today") is True
+                and run.get("baseline_workload_sha256") == HISTORICAL_WORKLOAD_SHA256
+                and run.get("workload_sha256") == APPROVED_WORKLOAD_SHA256,
                 "Historical k6 workload or payload was changed")
         native_capacity(run, 120, vus)
     supplemental = data.get("supplemental", [])
@@ -158,17 +164,17 @@ def capacity(data):
         native_capacity(runs[0], 900 if name == "soak" else 120, 25)
         metrics = runs[0].get("summary", {}).get("metrics", {})
         if name == "paged_ui":
-            require(0 < number(metrics.get("capacity_page_ms", {}).get("values", {}).get("p(95)")) < 2000
-                    and metrics.get("capacity_page_ms", {}).get("thresholds", {}).get("p(95)<2000", {}).get("ok") is True
+            require(0 < number(metrics.get("capacity_page_ms", {}).get("values", {}).get("p(95)")) < LATENCY_LIMIT_MS
+                    and metrics.get("capacity_page_ms", {}).get("thresholds", {}).get("p(95)<3000", {}).get("ok") is True
                     and 0 <= number(metrics.get("capacity_page_errors", {}).get("values", {}).get("rate")) < .01
                     and metrics.get("capacity_page_errors", {}).get("thresholds", {}).get("rate<0.01", {}).get("ok") is True,
                     "Paged UI native gates did not pass")
         else:
-            require(0 < number(metrics.get("complete_action_ms", {}).get("values", {}).get("p(95)")) < 2000
-                    and metrics.get("complete_action_ms", {}).get("thresholds", {}).get("p(95)<2000", {}).get("ok") is True
+            require(0 < number(metrics.get("complete_action_ms", {}).get("values", {}).get("p(95)")) < LATENCY_LIMIT_MS
+                    and metrics.get("complete_action_ms", {}).get("thresholds", {}).get("p(95)<3000", {}).get("ok") is True
                     and number(metrics.get("debt_mutations_committed", {}).get("values", {}).get("count")) > 0
                     and metrics.get("debt_mutations_committed", {}).get("thresholds", {}).get("count>0", {}).get("ok") is True,
-                    "Complete debt commands must be exercised and meet the original latency target")
+                    "Complete debt commands must be exercised and meet the approved latency target")
         if name == "mixed_roles":
             require(set(runs[0].get("roles", [])) >= {"OWNER", "MANAGER", "SUPERVISOR", "OFFICER", "OPS"},
                     "Mixed-role capacity was not tested")
@@ -267,7 +273,7 @@ def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
             validate_check(kind, data, now, production_fingerprint)
             outcomes[kind] = {"passed": True, "artifact_sha256": reference["sha256"]}
         return {"passed": True, "revision": revision, "checks": outcomes,
-                "policy": {"read_write_p95_ms": 2000, "business_errors_max": .01,
+                "policy": {"latency_policy": LATENCY_POLICY, "read_write_p95_ms": LATENCY_LIMIT_MS, "business_errors_max": .01,
                            "checks_min": .99, "max_vus": 25, "soak_seconds": 900,
                            "rpo_hours": 24, "rto_hours": 4}}
     except QualityError:

@@ -34,6 +34,18 @@ are required; Google Login still requires a real production OAuth client.
 ClamAV needs at least 3 GiB RAM by its official recommendation; this server has
 4 GiB total. The full stack must be sized and load-tested before release. Container
 limits are ceilings, not evidence that the host can satisfy concurrent peak demand.
+
+The two-CPU VPS API uses the shared `API_WORKERS=2` launcher, with
+`PROD_READ_CONCURRENCY=4` and pool size 5 + overflow 2 **per process** (up to 14 API
+connections in total). The API's 1 GiB memory limit covers both workers. Dev and
+staging containers use the same launcher/defaults. The separate single-CPU Cloud
+Run profile explicitly sets one worker; its capacity needs its own measurements.
+
+On 2026-10-07 the user changed business read/write and complete-action latency
+acceptance to p95 <3,000 ms. Error <1%, checks >99% and replay errors =0 remain.
+The original two-second `production.js` is retained; `production-3s.js` imports
+its identical requests/payloads with the declared new threshold. Earlier failed
+native runs remain failed under their original policy.
 See https://docs.clamav.net/manual/Installing/Docker.html.
 
 Publish only after DNS, HTTPS, authentication, complete workflows and backup restore

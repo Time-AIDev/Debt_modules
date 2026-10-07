@@ -34,4 +34,4 @@ USER app
 # (Cloud Run has no readiness concept).
 ENV PORT=8080
 EXPOSE 8080
-CMD exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT} --workers 1
+CMD ["python", "-m", "app.serve_api"]

@@ -3,6 +3,26 @@ from sqlalchemy import text
 from app import approval_paths, production_runtime, runtime_policy, session
 
 
+def test_api_launch_uses_shared_workers_and_preserves_process_signals(monkeypatch):
+    from app import serve_api
+    commands = []
+    monkeypatch.setattr(serve_api.os, 'execvp', lambda executable, arguments: commands.append((executable, arguments)))
+    monkeypatch.delenv('API_WORKERS', raising=False)
+    monkeypatch.setenv('PORT', '8080')
+    serve_api.main()
+    assert commands == [('uvicorn', runtime_policy.api_command({'PORT': '8080'}))]
+    for environment in ('dev', 'staging', 'production'):
+        assert runtime_policy.api_command(runtime_policy.environment_defaults(environment))[-2:] == ['--workers', '2']
+    assert runtime_policy.api_command({'API_WORKERS': '1', 'PORT': '8000'})[-4:] == ['--port', '8000', '--workers', '1']
+
+
+@pytest.mark.parametrize('values', [{'API_WORKERS': '0'}, {'API_WORKERS': '5'}, {'API_WORKERS': 'bad'},
+                                    {'PORT': '0'}, {'PORT': '65536'}, {'PORT': 'bad'}])
+def test_api_launch_refuses_invalid_process_settings(values):
+    with pytest.raises(ValueError):
+        runtime_policy.api_command(values)
+
+
 def test_release_environments_share_limits_and_durable_paths():
     policies=[runtime_policy.environment_defaults(env) for env in ('dev','staging','production')]
     for key in runtime_policy.DEFAULTS:

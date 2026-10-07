@@ -28,15 +28,18 @@ def run(vus=25, duration=120, **extra):
     metrics["http_reqs"] = {"values": {"count": 100}}
     metrics["vus_max"] = {"values": {"max": vus}}
     for name, stat, value, expression in (
-        ("capacity_page_ms", "p(95)", 100, "p(95)<2000"),
+        ("capacity_page_ms", "p(95)", 100, "p(95)<3000"),
         ("capacity_page_errors", "rate", 0, "rate<0.01"),
-        ("complete_action_ms", "p(95)", 100, "p(95)<2000"),
+        ("complete_action_ms", "p(95)", 100, "p(95)<3000"),
         ("debt_mutations_committed", "count", 100, "count>0"),
     ):
         metrics[name] = {"values": {stat: value}, "thresholds": {expression: {"ok": True}}}
     return {"vus": vus, "duration_seconds": duration, "exit_code": 0,
             "customers": 500, "instalments_per_contract": 96, "unchanged_workload": True,
-            "workload_sha256": quality.HISTORICAL_WORKLOAD_SHA256,
+            "historical_payload_unchanged": True,
+            "workload_sha256": quality.APPROVED_WORKLOAD_SHA256,
+            "baseline_workload_sha256": quality.HISTORICAL_WORKLOAD_SHA256,
+            "latency_policy": quality.LATENCY_POLICY, "latency_limit_ms": quality.LATENCY_LIMIT_MS,
             "legacy_unpaged_today": True, "oom_observed": False, "restart_delta": 0,
             "queue_growth": False,
             "concurrent_preview": {"profile": "debt_status", "started": True, "passed": True,
@@ -162,7 +165,11 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["capacity"]["historical"].pop(),
     lambda d: d["capacity"]["historical"][2].update(legacy_unpaged_today=False),
     lambda d: d["capacity"]["historical"][2].update(workload_sha256="f" * 64),
-    lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_read_ms"]["values"].update({"p(95)": 2000}),
+    lambda d: d["capacity"]["historical"][2].update(historical_payload_unchanged=False),
+    lambda d: d["capacity"]["historical"][2].update(baseline_workload_sha256="f" * 64),
+    lambda d: d["capacity"]["historical"][2].update(latency_policy="legacy-2s"),
+    lambda d: d["capacity"]["historical"][2].update(latency_limit_ms=5000),
+    lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_read_ms"]["values"].update({"p(95)": 3000}),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_errors"]["values"].update(rate=.01),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["checks"]["values"].update(rate=.99),
     lambda d: d["capacity"]["historical"][2]["summary"]["metrics"]["business_read_ms"].update(thresholds={"p(95)<5000": {"ok": True}}),
@@ -174,7 +181,7 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["capacity"]["supplemental"][-1].update(duration_seconds=899),
     lambda d: d["capacity"]["supplemental"][-1].update(oom_observed=True),
     lambda d: d["capacity"]["supplemental"][0]["summary"]["metrics"].pop("capacity_page_ms"),
-    lambda d: d["capacity"]["supplemental"][1]["summary"]["metrics"]["complete_action_ms"]["values"].update({"p(95)": 2000}),
+    lambda d: d["capacity"]["supplemental"][1]["summary"]["metrics"]["complete_action_ms"]["values"].update({"p(95)": 3000}),
     lambda d: d["capacity"]["supplemental"][1]["summary"]["metrics"]["debt_mutations_committed"]["values"].update(count=0),
     lambda d: d["capacity"]["supplemental"][1].update(roles=["OWNER", "OFFICER"]),
     lambda d: d["capacity"]["supplemental"][2]["concurrent_preview"].update(passed=False),
@@ -244,6 +251,21 @@ def test_changed_checksum_and_stale_manifest_are_rejected(tmp_path):
     path.write_text(json.dumps(original))
     with pytest.raises(quality.QualityError, match="stale"):
         validate(path)
+
+
+def test_approved_three_second_policy_accepts_2500ms_and_remains_strict(tmp_path):
+    data = artifacts()
+    measured = data['capacity']['historical'][2]
+    for name in ('business_read_ms', 'business_write_ms'):
+        measured['summary']['metrics'][name]['values']['p(95)'] = 2500
+    assert validate(bundle(tmp_path, data))['passed'] is True
+    measured['summary']['metrics']['business_write_ms']['values']['p(95)'] = 3000
+    with pytest.raises(quality.QualityError):
+        validate(bundle(tmp_path, data))
+    measured['summary']['metrics']['business_write_ms']['values']['p(95)'] = 2500
+    measured['summary']['metrics']['business_read_ms']['thresholds'] = {'p(95)<2000': {'ok': False}}
+    with pytest.raises(quality.QualityError):
+        validate(bundle(tmp_path, data))
 
 
 def test_missing_quality_stops_before_any_production_mutation(monkeypatch):
