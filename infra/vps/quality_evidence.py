@@ -18,6 +18,13 @@ LIMITS = {"business_read_ms": ("p(95)", 2000, "p(95)<2000"),
           "checks": ("rate", .99, "rate>0.99"),
             "idempotency_replay_errors": ("rate", 0, "rate==0")}
 HISTORICAL_WORKLOAD_SHA256 = "480b0646dd3ec6405c4d0afa7b2e94371e62a9c47f711978cfed5f3ee8ab7ec5"
+# Required IDs from tests/dataflow/coverage-map.json. This validator also runs
+# from the installed operations directory, where the test inventory is absent.
+REGRESSION_FLOWS = frozenset((
+    "intake-odoo", "intake-sheet", "intake-invoices", "intake-receipts", "money", "orders",
+    "assignment", "collection", "recovery", "calendar-notices", "files", "queue-worker",
+    "scheduler", "persistence", "publication", "report-export", "audit", "auth-transport", "operations",
+))
 
 
 class QualityError(ValueError):
@@ -51,6 +58,46 @@ def zero(value):
 
 def local_machine_fingerprint():
     return hashlib.sha256(Path("/etc/machine-id").read_bytes().strip()).hexdigest()
+
+
+def regression(data):
+    """A final regression covers both full suites on unchanged committed source."""
+    require(data.get("scope") == "full_backend_frontend"
+            and data.get("backend_selection") == ["tests"]
+            and data.get("frontend_selection") == "all"
+            and data.get("actual_pg_executed") is True,
+            "Final regression requires the full backend with PostgreSQL and full frontend")
+    revision = data.get("revision")
+    require(isinstance(revision, str) and re.fullmatch(r"[a-f0-9]{40}", revision),
+            "Final regression requires a full committed revision")
+    before, after = data.get("source_before"), data.get("source_after")
+    require(isinstance(before, dict) and isinstance(after, dict) and before == after
+            and data.get("source_unchanged") is True,
+            "Regression source manifests changed or are missing")
+    for manifest in (before, after):
+        digest = manifest.get("tracked_sha256")
+        require(manifest.get("revision") == revision and isinstance(digest, str)
+                and re.fullmatch(r"[a-f0-9]{64}", digest)
+                and manifest.get("tracked_clean") is True and zero(manifest.get("untracked_code_files")),
+                "Regression source is uncommitted or differs from the release revision")
+    for area in ("backend", "frontend"):
+        result = data.get(area, {})
+        require(type(result.get("passed")) is int and result["passed"] > 0 and zero(result.get("failed"))
+                and zero(result.get("errors")) and zero(result.get("skipped")),
+                "Required regression tests failed or were skipped: " + area)
+    flows = data.get("flows")
+    require(isinstance(flows, list) and all(isinstance(flow, dict) for flow in flows),
+            "Required regression flow execution is missing")
+    required = [flow for flow in flows if flow.get("id") in REGRESSION_FLOWS]
+    require(len(required) == len(REGRESSION_FLOWS) and {flow.get("id") for flow in required} == REGRESSION_FLOWS,
+            "Every required regression flow must have execution evidence")
+    for flow in required:
+        require(type(flow.get("observed_tests")) is int and flow["observed_tests"] > 0
+                and type(flow.get("passed")) is int and flow["passed"] > 0
+                and zero(flow.get("failed")) and zero(flow.get("skipped")),
+                "A required regression flow was not exercised successfully")
+    require(zero(data.get("frontend_build_exit")) and data.get("runtime_parity") is True,
+            "Build or runtime parity failed")
 
 
 def native_capacity(run, minimum_duration, minimum_vus):
@@ -140,12 +187,7 @@ def validate_check(kind, data, now, production_fingerprint):
         require(zero(data.get("errors")) and set(data.get("areas", [])) >= {"backend", "frontend"},
                 "Backend/frontend lint must pass")
     elif kind == "regression":
-        for area in ("backend", "frontend"):
-            result = data.get(area, {})
-            require(number(result.get("passed")) > 0 and zero(result.get("failed"))
-                    and zero(result.get("errors")), "Final regression tests failed: " + area)
-        require(zero(data.get("frontend_build_exit")) and data.get("runtime_parity") is True,
-                "Build or runtime parity failed")
+        regression(data)
     elif kind == "capacity":
         capacity(data)
     elif kind == "financial":
@@ -163,7 +205,7 @@ def validate_check(kind, data, now, production_fingerprint):
                 and zero(data.get("critical")) and zero(data.get("high"))
                 and zero(data.get("open_defects")) and zero(data.get("failed")) and zero(data.get("skipped"))
                 and zero(data.get("unexercised")) and number(data.get("feature_count")) >= 19
-                and number(data.get("checkpoints_total")) >= number(data.get("feature_count"))
+                and number(data.get("checkpoints_total")) >= max(33, number(data.get("feature_count")))
                 and data.get("checkpoints_passed") == data.get("checkpoints_total")
                 and set(data.get("roles_observed", [])) >= {"OFFICER", "MANAGER", "OPS"},
                 "Debt-team usability estimate has not reached the agreed checkpoints")

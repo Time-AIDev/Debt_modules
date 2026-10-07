@@ -47,10 +47,17 @@ def run(vus=25, duration=120, **extra):
 def artifacts():
     common = {"status": "passed", "revision": REVISION, "images": IMAGES,
               "verified_at_utc": NOW.isoformat()}
+    source = {"revision": REVISION, "tracked_sha256": "c" * 64, "tracked_files": 904,
+              "tracked_clean": True, "untracked_code_files": 0}
     payloads = {
         "lint": {"errors": 0, "areas": ["backend", "frontend"]},
-        "regression": {"backend": {"passed": 10, "failed": 0, "errors": 0, "skipped": 2},
-                       "frontend": {"passed": 10, "failed": 0, "errors": 0},
+        "regression": {"scope": "full_backend_frontend", "backend_selection": ["tests"],
+                       "frontend_selection": "all", "actual_pg_executed": True,
+                       "source_before": source, "source_after": deepcopy(source), "source_unchanged": True,
+                       "backend": {"passed": 10, "failed": 0, "errors": 0, "skipped": 0},
+                       "frontend": {"passed": 10, "failed": 0, "errors": 0, "skipped": 0},
+                       "flows": [{"id": name, "observed_tests": 1, "passed": 1, "failed": 0, "skipped": 0}
+                                 for name in sorted(quality.REGRESSION_FLOWS)],
                        "frontend_build_exit": 0, "runtime_parity": True},
         "capacity": {"target_isolated": True, "matching_resource_profile": True,
                      "generator_fingerprint": "3" * 64, "target_fingerprint": "4" * 64,
@@ -116,6 +123,40 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d.pop("alerts"),
     lambda d: d["lint"].update(errors=1),
     lambda d: d["regression"]["backend"].update(failed=1),
+    lambda d: d["regression"]["backend"].update(errors=1),
+    lambda d: d["regression"]["frontend"].update(failed=1),
+    lambda d: d["regression"]["frontend"].update(errors=1),
+    lambda d: d["regression"]["backend"].update(passed=True),
+    lambda d: d["regression"]["frontend"].update(passed=0.5),
+    lambda d: d["regression"]["backend"].update(skipped=1),
+    lambda d: d["regression"]["frontend"].update(skipped=1),
+    lambda d: d["regression"]["backend"].pop("skipped"),
+    lambda d: d["regression"].update(scope="focused"),
+    lambda d: d["regression"].update(backend_selection=["tests/test_capacity_projection.py"]),
+    lambda d: d["regression"].update(frontend_selection="focused"),
+    lambda d: d["regression"].update(actual_pg_executed=False),
+    lambda d: d["regression"].pop("actual_pg_executed"),
+    lambda d: d["regression"].pop("source_before"),
+    lambda d: d["regression"].pop("source_after"),
+    lambda d: d["regression"].update(source_unchanged=False),
+    lambda d: d["regression"].update(source_unchanged=1),
+    lambda d: d["regression"].pop("source_unchanged"),
+    lambda d: d["regression"]["source_after"].update(tracked_sha256="d" * 64),
+    lambda d: d["regression"]["source_before"].update(tracked_clean=False),
+    lambda d: d["regression"]["source_after"].update(untracked_code_files=1),
+    lambda d: d["regression"]["source_before"].update(untracked_code_files=False),
+    lambda d: d["regression"]["source_before"].update(tracked_sha256="PRIVATE-TOKEN"),
+    lambda d: d["regression"]["source_after"].update(revision="b" * 40),
+    lambda d: d["regression"]["source_before"].update(revision=REVISION[:7]),
+    lambda d: d["regression"]["flows"].pop(),
+    lambda d: d["regression"]["flows"][0].update(id="unrecognized-flow"),
+    lambda d: d["regression"]["flows"][0].update(id=d["regression"]["flows"][1]["id"]),
+    lambda d: d["regression"]["flows"][0].update(observed_tests=0),
+    lambda d: d["regression"]["flows"][0].update(observed_tests=True),
+    lambda d: d["regression"]["flows"][0].update(passed=0),
+    lambda d: d["regression"]["flows"][0].update(failed=1),
+    lambda d: d["regression"]["flows"][0].update(skipped=1),
+    lambda d: d["regression"].pop("flows"),
     lambda d: d["regression"].update(revision="b" * 40),
     lambda d: d["capacity"].update(generator_fingerprint="4" * 64),
     lambda d: d["capacity"]["historical"].pop(),
@@ -143,6 +184,7 @@ def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_p
     lambda d: d["usability"].update(open_defects=1),
     lambda d: d["usability"].update(feature_count=1),
     lambda d: d["usability"].update(checkpoints_passed=32),
+    lambda d: d["usability"].update(checkpoints_total=19, checkpoints_passed=19),
     lambda d: d["usability"].update(failed=1),
     lambda d: d["usability"].update(skipped=1),
     lambda d: d["usability"]["dimensions"].update(financial_clarity=1),
@@ -159,6 +201,36 @@ def test_incomplete_or_failed_proof_blocks_go_live(tmp_path, mutation):
     mutation(data)
     with pytest.raises(quality.QualityError):
         validate(bundle(tmp_path, data))
+
+
+def test_regression_required_flows_follow_actual_source_runner_inventory():
+    plan = json.loads((SOURCE.parents[2] / "tests/dataflow/coverage-map.json").read_text())
+    assert quality.REGRESSION_FLOWS == {flow["id"] for flow in plan["flows"]}
+    assert len(quality.REGRESSION_FLOWS) == 19
+
+
+def test_optional_extra_skips_do_not_replace_or_suppress_required_execution(tmp_path):
+    data = artifacts()
+    data["regression"]["extra_optional_tests"] = {
+        "backend": {"passed": 2, "failed": 0, "skipped": 2},
+        "frontend": {"passed": 1, "failed": 0, "skipped": 1},
+    }
+    assert validate(bundle(tmp_path, data))["passed"] is True
+    data["regression"]["flows"][0]["skipped"] = 1
+    with pytest.raises(quality.QualityError):
+        validate(bundle(tmp_path, data))
+
+
+def test_equal_dirty_or_old_manifests_and_missing_sha_never_certify_source(tmp_path):
+    for changes in ({"tracked_clean": False}, {"revision": "b" * 40}, {"tracked_sha256": None},
+                    {"untracked_code_files": 1}, {"revision": REVISION[:7]}, {"tracked_clean": 1},
+                    {"untracked_code_files": False}):
+        data = artifacts()
+        source = {**data["regression"]["source_before"], **changes}
+        data["regression"].update(source_before=source, source_after=deepcopy(source))
+        with pytest.raises(quality.QualityError) as error:
+            validate(bundle(tmp_path, data))
+        assert "PRIVATE-TOKEN" not in str(error.value)
 
 
 def test_changed_checksum_and_stale_manifest_are_rejected(tmp_path):
