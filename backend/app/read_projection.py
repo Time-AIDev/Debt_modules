@@ -169,6 +169,7 @@ def _rebuild(conn):
             "values(:epoch,:day,cast(:metadata as jsonb)) returning id"), {
                 "epoch": source_epoch, "day": settings.business_date,
                 "metadata": json.dumps({"code_fingerprint": code_fingerprint(),
+                                        "identity_directory_order": [customer.uid for customer in journey.identity_customers()],
                                         "today": {"run": today["run"], "meta": today["meta"]},
                                         "workbook": {"meta": workbook["meta"]}}, ensure_ascii=False)}).scalar_one()
         today_rows = {row["customer"]["uid"]: row for row in today["items"]}
@@ -429,8 +430,16 @@ def workbook(filters, sort="aggregate_overdue", direction="desc", limit=None, cu
     shown = sum(bool(row.get("identity_only")) for row in rows)
     if not limit and identities:
         cap = 200 if filters.get("q") else 50
-        rows = [row for row in rows if not row.get("identity_only")] + [row for row in rows if row.get("identity_only")][:cap]
-        shown = min(identities, cap)
+        # Legacy directory caps apply in source order before the requested sort.
+        # Preserve SQL's combined ordering after choosing that exact subset.
+        source_order = pointer["metadata"].get("identity_directory_order")
+        if source_order is None:
+            from . import journey
+            source_order = [customer.uid for customer in journey.identity_customers()]
+        eligible = {row['customer']['uid'] for row in rows if row.get('identity_only')}
+        selected = set([uid for uid in dict.fromkeys(source_order) if uid in eligible][:cap])
+        rows = [row for row in rows if not row.get('identity_only') or row['customer']['uid'] in selected]
+        shown = len(selected)
         total = len(rows)
     meta.update(total=total, identities_total=identities, identities_shown=shown,
                 ladder_indicative=filters.get("ladder_indicative"))
@@ -467,7 +476,8 @@ def today(filters, limit=None, cursor=None, sort="priority"):
     meta.update(total=aggregate[0], worked_today_count=aggregate[1], pending_unworked_count=aggregate[2],
                 unworked_tier_counts=unworked, counts_by_tier=tiers, tier_partition=tiers, tier_counts=tier_options,
                 answers_waiting=aggregate[3], answers_waiting_elsewhere=aggregate[3]-tiers["ANSWER_WAITING"],
-                filters={**filters, "q": str(filters.get("q") or "").strip().lower() or None},
+                filters={**{key: filters.get(key) for key in ('officer', 'tier', 'payment_status', 'dc_status', 'product', 'entity')},
+                         "q": str(filters.get("q") or "").strip().lower() or None},
                 ladder_indicative=filters.get("ladder_indicative"), sort=sort)
     from . import main
     meta["board_counts"] = dict.fromkeys((column["column_id"] for column in main.BOARD_COLUMNS), 0)

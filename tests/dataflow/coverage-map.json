@@ -149,7 +149,8 @@
         "backend/tests/test_today_worked.py",
         "backend/tests/test_today_and_pipeline.py",
         "backend/tests/test_payment_review_summary.py",
-        "backend/tests/test_done_tabs_win.py"
+        "backend/tests/test_done_tabs_win.py",
+        "backend/tests/test_today_compat_pages.py"
       ],
       "frontend": [
         "frontend/src/screens/Today.test.jsx",

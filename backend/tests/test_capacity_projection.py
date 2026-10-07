@@ -123,10 +123,12 @@ def projected(uid, *, overdue=0, entity="SPV", worked=False, tier="ROUTINE", pen
     return row
 
 
-def generation(conn, rows):
+def generation(conn, rows, identity_order=None):
     metadata = {"code_fingerprint": read_projection.code_fingerprint(),
                 "workbook": {"meta": {"total": len(rows)}},
                 "today": {"run": {}, "meta": {"officer_totals": {"synthetic": len(rows)}, "reminder_batch": []}}}
+    if identity_order is not None:
+        metadata['identity_directory_order'] = identity_order
     import json
     key = conn.execute(text("insert into app.projection_generation(source_epoch,business_date,metadata) "
                             "values(0,'2026-10-23',cast(:m as jsonb)) returning id"), {"m": json.dumps(metadata)}).scalar_one()
@@ -178,6 +180,31 @@ def test_unpaged_today_preserves_all_items_for_historical_k6(capacity):
         result = read_projection.today({})
         assert len(result["items"]) == result["meta"]["total"] == 3
         assert "page" not in result
+
+
+@pytest.mark.parametrize('sort,direction', [('aggregate_overdue', 'desc'), ('display_name', 'asc'), ('display_name', 'desc')])
+def test_directory_cap_keeps_source_subset_and_combined_requested_order(capacity, sort, direction):
+    import json
+    identity_uids = ['identity-%02d' % i for i in range(55)]
+    rows = [projected(uid) for uid in identity_uids]
+    for row in rows:
+        payload = json.loads(row['workbook'])
+        payload['identity_only'] = True
+        row.update(identity_only=True, workbook=json.dumps(payload), today=None)
+    rows.extend([projected('identity-10a-contract'), projected('identity-20a-contract')])
+    source_order = list(reversed(identity_uids))
+    generation(capacity, rows, identity_order=source_order)
+    with unit(capacity):
+        value = read_projection.workbook({'identities': True}, sort, direction)
+        selected = set(source_order[:50]) | {'identity-10a-contract', 'identity-20a-contract'}
+        assert {row['customer']['uid'] for row in value['rows']} == selected
+        expected = sorted(selected)
+        if sort == 'display_name':
+            expected.sort(key=lambda uid: 'Synthetic ' + uid, reverse=direction == 'desc')
+        assert [row['customer']['uid'] for row in value['rows']] == expected
+        assert value['meta']['identities_total'] == 55 and value['meta']['identities_shown'] == 50
+        paged = read_projection.workbook({'identities': True}, sort, direction, limit=200)
+        assert len(paged['rows']) == paged['meta']['total'] == 57
 
 
 def test_unrecognized_mutations_keep_global_barrier_and_version_contract():

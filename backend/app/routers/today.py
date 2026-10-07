@@ -345,6 +345,12 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
     # summary — build()'s rows are shared with the workbook's pinned key set.
     today_domain.annotate_worked(data["items"], settings.business_date)
     data["meta"]["worked_today_count"] = sum(1 for i in data["items"] if i["worked_today"])
+    data["meta"]["pending_unworked_count"] = sum(
+        not row["worked_today"] and row["case"]["payment_status"] == "PENDING" for row in data["items"])
+    data["meta"]["unworked_tier_counts"] = {
+        value: sum(row["tier"] == value and not row["worked_today"]
+                   and row["case"]["payment_status"] != "PENDING" for row in data["items"])
+        for value in today_domain.TIERS}
     data["meta"]["daily_summary"] = today_domain.daily_summary(data["items"], cs, settings.business_date)
     data["meta"]["sort"] = sort
     if sort == "arrears":
@@ -359,7 +365,12 @@ def today(officer: str = Query(default=None), ladder_indicative: str = Query(def
         column = row.get("board_column_id")
         if column:
             data["meta"]["board_counts"][column] = data["meta"]["board_counts"].get(column, 0) + 1
-    return _json(data)
+    from .. import today_pagination
+    filters = {"officer": officer, "ladder_indicative": rung, "tier": tier,
+               "payment_status": payment_status, "dc_status": dc_status, "product": product,
+               "entity": entity, "q": str(q or "").strip().lower() or None,
+               "unassigned": unassigned_desk, "acting_officer": x_volt_officer, "role": x_volt_role}
+    return _json(today_pagination.page(data, filters, sort, limit, cursor, settings.business_date))
 
 
 TODAY_EXPORT_COLUMNS = (
