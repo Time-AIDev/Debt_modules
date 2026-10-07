@@ -3,14 +3,14 @@ import http from 'k6/http';
 import { check } from 'k6';
 import { Trend, Rate } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
-import historical, { options as originalOptions } from './production.js';
+import historical, { options as originalOptions } from './production-3s.js';
 
 const actors = new SharedArray('capacity actors', () => JSON.parse(open(__ENV.TOKENS_FILE)));
 const dataset = JSON.parse(open(__ENV.DATASET_FILE));
 const pageTime = new Trend('capacity_page_ms', true);
 const pageErrors = new Rate('capacity_page_errors');
 export const options = { ...originalOptions, thresholds: {
-  ...originalOptions.thresholds, capacity_page_ms: ['p(95)<2000'], capacity_page_errors: ['rate<0.01'],
+  ...originalOptions.thresholds, capacity_page_ms: ['p(95)<3000'], capacity_page_errors: ['rate<0.01'],
 } };
 
 export default function () {

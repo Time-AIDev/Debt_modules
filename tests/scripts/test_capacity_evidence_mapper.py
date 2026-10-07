@@ -61,3 +61,39 @@ def test_meta_without_native_summary_is_incomplete_not_silently_unexecuted(tmp_p
     (tmp_path / ('k6-' + RUN + '-summary.json')).unlink()
     run = mapper.map_run(tmp_path, PLANNED, REVISION, IMAGE, {})
     assert run['execution'] == 'incomplete_native_evidence' and run['exit_code'] == 99
+
+
+def test_revised_policy_keeps_actual_entry_separate_from_original_payload(tmp_path):
+    import hashlib
+    artifacts(tmp_path)
+    path = tmp_path / ('k6-' + RUN + '-meta.json')
+    meta = json.loads(path.read_text())
+    wrapper = ROOT / 'tests/load/production-3s.js'
+    meta.update(workload_script='tests/load/production-3s.js',
+                workload_sha256=hashlib.sha256(wrapper.read_bytes()).hexdigest(),
+                baseline_workload_sha256=mapper.ORIGINAL,latency_policy=mapper.LATENCY_POLICY,latency_limit_ms=3000)
+    write(path,meta)
+    summary = {'metrics': {metric:{'values':{'p(95)':2800},'thresholds':{'p(95)<3000':{'ok':True}}}
+                           for metric in ('business_read_ms','business_write_ms')}}
+    write(tmp_path / ('k6-' + RUN + '-summary.json'),summary)
+    mapped = mapper.map_run(tmp_path,PLANNED,REVISION,IMAGE,{})
+    assert mapped['unchanged_workload'] is False
+    assert mapped['historical_payload_unchanged'] is True and mapped['legacy_unpaged_today'] is True
+    assert mapped['latency_limit_ms'] == 3000 and mapped['native_latency_threshold_verified'] is True
+    assert mapped['exit_code'] == 99  # native failures are never relabeled after policy changes
+    meta['workload_sha256'] = 'c' * 64
+    write(path,meta)
+    assert mapper.map_run(tmp_path,PLANNED,REVISION,IMAGE,{})['historical_payload_unchanged'] is False
+
+
+def test_original_native_two_second_failure_cannot_be_recertified_as_three_seconds(tmp_path):
+    artifacts(tmp_path)
+    original = mapper.map_run(tmp_path,PLANNED,REVISION,IMAGE,{})
+    assert original['latency_policy'] == 'original-2s' and original['latency_limit_ms'] == 2000
+    path = tmp_path / ('k6-' + RUN + '-meta.json')
+    meta = json.loads(path.read_text())
+    meta.update(latency_policy=mapper.LATENCY_POLICY,latency_limit_ms=3000,baseline_workload_sha256=mapper.ORIGINAL)
+    write(path,meta)
+    wrong = mapper.map_run(tmp_path,PLANNED,REVISION,IMAGE,{})
+    assert wrong['native_latency_threshold_verified'] is False
+    assert wrong['exit_code'] == 99

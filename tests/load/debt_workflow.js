@@ -18,8 +18,8 @@ export const options = {
   scenarios: { debt_workflow: { executor: 'constant-vus', vus: Number(__ENV.VUS || 10),
     duration: __ENV.DURATION || '120s', gracefulStop: '30s' } },
   summaryTrendStats: ['avg', 'med', 'p(90)', 'p(95)', 'p(99)', 'max'],
-  thresholds: { business_read_ms: ['p(95)<2000'], business_write_ms: ['p(95)<2000'],
-    complete_action_ms: ['p(95)<2000'], business_errors: ['rate<0.01'],
+  thresholds: { business_read_ms: ['p(95)<3000'], business_write_ms: ['p(95)<3000'],
+    complete_action_ms: ['p(95)<3000'], business_errors: ['rate<0.01'],
     checks: ['rate>0.99'], idempotency_replay_errors: ['rate==0'], debt_mutations_committed: ['count>0'],
     role_denial_errors: ['rate==0'] },
 };

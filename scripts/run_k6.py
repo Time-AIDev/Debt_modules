@@ -26,12 +26,29 @@ import urllib.request
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tests/load/production.js"
+ORIGINAL_SHA256 = "480b0646dd3ec6405c4d0afa7b2e94371e62a9c47f711978cfed5f3ee8ab7ec5"
+LATENCY_POLICY = "user-approved-3s-20261007"
 SAFE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\Z")
 SYNTHETIC_UID = re.compile(r"sheet-LOAD[0-9]{6,12}\Z")
 
 
 def now():
     return datetime.now(timezone.utc).isoformat()
+
+
+def workload(profile):
+    baseline = hashlib.sha256(SCRIPT.read_bytes()).hexdigest()
+    if baseline != ORIGINAL_SHA256:
+        raise ValueError("The original historical workload changed; refuse undeclared payload/traffic changes")
+    script = {"historical": ROOT / "tests/load/production-3s.js", "historical-original": SCRIPT,
+              "paged": ROOT / "tests/load/capacity.js", "debt-workflow": ROOT / "tests/load/debt_workflow.js"}[profile]
+    original = profile == "historical-original"
+    return script, {"latency_policy": "original-2s" if original else LATENCY_POLICY,
+                    "latency_limit_ms": 2000 if original else 3000,
+                    "baseline_workload_sha256": baseline,
+                    "historical_workload_sha256": baseline,
+                    "workload_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
+                    "historical_payload_unchanged": profile in ("historical", "historical-original", "paged")}
 
 
 def duration_seconds(value):
@@ -202,8 +219,8 @@ def arguments(argv=None):
     parser.add_argument("--dataset-file", required=True, type=Path)
     parser.add_argument("--vus", type=int, default=10)
     parser.add_argument("--duration", default="120s")
-    parser.add_argument("--profile", choices=("historical", "paged", "debt-workflow"), default="historical",
-                        help="Historical workload, paged Today supplement, or real Debt mutations")
+    parser.add_argument("--profile", choices=("historical", "historical-original", "paged", "debt-workflow"), default="historical",
+                        help="User-approved 3s historical/paged/real Debt workloads, or immutable original 2s baseline")
     parser.add_argument("--concurrent-preview-file", type=Path, help="Private XLSX staged once during load, never applied")
     parser.add_argument("--preview-profile", choices=("debt_status", "contract_supplement"), default="debt_status")
     parser.add_argument("--run-id", required=True)
@@ -251,8 +268,7 @@ def main(argv=None):
         if not binary:
             raise ValueError("Installed k6 executable is unavailable")
         version = subprocess.run([binary, "version"], capture_output=True, text=True, timeout=10, check=True).stdout.strip()
-        script = {"historical": SCRIPT, "paged": ROOT / "tests/load/capacity.js",
-                  "debt-workflow": ROOT / "tests/load/debt_workflow.js"}[args.profile]
+        script, workload_policy = workload(args.profile)
         binding = runtime_binding(args.api_container)
         roles = actor_roles(args.base_url, users)
         meta = {"timestamp_utc": now(), "run_id": args.run_id, "vus": args.vus,
@@ -260,8 +276,6 @@ def main(argv=None):
                 "dataset": {key: dataset[key] for key in ("synthetic", "customers", "contracts", "instalments_per_contract")},
                 "actors": 25, "actor_roles": roles, "k6_version": version, "target": args.base_url,
                 "generator_co_located": True, "workload_script": str(script.relative_to(ROOT)), "profile": args.profile,
-                "workload_sha256": hashlib.sha256(script.read_bytes()).hexdigest(),
-                "historical_workload_sha256": hashlib.sha256(SCRIPT.read_bytes()).hexdigest(),
                 "read_write_mix": {"primary_reads": {"workbook": 40, "today": 30, "case": 20, "monthly": 10},
                                    "write_every_iterations": 5, "write": "synthetic case note", "replay_on_success": True},
                 "summary_file": str(paths["summary"]), "resources_file": str(paths["resources"]),
@@ -270,6 +284,7 @@ def main(argv=None):
                     "Native k6 summary metrics and failed thresholds are authoritative",
                     "Dataset preparation and state priming are external and excluded from measured duration"]}
         meta.update(binding)
+        meta.update(workload_policy)
         if args.profile == "debt-workflow":
             meta["read_write_mix"] = {"reads": "case before each act and final conservation check",
                 "writes": ["next_action", "dc_status", "uncounted_contact", "ptp_create", "ptp_close"],

@@ -14,6 +14,7 @@ from pathlib import Path
 import re
 
 ORIGINAL = "480b0646dd3ec6405c4d0afa7b2e94371e62a9c47f711978cfed5f3ee8ab7ec5"
+LATENCY_POLICY = "user-approved-3s-20261007"
 REVISION = re.compile(r"[0-9a-f]{40}\Z")
 IMAGE = re.compile(r"sha256:[0-9a-f]{64}\Z")
 RUN_ID = re.compile(r"[0-9a-f]{7,40}-(?:historical|paged|debt-workflow)-(?:1|10|25)vu(?:-(?:mixed|import|growth|soak))?\Z")
@@ -67,13 +68,28 @@ def map_run(directory, planned, revision, api_image, queue):
     before, after = counts.get("pending_before"), counts.get("pending_after")
     queue_growth = after > before if bound_queue and type(before) is int and type(after) is int else None
     guard = meta.get("production_health_guard") or {}
+    original = meta.get("profile") in ("historical", "historical-original") and meta.get("workload_sha256") == ORIGINAL
+    wrapper = Path(__file__).resolve().parents[1] / "tests/load/production-3s.js"
+    revised = (meta.get("profile") == "historical" and meta.get("workload_script") == "tests/load/production-3s.js"
+               and meta.get("latency_policy") == LATENCY_POLICY and meta.get("latency_limit_ms") == 3000
+               and meta.get("baseline_workload_sha256") == ORIGINAL
+               and meta.get("workload_sha256") == hashlib.sha256(wrapper.read_bytes()).hexdigest())
+    policy = meta.get("latency_policy") or ("original-2s" if original else None)
+    limit = meta.get("latency_limit_ms") if meta.get("latency_policy") else 2000 if original else None
+    latency_verified = (limit in (2000, 3000) and all(
+        set(((summary.get("metrics") or {}).get(metric) or {}).get("thresholds") or {}) == {"p(95)<" + str(limit)}
+        for metric in ("business_read_ms", "business_write_ms")))
     return {"run_id": run_id, "scenario": planned.get("scenario"), "execution": "observed",
             "source_binding_verified": meta.get("revision") == revision and meta.get("api_image") == api_image,
             "exit_code": meta.get("exit_code"), "native_exit_code": meta.get("process_return_code"),
             "duration_seconds": meta.get("duration_seconds"), "vus": meta.get("vus"),
             "customers": dataset.get("customers"), "instalments_per_contract": dataset.get("instalments_per_contract"),
-            "unchanged_workload": meta.get("profile") == "historical" and meta.get("workload_sha256") == ORIGINAL,
-            "legacy_unpaged_today": meta.get("profile") == "historical" and meta.get("workload_sha256") == ORIGINAL,
+            "unchanged_workload": original,
+            "historical_payload_unchanged": original or revised,
+            "legacy_unpaged_today": original or revised,
+            "latency_policy": policy, "latency_limit_ms": limit,
+            "baseline_workload_sha256": meta.get("baseline_workload_sha256") or (ORIGINAL if original else None),
+            "native_latency_threshold_verified": latency_verified,
             "workload_sha256": meta.get("workload_sha256"), "roles": sorted((meta.get("actor_roles") or {}).keys()),
             "oom_observed": oom, "restart_delta": restarts, "queue_growth": queue_growth,
             "production_health_guard_passed": guard.get("baseline_passed") is True and guard.get("monitor_completed") is True
