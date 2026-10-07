@@ -7,9 +7,9 @@ Every test here is an ADDITION. Nothing in this file edits an existing assertion
 Feedback Round 1, Task 10: the `payment_position` block itself, served on the work
 item (`/v1/today` items and the case's `work_item`), the Work Book row, and the
 per-customer invoices payload. Controller ruling (task-10): `_sheet_captured_on()`
-memoises `book_source.load()` at module level; `forget_capture_date()` resets the
-cache and is called from every fixture below that touches the capture date, so no
-test leaks a cached value into the next.
+memoises held fixture metadata; `forget_capture_date()` resets the cache and is
+called from every fixture below that touches the capture date, so no test leaks
+a cached value into the next. Database dates belong to the current SQL snapshot.
 """
 import datetime
 
@@ -17,7 +17,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app import book_source, journey, payment_position
-from app.config import settings
 from app.main import app
 
 client = TestClient(app)
@@ -121,21 +120,16 @@ def test_the_four_surfaces_serve_the_position():
 # --- controller ruling (task-10): memoise the capture date, forget it on reload ---
 
 def test_the_capture_date_is_read_once_and_forgotten_on_reload(jstate, monkeypatch):
-    """`_sheet_captured_on()` used to call `book_source.load()` once per work item —
-    212 times on one `/v1/today` or `/v1/workbook` request, re-reading the 1.3 MB
-    fixture (or re-querying the landing schema) every time. It now loads once and
-    caches, including a legitimate `None`; `forget_capture_date()` (called from
-    `main.reload_book()`) is the only way the cache clears, because the book only
-    changes at process start and on reload."""
+    """Held fixture metadata, including null, is read once until book reload."""
     customer = _customer_with(jstate, [("8399.00", datetime.date(2026, 5, 12), "OVERDUE", None)])
-    real_load = book_source.load
+    real_load = book_source.capture_date
     calls = {"n": 0}
 
     def counting_load():
         calls["n"] += 1
         return real_load()
 
-    monkeypatch.setattr(book_source, "load", counting_load)
+    monkeypatch.setattr(book_source, "capture_date", counting_load)
     payment_position.build(customer, jstate, datetime.date(2026, 9, 11))
     payment_position.build(customer, jstate, datetime.date(2026, 9, 11))
     assert calls["n"] == 1, "a second build() must not re-load the book"

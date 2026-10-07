@@ -11,12 +11,11 @@ says so — rather than printing today's date as if it knew.
 Feedback Round 1 controller ruling (task-10): `_sheet_captured_on()` used to call
 `book_source.load()` — which re-reads the whole book, the 1.3 MB fixture JSON or a
 re-query of the landing schema — on every `build()` call, i.e. once per work item,
-212 times on a single `/v1/today` or `/v1/workbook` request. The book only changes
-at process start and on `main.reload_book()`, so the capture date is memoised at
-module level: `_UNSET` distinguishes "never asked" from a legitimately cached
-`None` (an older fixture with no capture date at all). `forget_capture_date()`
-resets the cache; `main.reload_book()` calls it, because that is the one place the
-underlying book actually changes.
+212 times on a single `/v1/today` or `/v1/workbook` request. Database capture dates
+are read from run metadata in the current SQL snapshot. Held fixture dates remain
+memoised at module level: `_UNSET` distinguishes "never asked" from a legitimately
+cached `None`. `main.reload_book()` resets that fixture memo through
+`forget_capture_date()`.
 
 Feedback Round 1, task 25b (controller ruling): `as_of` precedence when the newest
 receipt is PEAK_REPORT-sourced. A receipt's own date says when THAT payment landed;
@@ -71,9 +70,12 @@ _CAPTURED = _UNSET
 
 
 def _sheet_captured_on():
+    from . import db
+    if db.configured():
+        return book_source.capture_date()
     global _CAPTURED
     if _CAPTURED is _UNSET:
-        _CAPTURED = (book_source.load().get("source") or {}).get("captured_on")
+        _CAPTURED = book_source.capture_date()
     return _CAPTURED
 
 

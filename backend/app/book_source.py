@@ -249,6 +249,36 @@ def source_summary():
         return _SUMMARY.value(key, lambda: _source_summary(conn))
 
 
+def capture_date():
+    """Source capture day without hydrating customers, blocks or money rows.
+
+    A DB date belongs to its SQL snapshot, not to a process. Read Units may reuse
+    their own value (including a legitimate null); writers and standalone calls
+    read fresh metadata so publication, rollback and database changes cannot leak
+    a cached date into another request.
+    """
+    if not db.configured():
+        payload = _with_captured_on(_from_fixture()) or {}
+        return (payload.get("source") or {}).get("captured_on")
+    from .production_unit import CURRENT
+    unit = CURRENT.get()
+    if unit and not unit.get("mutation") and "source_capture_date" in unit:
+        return unit["source_capture_date"]["value"]
+    with _summary_connection(unit) as conn:
+        # Same precedence as last_run/last_lead_run. Project only the timestamp:
+        # import metadata can itself contain large pivots and diagnostics.
+        row = conn.execute(text("select finished_at from landing.import_run "
+            "where source_system='SHEET' and status='OK' order by id desc limit 1")).first()
+        if row is None:
+            row = conn.execute(text("select finished_at from landing.import_run "
+                "where source_system='ODOO' and status='OK' and meta ? 'door' "
+                "order by id desc limit 1")).first()
+        value = _iso_date(row[0] if row is not None else None)
+    if unit and not unit.get("mutation"):
+        unit["source_capture_date"] = {"value": value}
+    return value
+
+
 @contextmanager
 def _summary_connection(unit):
     if unit:
@@ -304,7 +334,6 @@ def _merged(rows):
 
 def _source_block(sheet_run, odoo_run, served, landed, merged=0):
     run = sheet_run or odoo_run or {}
-    meta = (sheet_run or {}).get("meta") or {}
     # Delta-100 DS1: which rung the served book is actually built from. The sheet is
     # the base whenever a SHEET run exists; an ODOO-only landing (no sheet run) is
     # served by the Odoo rung; with neither, the book is the stale system data.
