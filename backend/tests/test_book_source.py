@@ -123,11 +123,11 @@ def test_the_source_summary_is_counted_once_per_epoch(monkeypatch):
     """111 ms of COUNT(DISTINCT) per call on 34k rows, called by the workbook header
     and /v1/data-state; it can only change when an import lands (sync audit)."""
     import types
+    from contextlib import contextmanager
 
     from app import book_source, data_epoch, db, landing
 
     monkeypatch.setattr(db, "configured", lambda: True)
-    monkeypatch.setattr(db, "connect", lambda: types.SimpleNamespace(close=lambda: None))
     monkeypatch.setattr(landing, "last_run", lambda conn, source: None)
     monkeypatch.setattr(landing, "last_lead_run", lambda conn: {"id": 1, "meta": {}, "row_counts": {},
                                                                "finished_at": None, "started_at": None})
@@ -138,7 +138,13 @@ def test_the_source_summary_is_counted_once_per_epoch(monkeypatch):
         return 10
     monkeypatch.setattr(landing, "count_customers", _count)
     epoch = {"v": 1}
-    monkeypatch.setattr(data_epoch, "current", lambda: epoch["v"])
+    engine = object()
+    @contextmanager
+    def snapshot(_unit):
+        yield types.SimpleNamespace(engine=engine, execute=lambda _sql:
+                                    types.SimpleNamespace(scalar_one=lambda: epoch["v"]))
+    monkeypatch.setattr(book_source, "_summary_connection", snapshot)
+    monkeypatch.setattr(data_epoch, "current", lambda: 999)  # not the source snapshot
     book_source.forget_summary()
 
     first = book_source.source_summary()

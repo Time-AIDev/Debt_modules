@@ -11,9 +11,15 @@ Three states (spec §5.2.1):
   set but unreachable  raise. Never fall back — that would look like success.
 """
 import json
+import threading
+from collections import OrderedDict
+from contextlib import contextmanager
+from copy import deepcopy
 from datetime import date as _date, datetime as _datetime
 from decimal import Decimal as _Decimal
 from pathlib import Path
+
+from sqlalchemy import text
 
 from . import clock, db, landing
 
@@ -25,12 +31,56 @@ FIXTURE_PATH = Path(__file__).with_name("fixtures_sheet.json")
 # import lands, which is exactly what the epoch records, so it is cached per epoch.
 # `forget_summary()` is called from book.invalidate() so tests that swap the landing
 # without an epoch see fresh counts.
-_SUMMARY = {"key": None, "value": None}
+class _SummaryCache:
+    """Bounded per-key singleflight; unrelated databases/snapshots never wait."""
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.entries = OrderedDict()
+        self.building = {}
+        self.version = 0
+
+    def clear(self):
+        with self.lock:
+            self.version += 1
+            self.entries.clear()
+
+    def value(self, key, build):
+        with self.lock:
+            key = (self.version, *key)
+        while True:
+            with self.lock:
+                saved = self.entries.pop(key, None)
+                if saved is not None:
+                    self.entries[key] = saved
+                    return deepcopy(saved)
+                flight = self.building.get(key)
+                if flight is None:
+                    if len(self.building) >= 8:
+                        break
+                    flight = threading.Event()
+                    self.building[key] = flight
+                    break
+            flight.wait()
+        if flight is None:
+            return build()
+        try:
+            value = build()
+            with self.lock:
+                self.entries[key] = deepcopy(value)
+                while len(self.entries) > 8:
+                    self.entries.popitem(last=False)
+            return value
+        finally:
+            with self.lock:
+                self.building.pop(key, None)
+                flight.set()
+
+
+_SUMMARY = _SummaryCache()
 
 
 def forget_summary():
-    _SUMMARY["key"] = None
-    _SUMMARY["value"] = None
+    _SUMMARY.clear()
 
 
 # Fix-all F3: a PEAK apply rebuilds the book, and every rebuild re-read the whole served
@@ -181,31 +231,43 @@ def source_summary():
     numbers `load()` serves: the shaped slice counted in SQL, less the Odoo
     identities a sheet customer already is (read only when a SHEET run exists).
 
-    Cached per import epoch: landings are the only thing that can change it.
+    The epoch is read from the SAME snapshot as the source rows, never the
+    process epoch cache. Source publication changes it atomically under the
+    global barrier. Mutations derive their own value and cannot publish an
+    uncommitted summary to another request, including after rollback.
     """
-    from . import data_epoch
     if not db.configured():
-        key = ("fixtures",)
+        return _SUMMARY.value(("fixtures", FIXTURE_PATH),
+                              lambda: (_with_captured_on(_from_fixture()) or {}).get("source") or {})
+    from .production_unit import CURRENT
+    unit = CURRENT.get()
+    with _summary_connection(unit) as conn:
+        if unit and unit.get("mutation"):
+            return _source_summary(conn)
+        epoch = int(conn.execute(text("select coalesce(max(id),0) from app.data_epoch")).scalar_one())
+        key = (conn.engine, epoch, landing.won_only())
+        return _SUMMARY.value(key, lambda: _source_summary(conn))
+
+
+@contextmanager
+def _summary_connection(unit):
+    if unit:
+        yield unit["conn"]
     else:
-        key = ("landing", data_epoch.current())
-    if _SUMMARY["key"] == key:
-        return _SUMMARY["value"]
-    if not db.configured():
-        payload = _with_captured_on(_from_fixture())
-        out = (payload or {}).get("source") or {}
-    else:
-        conn = db.connect()
-        try:
-            sheet_run = landing.last_run(conn, "SHEET")
-            odoo_run = landing.last_lead_run(conn)
-            landed = landing.count_customers(conn)
-            merged = len(_merged(landing.resolved_customers(conn, shaped_only=True))) if sheet_run else 0
-            served = landing.count_customers(conn, shaped_only=True) - merged
-            out = _source_block(sheet_run, odoo_run, served, landed, merged)
-        finally:
-            conn.close()
-    _SUMMARY.update(key=key, value=out)
-    return out
+        # Standalone readers also bind the epoch and counts to one committed
+        # snapshot; a separate epoch checkout could race an import commit.
+        with db.connect() as conn, conn.begin():
+            conn.execute(text("set transaction isolation level repeatable read, read only"))
+            yield conn
+
+
+def _source_summary(conn):
+    sheet_run = landing.last_run(conn, "SHEET")
+    odoo_run = landing.last_lead_run(conn)
+    landed = landing.count_customers(conn)
+    merged = len(_merged(landing.resolved_customers(conn, shaped_only=True))) if sheet_run else 0
+    served = landing.count_customers(conn, shaped_only=True) - merged
+    return _source_block(sheet_run, odoo_run, served, landed, merged)
 
 
 def _merged(rows):

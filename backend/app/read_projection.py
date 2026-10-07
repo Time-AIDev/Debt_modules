@@ -224,9 +224,10 @@ def current(conn):
 
 def refresh_customers(conn, customer_uids):
     """Refresh the affected customer's projection in its source transaction."""
-    from . import cases, journey, today as domain
+    from . import cases, journey, session, today as domain
     from .config import settings
-    from .routers.today import _legacy_workbook, _identity_row
+    from .routers.today import _identity_row, _invoice_state, _open_invoices_by_contract
+    from .routers.journey import _work_item
     unit = _unit()
     if not unit or not unit.get("capacity"):
         return
@@ -234,24 +235,58 @@ def refresh_customers(conn, customer_uids):
     if pointer.generation is None or pointer.dirty or unit.get("projection_all"):
         rebuild(conn)
         return
-    cs = cases.for_current()
-    today = domain.build()
-    domain.annotate_worked(today["items"], settings.business_date)
-    today_rows = {row["customer"]["uid"]: row for row in today["items"]}
-    workbook = _legacy_workbook()
-    workbook_rows = {row["customer"]["uid"]: row for row in workbook["rows"]}
     wanted = set(customer_uids)
-    rows = []
-    removed = False
+    if unit.get("customer_uid") and wanted - {unit["customer_uid"]}:
+        # A genuinely cross-customer command retains complete publication and
+        # the global barrier; private customer state cannot derive another case.
+        rebuild(conn)
+        return
+    cs = cases.for_current()
+    customers = [customer for uid in sorted(wanted)
+                 if (customer := journey.customer_by_uid(uid)) is not None]
+    contract_customers = [customer for customer in customers if customer.contracts]
     previous = {row["customer_uid"]: row for row in conn.execute(text(
         "select * from app.customer_projection where generation=:g and customer_uid=any(:uids)"),
         {"g": pointer.generation, "uids": list(wanted)}).mappings()}
+    peak_waiting = None
+    if unit.get("customer_uid"):
+        if (any(store.key == "peak_documents.state" for store in session.TOUCHED.get() or ())
+                or any(customer.uid not in previous for customer in contract_customers)):
+            rebuild(conn)
+            return
+        # Audited customer commands never edit PEAK documents. The shared source
+        # barrier excludes their global writers, whose atomic complete publication
+        # refreshes these entries. Reuse only this unchanged dependency, never a
+        # cached case, balance or payment status, and never scan the document book.
+        peak_waiting = {uid: [entry for entry in ((previous.get(uid) or {}).get("today") or {}).get("waiting", [])
+                              if entry.get("kind") == "PEAK_REJECTED"] for uid in wanted}
+    today = domain.build(_customers=contract_customers, _rows_only=True, _peak_waiting=peak_waiting)
+    domain.annotate_worked(today["items"], settings.business_date)
+    today_rows = {row["customer"]["uid"]: row for row in today["items"]}
+    # board.serve reports movement only on the first derivation. Keep the same
+    # Today-first/workbook-second semantics as the legacy two builders.
+    workbook = domain.build(_customers=contract_customers, _rows_only=True, _peak_waiting=peak_waiting)
+    workbook_rows = {row["customer"]["uid"]: row for row in workbook["items"]}
+    jstate = journey.for_current()
+    for customer in contract_customers:
+        case = cs.cases.get(customer.uid)
+        if case and case["payment_status"] in ("CLOSED", "TERMINATED"):
+            row = _work_item(jstate, customer, settings.business_date, case_state=cs)
+            row["tier"], row["tier_rank"], row["priority_reason"] = "ROUTINE", 7, "ROUTINE"
+            row["case"] = domain._case_summary(case, cs)
+            row["waiting"], row["missed_count"] = [], 0
+            row["unreachable_run"] = cases.unreachable_run(cs, customer.uid)
+            workbook_rows[customer.uid] = row
+    open_by_contract = _open_invoices_by_contract(jstate)
+    rows = []
+    removed = False
     for uid in wanted:
         row = workbook_rows.get(uid)
         customer = journey.customer_by_uid(uid)
         if row is None and customer is not None and not customer.contracts:
             row = _identity_row(customer, cs)
         if row is not None:
+            row["invoice_state"] = _invoice_state(open_by_contract, row)
             rows.append(_row(uid, row, today_rows.get(uid), cs, str(settings.business_date)))
         else:
             removed = bool(conn.execute(text("delete from app.customer_projection where generation=:g and customer_uid=:u"),
@@ -262,6 +297,12 @@ def refresh_customers(conn, customer_uids):
     _save_rows(conn, pointer.generation, changed)
     if changed or removed:
         conn.execute(text("update app.projection_current set ordering_version=ordering_version+1 where singleton"))
+    if unit.get("customer_uid") and unit.get("mutation"):
+        # Existing derivation records board movements/override expiry and its last
+        # served column. Persist these dirty customer rows with the source and
+        # projection, including changes that did not append a new board event.
+        from .production_unit import flush
+        flush()
 
 
 def finish_write(conn):

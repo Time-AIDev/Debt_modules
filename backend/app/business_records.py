@@ -19,6 +19,45 @@ class ScopedList(list):
     def __init__(self, values=(), identities=()):
         super().__init__(values)
         self.identities = list(identities)
+        # Positions change when a domain filters, pops, inserts or sorts a list.
+        # Keep references to the loaded objects so their database identity follows
+        # the retained row instead of silently overwriting its former neighbour.
+        self.saved_records = list(zip(self, self.identities))
+
+
+def _sequence_identities(values, existing, saved_records):
+    objects = {}
+    for value, identity in saved_records:
+        objects.setdefault(id(value), []).append((value, identity))
+    by_raw, by_uid = {}, {}
+    for row in existing:
+        by_raw.setdefault(canonical(row.payload), []).append(row.id)
+        value = decode(row.payload)
+        if isinstance(value, dict) and value.get("uid") is not None:
+            by_uid.setdefault(canonical(value["uid"]), []).append(row.id)
+    available = {row.id for row in existing}
+    # Reserve retained objects before matching rebuilt copies. A new observation
+    # inserted before an identical retained row must not steal its durable ID.
+    reserved = {identity for value in values for saved, identity in objects.get(id(value), ())
+                if saved is value and identity in available}
+    used = set()
+    identities = []
+    for value in values:
+        identity = next((identity for saved, identity in objects.get(id(value), ())
+                         if saved is value and identity in available and identity not in used), None)
+        reconstructed = not isinstance(values, ScopedList)
+        if reconstructed and identity is None and isinstance(value, dict) and value.get("uid") is not None:
+            candidates = [candidate for candidate in by_uid.get(canonical(value["uid"]), ())
+                          if candidate not in used and candidate not in reserved]
+            if len(candidates) == 1:
+                identity = candidates[0]
+        if reconstructed and identity is None:
+            identity = next((candidate for candidate in by_raw.get(canonical(encode(value)), ())
+                             if candidate not in used and candidate not in reserved), None)
+        identities.append(identity)
+        if identity is not None:
+            used.add(identity)
+    return identities
 
 
 def _unit():
@@ -240,6 +279,7 @@ def _load_partitioned(conn, key):
     for attribute, identities in sequences.items():
         target = value if isinstance(value, dict) else vars(value)
         target[attribute] = ScopedList(target[attribute], identities)
+        unit.setdefault("sequence_baselines", {}).setdefault(key, {})[attribute] = target[attribute].saved_records
     unit.setdefault("record_baselines", {})[key] = {k: canonical(v) for k, v in rows.items()}
     unit.setdefault("owner_baselines", {})[key] = {row.record_key: getattr(row, "customer_uid", None) for row in found}
     return value, True
@@ -264,8 +304,10 @@ def _save_partitioned(conn, key, value):
         previous_rows = conn.execute(text("select record_key,payload,customer_uid from app.business_record where store_key=:k" +
             (" and (customer_uid=:u or customer_uid is null)" if scoped else "")), {"k": key, "u": scoped}).all()
         previous = {row.record_key: canonical(row.payload) for row in previous_rows}
-        unit.setdefault("owner_baselines", {})[key] = {row.record_key: row.customer_uid for row in previous_rows}
-    previous_owners = unit.get("owner_baselines", {}).get(key, {})
+        previous_owners = {row.record_key: row.customer_uid for row in previous_rows}
+    else:
+        previous_owners = unit.get("owner_baselines", {}).get(key, {})
+    next_baselines, next_owners = dict(previous), dict(previous_owners)
     changed = False
     upserts = []
     for path, payload in current.items():
@@ -284,6 +326,8 @@ def _save_partitioned(conn, key, value):
         if scoped and customer_uid not in (None, scoped):
             raise ValueError("record is outside the customer transaction")
         upserts.append({"s": key, "r": path, "p": raw, "u": customer_uid or scoped})
+        next_baselines[path] = raw
+        next_owners[path] = customer_uid or scoped
         changed = True
     if upserts:
         statement = text("insert into app.business_record(store_key,record_key,payload,customer_uid) "
@@ -297,13 +341,17 @@ def _save_partitioned(conn, key, value):
             continue
         conn.execute(text("delete from app.business_record where store_key=:s and record_key=:r" +
                           (" and customer_uid=:u" if scoped else "")), {"s": key, "r": removed, "u": scoped})
+        next_baselines.pop(removed, None)
+        next_owners.pop(removed, None)
         changed = True
+    saved_sequences = {}
     for attribute, values in list_values.items():
         existing = conn.execute(text(
             "select id,payload from app.business_list_record where store_key=:k and attribute=:a" +
             (" and (customer_uid=:u or customer_uid is null)" if scoped else "") + " order by id"),
             {"k": key, "a": attribute, "u": scoped}).fetchall()
-        ids = values.identities if isinstance(values, ScopedList) else [row.id for row in existing]
+        saved_records = values.saved_records if isinstance(values, ScopedList) else unit.get("sequence_baselines", {}).get(key, {}).get(attribute, ())
+        ids = _sequence_identities(values, existing, saved_records)
         old = {row.id: canonical(row.payload) for row in existing}
         for index, row_value in enumerate(values):
             raw = canonical(encode(row_value))
@@ -314,14 +362,27 @@ def _save_partitioned(conn, key, value):
             if scoped and customer_uid not in (None, scoped):
                 raise ValueError("sequence is outside the customer transaction")
             if row_id is None:
-                conn.execute(text("insert into app.business_list_record(store_key,attribute,customer_uid,payload) "
-                                  "values(:k,:a,:u,cast(:p as jsonb))"),
-                             {"k": key, "a": attribute, "u": customer_uid, "p": raw})
+                ids[index] = conn.execute(text("insert into app.business_list_record(store_key,attribute,customer_uid,payload) "
+                                  "values(:k,:a,:u,cast(:p as jsonb)) returning id"),
+                             {"k": key, "a": attribute, "u": customer_uid, "p": raw}).scalar_one()
             else:
                 conn.execute(text("update app.business_list_record set payload=cast(:p as jsonb),version=version+1 "
                                   "where id=:i"), {"p": raw, "i": row_id})
             changed = True
-        if len(values) < len(ids):
-            conn.execute(text("delete from app.business_list_record where id=any(:ids)"), {"ids": ids[len(values):]})
+        removed = set(old) - set(ids)
+        if removed:
+            conn.execute(text("delete from app.business_list_record where id=any(:ids)"), {"ids": list(removed)})
             changed = True
+        saved_sequences[attribute] = (values, ids)
+    # Publish in-memory bookkeeping only after every mapping/list statement
+    # succeeds. A failed save can retry against the unchanged source identities.
+    unit.setdefault("record_baselines", {})[key] = next_baselines
+    unit.setdefault("owner_baselines", {})[key] = next_owners
+    sequences = unit.setdefault("sequence_baselines", {}).setdefault(key, {})
+    for attribute, (values, ids) in saved_sequences.items():
+        sequence_records = list(zip(values, ids))
+        sequences[attribute] = sequence_records
+        if isinstance(values, ScopedList):
+            values.identities = list(ids)
+            values.saved_records = sequence_records
     return changed

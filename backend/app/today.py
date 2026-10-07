@@ -366,7 +366,8 @@ def _last_broken_unhandled(cs, case):
 
 
 def build(officer=None, business_date=None, ladder_indicative=None, only_tier=None,
-          payment_status=None, dc_status=None, product=None, entity=None, q=None, unassigned=False):
+          payment_status=None, dc_status=None, product=None, entity=None, q=None, unassigned=False,
+          _customers=None, _rows_only=False, _peak_waiting=None):
     """Returns {items, meta}. Items carry the journey work item plus the case.
 
     Round-4 F2-CR-1: ladder_indicative narrows to the rung named — filtered here,
@@ -387,16 +388,19 @@ def build(officer=None, business_date=None, ladder_indicative=None, only_tier=No
     business_date = business_date or settings.business_date
     jstate = journey.for_current()
     cs = cases_domain.for_current()
-    docs = pkd.for_current()
     offsets = cases_domain.reminder_offsets()
     waiting_by_customer = {}
     for it in cs.today_items:
         if not it["done"]:
             waiting_by_customer.setdefault(it["customer_uid"], []).append(it)
-    for rec in docs.documents.values():
-        if rec["state"] == "REJECTED":
-            waiting_by_customer.setdefault(rec.get("customer_uid") or "", []).append(
-                {"kind": "PEAK_REJECTED", "ref": rec["uid"], "text": rec.get("rejection_reason")})
+    if _peak_waiting is None:
+        for rec in pkd.for_current().documents.values():
+            if rec["state"] == "REJECTED":
+                waiting_by_customer.setdefault(rec.get("customer_uid") or "", []).append(
+                    {"kind": "PEAK_REJECTED", "ref": rec["uid"], "text": rec.get("rejection_reason")})
+    else:
+        for uid, entries in _peak_waiting.items():
+            waiting_by_customer.setdefault(uid, []).extend(entries)
     items = []
     reminders = []
     needle = (q or "").strip().lower() or None
@@ -404,8 +408,8 @@ def build(officer=None, business_date=None, ladder_indicative=None, only_tier=No
     # The 2026-09-19 ruling serves crm.lead identities beside the book. They carry no
     # contract, so they are not queue work; meta.identities says how many stand in
     # the Book, and the screen prints that sentence rather than listing them here.
-    identities = len(journey.identity_customers())
-    for customer in journey.book_customers():
+    identities = 0 if _rows_only else len(journey.identity_customers())
+    for customer in journey.book_customers() if _customers is None else _customers:
         case = cs.cases.get(customer.uid)
         if case is None:
             continue
@@ -476,6 +480,11 @@ def build(officer=None, business_date=None, ladder_indicative=None, only_tier=No
             reminders.append({"customer_uid": customer.uid, "display_name": customer.display_name,
                               "due_on": case["next_action_on"],
                               "kind": "D-%d" % offsets[0] if case["payment_status"] == "CURRENT" else "D0"})
+    # Projection refresh derives selected rows through this same financial/tier
+    # engine. Its caller keeps the generation's portfolio metadata and never
+    # needs to count, sort or scan the unrelated collection queue.
+    if _rows_only:
+        return {"items": items}
     # Round-2 settasak S2-07: inside a tier the oldest debt comes first (DPD desc), then
     # the biggest arrears — an NPL at DPD 74 sits above a DPD-13 single instalment.
     items.sort(key=lambda i: (i["tier_rank"], -(i["oldest_dpd"] or 0), -Decimal(i["aggregate_overdue"]), i["customer"]["display_name"]))
