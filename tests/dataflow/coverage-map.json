@@ -201,7 +201,8 @@
         "backend/tests/test_attachments_router.py",
         "backend/tests/test_production_attachment.py",
         "backend/tests/test_file_worker_hardening.py",
-        "backend/tests/test_vps_storage.py"
+        "backend/tests/test_vps_storage.py",
+        "backend/tests/test_scanner_tcp.py"
       ],
       "frontend": [
         "frontend/src/lib/api.upload.test.js"
