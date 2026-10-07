@@ -1018,12 +1018,24 @@ def _write_rows(writer, rows):
                          ("paid %d · open %d" % (pp["paid_count"], pp["open_count"])) if pp else "",
                          r.get("missed_basis_th"), r.get("tier_reason_th"),
                          r.get("open_service_issues"), r.get("manager_review_open"),
-                         r.get("data_source"), _order_ref_cell(r.get("order_ref")),
+                         _data_source_cell(r.get("data_source")), _order_ref_cell(r.get("order_ref")),
                          # Round-4 F1-BE1: off c (r["case"]), the owning store — never
                          # r["broken_ptp_count"], the row-level twin (R4-F31/F54).
                          c["kept_ptp_count"], c["broken_ptp_count"],
                          # Round-4 F2-CR-2.
                          (r.get("ladder") or {}).get("stage"), (r.get("ladder") or {}).get("indicative")]))
+
+
+def _data_source_cell(value):
+    """Preserve provenance values in a deterministic machine-readable CSV cell.
+
+    JSONB and Python mappings may have different insertion orders. A Python
+    dict repr must not change an export when its actual provenance is identical.
+    Existing scalar source codes and absent sources keep their original cells.
+    """
+    if isinstance(value, (dict, list, tuple)):
+        return json.dumps(jsonable_encoder(value), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return value
 
 
 def _filters_note(product, payment_status, dc_status, officer, tier, q, ladder_indicative, position=None, entity=None):

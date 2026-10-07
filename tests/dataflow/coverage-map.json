@@ -298,7 +298,8 @@
         "backend/tests/test_round5_kpi.py",
         "backend/tests/test_collection_kpi_overlap.py",
         "backend/tests/test_overview.py",
-        "backend/tests/test_sheet_dq_2026_09_26.py"
+        "backend/tests/test_sheet_dq_2026_09_26.py",
+        "backend/tests/test_csv_source_parity.py"
       ],
       "frontend": [
         "frontend/src/screens/Reports.ptp.test.jsx",
