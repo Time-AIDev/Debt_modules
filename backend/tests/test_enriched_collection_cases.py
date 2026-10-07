@@ -4,6 +4,8 @@ from datetime import date
 from decimal import Decimal
 
 import pytest
+from fastapi.encoders import jsonable_encoder
+from fastapi.testclient import TestClient
 
 from app import book, cases, errors, main
 from app.fixtures import CustomerFixture
@@ -63,6 +65,20 @@ def test_real_contract_cannot_be_reported_as_an_identity_without_a_money_row(mon
     assert payload["contracts"][0]["paid_through"] == 0
     assert payload["case"]["npl_assessment"]["actual_dpd"] >= 90
     assert payload["case"]["payment_status"] != "NPL"
+    response = TestClient(main.app).get(f"/v1/cases/by-customer/{customer.uid}")
+    assert response.status_code == 200
+    assert response.json() == jsonable_encoder(payload)
+
+
+def test_http_case_encoding_keeps_money_dates_and_direct_archive_dto(monkeypatch):
+    from app.routers import today
+    payload = {"identity_only": False, "contracts": [{"principal": Decimal("123.40"),
+               "due": date(2026, 10, 23)}], "case": {"name": "ลูกค้าทดสอบ", "holds": [None, True]}}
+    monkeypatch.setattr(today, "case_detail", lambda uid: payload)
+    assert today.case_detail("SYNTHETIC") is payload
+    response = TestClient(main.app).get("/v1/cases/by-customer/SYNTHETIC")
+    assert response.status_code == 200
+    assert response.json() == jsonable_encoder(payload)
 
 
 def test_reviewed_supplement_keeps_its_contract_when_peak_display_product_conflicts(monkeypatch):

@@ -1461,7 +1461,6 @@ def _case_events(state, case, customer):
         result.append(row)
     return result
 
-@router.get("/v1/cases/by-customer/{customer_uid}")
 def case_detail(customer_uid: str):
     from .. import service_deferrals
     from ..routers.journey import _work_item
@@ -1673,6 +1672,13 @@ def case_detail(customer_uid: str):
         "sheet_reconciliation": _sheet_reconciliation(case, contracts),      # J3-17
         "unreachable_run": cases_domain.unreachable_run(cs, customer_uid),   # J4-32
     }
+
+
+@router.get("/v1/cases/by-customer/{customer_uid}")
+def case_detail_response(customer_uid: str):
+    # Keep the plain DTO available to the termination archive and domain callers.
+    # Only HTTP serialization uses the same encoder as Today/Workbook.
+    return _json(case_detail(customer_uid))
 
 
 # Round-4 J4-31: there is no customer-facing invoice URL anywhere in the domain — the
