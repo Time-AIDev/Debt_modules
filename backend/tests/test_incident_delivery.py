@@ -129,3 +129,68 @@ def test_external_watchdog_refuses_production_and_checks_rpo(monkeypatch):
         "encrypted offsite recovery point exceeds 24-hour RPO"]
     with pytest.raises(ValueError, match='fingerprint'):
         watchdog.inspect({**config, 'production_fingerprint': ''}, now=NOW)
+
+
+@pytest.fixture
+def independent_watchdog(monkeypatch):
+    spec = importlib.util.spec_from_file_location("watchdog_deferral_test", DIRECTORY / "external-watchdog.py")
+    watchdog = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(watchdog)
+    monkeypatch.setattr(watchdog, "machine_fingerprint", lambda: "b" * 64)
+    return watchdog
+
+
+def test_watchdog_deferred_offsite_still_checks_https_and_never_runs_storage(independent_watchdog):
+    watchdog = independent_watchdog
+    calls = []
+    class Ready(Response):
+        status = 200
+        def read(self, limit): return b'{"status":"ready"}'
+    class Probe:
+        def open(self, url, timeout):
+            calls.append(url)
+            return Ready()
+    settings = {"production_fingerprint": "a" * 64, "offsite_monitoring": "deferred"}
+    def no_storage(*args, **kwargs):
+        pytest.fail("Explicit offsite deferral must not invoke rclone")
+    assert watchdog.inspect(settings, now=NOW, opener=Probe(), command=no_storage) == []
+    assert calls == ["https://collection.volt.co.th/readyz"]
+    class Unreachable:
+        def open(self, url, timeout): raise OSError("unreachable")
+    assert watchdog.inspect(settings, now=NOW, opener=Unreachable(), command=no_storage) == [
+        "production public HTTPS unreachable or not ready"]
+
+
+def test_watchdog_configuration_defers_only_storage_not_receiver_or_independence(tmp_path, independent_watchdog):
+    watchdog = independent_watchdog
+    receiver = tmp_path / "alerts.json"
+    receiver.write_text(json.dumps(settings()))
+    receiver.chmod(0o600)
+    path = tmp_path / "watchdog.json"
+    config = {"production_fingerprint": "a" * 64, "offsite_monitoring": "deferred",
+              "alerts_config": str(receiver), "state_path": str(tmp_path / "state.json")}
+    def save(value):
+        path.write_text(json.dumps(value))
+        path.chmod(0o600)
+    save(config)
+    assert watchdog.configuration(path)["offsite_monitoring"] == "deferred"
+    save({key: value for key, value in config.items() if key != "offsite_monitoring"})
+    with pytest.raises(ValueError, match="offsite recovery point"):
+        watchdog.configuration(path)
+    save({**config, "production_fingerprint": "b" * 64})
+    with pytest.raises(ValueError, match="independent"):
+        watchdog.configuration(path)
+    save(config)
+    receiver.write_text(json.dumps({"url": "", "token": ""}))
+    with pytest.raises(watchdog.AlertError):
+        watchdog.configuration(path)
+
+
+@pytest.mark.parametrize("mode", ["", "disabled", "optional", False, None])
+def test_unknown_watchdog_offsite_mode_fails_closed(independent_watchdog, mode):
+    watchdog = independent_watchdog
+    class NoProbe:
+        def open(self, *args, **kwargs): pytest.fail("Invalid policy must fail before probing")
+    with pytest.raises(ValueError, match="explicitly deferred"):
+        watchdog.inspect({"production_fingerprint": "a" * 64, "offsite_monitoring": mode},
+                         now=NOW, opener=NoProbe())

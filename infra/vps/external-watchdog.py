@@ -28,13 +28,21 @@ def independent(settings):
         raise ValueError("External watchdog must run on a host independent of production")
 
 
+def offsite_required(settings):
+    mode = settings.get("offsite_monitoring", "required")
+    if mode not in ("required", "deferred"):
+        raise ValueError("Offsite monitoring must be required or explicitly deferred")
+    return mode == "required"
+
+
 def configuration(path):
     settings = private_json(path)
     independent(settings)
-    remote = settings.get("recovery_point_remote", "")
-    if not re.fullmatch(r"[A-Za-z0-9_-]+:[^\s]+", remote) or ".." in remote.split(":", 1)[1].split("/"):
-        raise ValueError("A configured offsite recovery point is required")
-    private_file(Path(settings.get("rclone_config", "/etc/volt-debt/rclone.conf")), maximum=1048576)
+    if offsite_required(settings):
+        remote = settings.get("recovery_point_remote", "")
+        if not re.fullmatch(r"[A-Za-z0-9_-]+:[^\s]+", remote) or ".." in remote.split(":", 1)[1].split("/"):
+            raise ValueError("A configured offsite recovery point is required")
+        private_file(Path(settings.get("rclone_config", "/etc/volt-debt/rclone.conf")), maximum=1048576)
     receiver = config(settings["alerts_config"])
     if not receiver.get("url"):
         raise ValueError("An incident receiver is required")
@@ -44,6 +52,7 @@ def configuration(path):
 def inspect(settings, *, now=None, opener=None, command=subprocess.run):
     now = now or datetime.now(timezone.utc)
     independent(settings)
+    check_offsite = offsite_required(settings)
     failures = []
     opener = opener or urllib.request.build_opener(urllib.request.ProxyHandler({}), NoRedirect())
     try:
@@ -53,6 +62,8 @@ def inspect(settings, *, now=None, opener=None, command=subprocess.run):
                 failures.append("production public readiness failed")
     except Exception:
         failures.append("production public HTTPS unreachable or not ready")
+    if not check_offsite:
+        return failures
     try:
         result = command(["rclone", "cat", settings["recovery_point_remote"]],
                          capture_output=True, timeout=30, check=True)
@@ -72,7 +83,8 @@ def main():
     args = parser.parse_args()
     try:
         settings = configuration(args.config)
-        os.environ['RCLONE_CONFIG'] = settings.get('rclone_config', '/etc/volt-debt/rclone.conf')
+        if offsite_required(settings):
+            os.environ['RCLONE_CONFIG'] = settings.get('rclone_config', '/etc/volt-debt/rclone.conf')
         failures = inspect(settings)
         receiver = config(settings["alerts_config"])
         receiver.update(service="volt-debt-external-watchdog")

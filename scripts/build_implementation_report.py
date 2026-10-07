@@ -287,7 +287,28 @@ def k6_runs(directory, runtime, revision):
     return runs
 
 
-def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test_summaries=()):
+def offsite_policy(source, progress, revision):
+    """Describe an exact-candidate authorization without claiming a restore."""
+    source = source if isinstance(source, dict) else {}
+    expected = {"api": identifier(progress.get("candidate_api_image"), IMAGE),
+                "web": identifier(progress.get("candidate_web_image"), IMAGE)}
+    try:
+        captured = datetime.fromisoformat(source.get("verified_at_utc", "").replace("Z", "+00:00"))
+        fresh = captured.tzinfo is not None and 0 <= (datetime.now(timezone.utc) - captured).total_seconds() <= 86400
+    except (AttributeError, TypeError, ValueError):
+        fresh = False
+    reason = source.get("reason")
+    deferred = (source.get("status") == "deferred" and source.get("passed") is False
+                and source.get("scope") == "offsite_recovery" and source.get("authorization") == "explicit_user_request"
+                and source.get("preparation_only") is not True and source.get("candidate_binding_pending_final_freeze") is not True
+                and isinstance(reason, str) and bool(reason.strip()) and len(reason) <= 512
+                and source.get("revision") == revision and progress.get("candidate_revision") == revision
+                and all(expected.values()) and source.get("images") == expected and fresh)
+    return {"status": "deferred" if deferred else "required", "restore_certified": False,
+            "rpo_rto_certified": False, "local_restore_required": True, "real_alerts_required": True}
+
+
+def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test_summaries=(), offsite_deferral=None):
     progress = read_json(evidence / "progress.json") or {}
     runtime = read_json(evidence / "diagnostic/owned-resources.json") or {}
     google = "USER_ATTESTED_SUCCESS"
@@ -298,6 +319,9 @@ def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test
             and browser.get("page_error_count") == 0):
         google = "FINAL_CANDIDATE_BROWSER_VERIFIED"
     pending = [item for item in INPUTS if item in (progress.get("external_inputs_pending") or [])]
+    offsite = offsite_policy(offsite_deferral, progress, revision)
+    if offsite["status"] == "deferred":
+        pending = [item for item in pending if item not in INPUTS[:3]]
     return {"format": "volt-implementation-aggregate-v1", "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "user_timezone": "Asia/Bangkok", "report_revision": revision,
         "manifest_revision": identifier(progress.get("committed_revision") or progress.get("integration_head"), REVISION),
@@ -307,6 +331,7 @@ def build_aggregate(evidence, revision, *, qa_execution=None, browser=None, test
                                    "changed_by_user_on": "2026-10-07", "older_native_failures_reinterpreted": False},
         "google_login_status": google, "go_live_enabled_reported": progress.get("go_live_enabled") is True,
         "offsite_restore_verified_reported": progress.get("offsite_restore_verified") is True,
+        "offsite_recovery_policy": offsite,
         "pending_external_inputs": pending,
         "original_k6_thresholds": THRESHOLDS,
         "k6": k6_runs(evidence / "diagnostic/results", runtime, revision),
@@ -422,7 +447,11 @@ def render_docx(data, output):
     doc.add_heading("สิ่งที่ยังต้องยืนยันก่อน go-live", 1)
     for item in data["pending_external_inputs"]:
         doc.add_paragraph(item, style="List Bullet")
-    doc.add_paragraph("ต้องมี capacity บน generator อิสระ, workflow การเงินจริงครบวงจร, QA บน candidate สุดท้าย, offsite restore/alert/rollback และ Google browser evidence ที่ผูกกับ revision ตาม release gates")
+    if data["offsite_recovery_policy"]["status"] == "deferred":
+        doc.add_paragraph("S3 และ offsite backup/recovery เลื่อนตามคำสั่งผู้ใช้ ไม่รับรอง RPO/RTO ภายนอกในรอบนี้; local backup/restore, alerts และ external watchdog ยังคงเป็นเกณฑ์ก่อนเปิดใช้งาน")
+        doc.add_paragraph("ต้องมี capacity บน generator อิสระ, workflow การเงินจริงครบวงจร, QA บน candidate สุดท้าย, local restore/alerts/rollback และ Google browser evidence ที่ผูกกับ revision ตาม release gates")
+    else:
+        doc.add_paragraph("ต้องมี capacity บน generator อิสระ, workflow การเงินจริงครบวงจร, QA บน candidate สุดท้าย, offsite restore/alert/rollback และ Google browser evidence ที่ผูกกับ revision ตาม release gates")
     doc.save(output)
     with zipfile.ZipFile(output) as archive:
         if archive.testzip() is not None:
@@ -438,13 +467,15 @@ def main(argv=None):
     parser.add_argument("--test-summary", action="append", type=Path, default=[])
     parser.add_argument("--qa-execution", type=Path)
     parser.add_argument("--browser-evidence", type=Path)
+    parser.add_argument("--offsite-deferral", type=Path, help="Describe an exact-candidate offsite deferral; never certify a restore")
     args = parser.parse_args(argv)
     if not identifier(args.revision, REVISION):
         parser.error("Use the full 40-character evidence/report revision")
     data = build_aggregate(args.evidence_dir, args.revision,
         qa_execution=read_json(args.qa_execution) if args.qa_execution else None,
         browser=read_json(args.browser_evidence) if args.browser_evidence else None,
-        test_summaries=args.test_summary)
+        test_summaries=args.test_summary,
+        offsite_deferral=read_json(args.offsite_deferral) if args.offsite_deferral else None)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     aggregate, document = args.output_dir / "implementation-aggregate.json", args.output_dir / "implementation-readiness-and-k6.docx"
     aggregate.write_text(json.dumps(data, ensure_ascii=False, indent=2, allow_nan=False) + "\n", encoding="utf-8")

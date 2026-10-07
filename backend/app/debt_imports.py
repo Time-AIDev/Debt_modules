@@ -85,7 +85,7 @@ def stem(value):
 def current_customers(conn=None):
     if db.configured():
         if conn is None:
-            with transaction() as active:
+            with transaction(readonly=True) as active:
                 return current_customers(active)
         from . import landing
         from .pipelines import field_decisions
@@ -297,7 +297,13 @@ def _manual_npl_holds():
 
 
 @contextmanager
-def transaction():
+def transaction(*, readonly=False):
+    """Read proofs in the caller's snapshot; reserve DEBTIMP for publication.
+
+    A borrowed connection's transaction lock lasts until the outer request ends.
+    Acquiring the import writer lock from every proof getter serialized parallel
+    report reads and caused lock timeouts during ordinary browser navigation.
+    """
     if not db.configured():
         with _LOCK:
             previous = copy.deepcopy(_MEMORY)
@@ -311,7 +317,8 @@ def transaction():
     conn = db.connect()
     try:
         with conn.begin() if not conn.in_transaction() else nullcontext():
-            conn.execute(text("select pg_advisory_xact_lock(:key)"), {"key": LOCK})
+            if not readonly:
+                conn.execute(text("select pg_advisory_xact_lock(:key)"), {"key": LOCK})
             yield conn
     finally:
         conn.close()
@@ -330,7 +337,7 @@ def _save_preview(conn, payload):
 
 def get_preview(uid, actor, conn=None):
     if conn is None and db.configured():
-        with transaction() as active:
+        with transaction(readonly=True) as active:
             return get_preview(uid, actor, active)
     payload = (conn.execute(text("select payload from records.debt_import_preview where uid=:uid"),
                             {"uid": uid}).scalar() if conn is not None
@@ -390,7 +397,7 @@ def supplements(conn=None):
     if cache is not None and "debt.supplements" in cache:
         return cache["debt.supplements"]
     if conn is None and db.configured():
-        with transaction() as active:
+        with transaction(readonly=True) as active:
             return supplements(active)
     if conn is None:
         return copy.deepcopy(_MEMORY["supplements"])
@@ -419,7 +426,7 @@ def observation_map(conn, customer_uids):
 
 def observations(customer_uid, conn=None):
     if conn is None and db.configured():
-        with transaction() as active:
+        with transaction(readonly=True) as active:
             return observations(customer_uid, active)
     if conn is None:
         return [copy.deepcopy(row) for row in _MEMORY["observations"] if row["customer_uid"] == customer_uid]
@@ -552,7 +559,7 @@ def installation_for(contract_uid, conn=None):
     if cache is not None and "debt.installations" in cache:
         return cache["debt.installations"].get(contract_uid)
     if conn is None and db.configured():
-        with transaction() as active:
+        with transaction(readonly=True) as active:
             return installation_for(contract_uid, active)
     if conn is None:
         records = copy.deepcopy(_MEMORY["installations"])
@@ -602,7 +609,7 @@ def pipeline_installation_for(contract, conn=None):
     if cache is not None and key in cache:
         return cache[key]
     if conn is None:
-        with transaction() as active:
+        with transaction(readonly=True) as active:
             return pipeline_installation_for(contract, active)
     if not conn.execute(text("select to_regclass('app.business_record')")).scalar():
         return None

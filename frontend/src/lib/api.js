@@ -188,6 +188,14 @@ function noteState(response, path) {
   // Background polling may announce new data, but must not make an open edit
   // silently claim it was based on that unseen newer version.
   if (response.ok && !backgroundResponses.has(response)) resourceVersions.set(resourceKey(path), version)
+  const contactOwner = responseMutations.get(response)?.contactOwner
+  if (contactOwner && path.split('?')[0] === '/v1/contacts' && response.ok && !backgroundResponses.has(response)) {
+    // The first contact step is a global command and advances case versions.
+    // Continue this same person's case/PTP step from its actual committed reply,
+    // while preserving stale-edit fences for every other open case.
+    caseVersions.delete(contactOwner)
+    resourceVersions.set(resourceKey(`/v1/cases/by-customer/${encodeURIComponent(contactOwner)}`), version)
+  }
 }
 
 function pendingProblem(code, message) {
@@ -315,6 +323,14 @@ function safeCustomerBody(path, wire) {
   } catch { return false }
 }
 
+function contactCustomerOwner(path, wire) {
+  if (path.split('?')[0] !== '/v1/contacts' || typeof wire !== 'string') return null
+  try {
+    const uid = JSON.parse(wire)?.customer_uid
+    return typeof uid === 'string' && uid.length > 0 && uid.length <= 200 ? uid : null
+  } catch { return null }
+}
+
 function mutationHeaders(path, signature, wire) {
   const headers = roleHeaders()
   if (signature === null) return headers
@@ -331,9 +347,11 @@ function mutationHeaders(path, signature, wire) {
     const safeCase = safeCustomerBody(path, wire)
     const caseNote = safeCase ? /^\/v1\/cases\/by-customer\/([^/]+)\/(?:notes|next-action|dc-status|contacts)(?:\?|$)/.exec(path) : null
     const childOwner = safeCase && /^\/v1\/case-ptps\/[^/]+:close(?:\?|$)/.test(path) ? caseResourceOwners.get(path.split('?')[0]) : null
+    const contactOwner = contactCustomerOwner(path, wire)
     operation = { key: uploadId(), at: Date.now(),
       expectedVersion: (caseNote && caseVersions.get(decodeURIComponent(caseNote[1])))
         || (childOwner && caseVersions.get(childOwner))
+        || (contactOwner && resourceVersions.get(resourceKey(`/v1/cases/by-customer/${encodeURIComponent(contactOwner)}`)))
         || resourceVersions.get(resourceKey(path)) || seenStateVersion,
       persistent: !signature.startsWith('volatile:') }
     pendingMutations.set(signature, operation)
@@ -354,7 +372,10 @@ async function mutationFetch(method, path, body, extra = {}) {
     ...options, method, body,
     headers: { ...mutationHeaders(path, signature, body), ...extra.headers },
   })
-  if (signature !== null) responseMutations.set(response, { signature, path })
+  if (signature !== null) {
+    const contactOwner = method === 'POST' ? contactCustomerOwner(path, body) : null
+    responseMutations.set(response, { signature, path, contactOwner })
+  }
   return response
 }
 

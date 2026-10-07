@@ -108,10 +108,11 @@ def bundle(tmp_path, documents):
     return path
 
 
-def validate(path):
+def validate(path, *, defer_offsite_recovery=False):
     return quality.validate_bundle(path, revision=REVISION, api_image=IMAGES["api"],
                                    web_image=IMAGES["web"], reader=lambda file: file.read_bytes(),
-                                   now=NOW, production_fingerprint="6" * 64)
+                                   now=NOW, production_fingerprint="6" * 64,
+                                   defer_offsite_recovery=defer_offsite_recovery)
 
 
 def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_path):
@@ -280,3 +281,93 @@ def test_missing_quality_stops_before_any_production_mutation(monkeypatch):
     with pytest.raises(release_module.ReleaseError, match="quality evidence"):
         release.deploy()
     assert release.mutated is False
+
+
+def deferred_artifacts():
+    documents = artifacts()
+    previous = documents["offsite_recovery"]
+    documents["offsite_recovery"] = {
+        **{key: previous[key] for key in ("revision", "images", "verified_at_utc")},
+        "status": "deferred", "passed": False, "scope": "offsite_recovery",
+        "authorization": "explicit_user_request", "reason": "User postponed S3 and external recovery",
+    }
+    return documents
+
+
+def test_offsite_deferral_is_explicit_bound_and_never_claims_a_pass(tmp_path):
+    path = bundle(tmp_path, deferred_artifacts())
+    with pytest.raises(quality.QualityError, match="explicit release authorization"):
+        validate(path)
+    result = validate(path, defer_offsite_recovery=True)
+    assert result["eligible_for_rollout"] is True and result["passed"] is False
+    assert result["deferred"] == ["offsite_recovery"]
+    assert result["checks"]["offsite_recovery"]["status"] == "deferred"
+    assert result["checks"]["offsite_recovery"]["passed"] is False
+    assert all(item["passed"] for kind, item in result["checks"].items() if kind != "offsite_recovery")
+    assert result["policy"]["rpo_hours"] is None and result["policy"]["rto_hours"] is None
+    assert "User postponed" not in str(result)
+
+
+@pytest.mark.parametrize("kind", [kind for kind in quality.REQUIRED if kind != "offsite_recovery"])
+def test_offsite_deferral_never_waives_another_gate(tmp_path, kind):
+    documents = deferred_artifacts()
+    documents[kind]["status"] = "deferred"
+    with pytest.raises(quality.QualityError, match="not passed"):
+        validate(bundle(tmp_path, documents), defer_offsite_recovery=True)
+
+
+@pytest.mark.parametrize("change", [
+    {"passed": True}, {"passed": 0}, {"scope": "alerts"}, {"authorization": None},
+    {"reason": "  "}, {"reason": "x" * 513}, {"reason": " " * 512 + "x"}, {"reason": None},
+    {"preparation_only": True}, {"candidate_binding_pending_final_freeze": True},
+    {"revision": "b" * 40}, {"images": {"api": "sha256:" + "9" * 64, "web": IMAGES["web"]}},
+    {"verified_at_utc": (NOW - timedelta(hours=25)).isoformat()},
+])
+def test_malformed_stale_or_wrong_candidate_deferral_is_rejected(tmp_path, change):
+    documents = deferred_artifacts()
+    documents["offsite_recovery"].update(change)
+    with pytest.raises(quality.QualityError):
+        validate(bundle(tmp_path, documents), defer_offsite_recovery=True)
+
+
+def test_deferral_flag_does_not_replace_missing_evidence_or_a_real_restore(tmp_path):
+    documents = deferred_artifacts()
+    documents.pop("offsite_recovery")
+    with pytest.raises(quality.QualityError):
+        validate(bundle(tmp_path, documents), defer_offsite_recovery=True)
+    result = validate(bundle(tmp_path, artifacts()), defer_offsite_recovery=True)
+    assert result["passed"] is True and result["deferred"] == []
+    assert result["policy"]["rpo_hours"] == 24
+    with pytest.raises(quality.QualityError, match="boolean"):
+        validate(bundle(tmp_path, deferred_artifacts()), defer_offsite_recovery="true")
+
+
+def test_release_forwards_only_explicit_offsite_policy_and_records_deferral(monkeypatch, tmp_path):
+    spec = importlib.util.spec_from_file_location("quality_deferral_release", SOURCE.with_name("release.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    captured = {}
+    def validate_candidate(path, **kwargs):
+        captured.update(kwargs)
+        return {"eligible_for_rollout": True, "passed": False, "deferred": ["offsite_recovery"]}
+    monkeypatch.setattr(module, "validate_bundle", validate_candidate)
+    args = SimpleNamespace(revision=REVISION, api_image=IMAGES["api"], web_image=IMAGES["web"],
+                           quality_evidence=tmp_path / "bundle.json", defer_offsite_recovery=True, go_live=False)
+    release = module.Release(args)
+    release.verify_quality()
+    assert captured["defer_offsite_recovery"] is True
+    assert release.evidence["checks"]["quality"]["passed"] is False
+    assert any("Offsite backup/recovery deferred" in risk for risk in release.evidence["remaining_risks"])
+    del args.defer_offsite_recovery
+    release.verify_quality()
+    assert captured["defer_offsite_recovery"] is False
+
+
+def test_release_cli_requires_opt_in_to_offsite_deferral():
+    spec = importlib.util.spec_from_file_location("quality_deferral_cli", SOURCE.with_name("release.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    arguments = ["--revision", REVISION, "--api-image", IMAGES["api"], "--web-image", IMAGES["web"],
+                 "--evidence", "/tmp/volt-release-evidence.json"]
+    assert module.arguments(arguments).defer_offsite_recovery is False
+    assert module.arguments([*arguments, "--defer-offsite-recovery"]).defer_offsite_recovery is True

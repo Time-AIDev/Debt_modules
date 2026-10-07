@@ -197,3 +197,24 @@ SHA256, `recovery_point_remote`, `rclone_config`, `alerts_config`, and a private
 wrapper launches the private Python helper; it checks HTTPS/readiness and the
 encrypted recovery point every minute, and uses the same acknowledged incident
 and recovery transport. An enabled timer alone does not satisfy the alert gate.
+
+### Explicitly postponing offsite recovery
+
+When the owner postpones S3 and offsite recovery, promotion accepts only the
+specific `--defer-offsite-recovery` option and a checksum-bound `offsite_recovery`
+artifact for the exact candidate. The artifact must use `status: "deferred"`,
+`passed: false`, `scope: "offsite_recovery"`, `authorization: "explicit_user_request"`,
+and a nonempty `reason`, together with the normal revision, API/Web images and
+fresh timestamp. Keep all eight artifact entries; the other seven checks must
+actually pass. Without the option, offsite recovery remains mandatory.
+
+The resulting evidence reports `eligible_for_rollout: true`, `passed: false`,
+and the deferred check separately. It does not certify external RPO or RTO.
+Local backup, checksum verification, local restore and rollback remain required.
+
+On the independent watchdog host, set `offsite_monitoring: "deferred"` in its
+private configuration to postpone only the S3 recovery-point checks. The default
+is `"required"`. Independent-host validation, HTTPS/readiness probing, private
+receiver authentication, durable retries/deduplication and real incident/recovery
+acknowledgments are still required; no S3 credentials or rclone configuration are
+needed in this explicit mode. Deferred recovery is not a successful restore.

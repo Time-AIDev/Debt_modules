@@ -54,6 +54,54 @@ describe('production write transport', () => {
     expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('case:customer:2')
   })
 
+  it('continues the contact-to-PTP command from the committed contact version without changing another open case', async () => {
+    const detail = response({ customer: { uid: 'customer' } }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const other = response({ customer: { uid: 'other' } }, 7)
+    other.headers.get = (name) => name === 'x-volt-case-version' ? 'case:other:4'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail).mockResolvedValueOnce(other)
+      .mockResolvedValueOnce(response({ contact_id: 1, counted: true }, 8, 201))
+      .mockResolvedValueOnce(response({ contact: { uid: 'contact-one' } }, 9, 201))
+      .mockResolvedValueOnce(response({}, 10))
+    await api.caseDetail('customer')
+    await api.caseDetail('other')
+    await api.logContact({ customer_uid: 'customer', channel: 'PHONE' })
+    await api.logCaseContact('customer', { result: 'REACHED_PTP', ptp: { amount: '1500', date: '2026-10-24' } })
+    expect(fetch.mock.calls[3][1].headers['If-Match']).toBe('8')
+    await api.addCaseNote('other', { note: 'previously opened edit' })
+    expect(fetch.mock.calls[4][1].headers['If-Match']).toBe('case:other:4')
+  })
+
+  it('retains the open case fence when the first contact is refused', async () => {
+    const detail = response({ customer: { uid: 'customer' } }, 7)
+    detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'
+      : name === 'x-volt-state-version' ? '7' : null
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(detail)
+      .mockResolvedValueOnce(response({ code: 'contact_locked' }, 9, 409))
+      .mockResolvedValueOnce(response({}, 10))
+    await api.caseDetail('customer')
+    await expect(api.logContact({ customer_uid: 'customer' })).rejects.toMatchObject({ status: 409 })
+    await api.addCaseNote('customer', { note: 'existing edit' })
+    expect(fetch.mock.calls[2][1].headers['If-Match']).toBe('case:customer:2')
+  })
+
+  it('starts a later contact from that foreground case read instead of an earlier contact collection version', async () => {
+    const fetch = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(response({ customer: { uid: 'first' } }, 7))
+      .mockResolvedValueOnce(response({ contact_id: 1 }, 8, 201))
+      .mockResolvedValueOnce(response({ contact: {} }, 9, 201))
+      .mockResolvedValueOnce(response({ customer: { uid: 'second' } }, 9))
+      .mockResolvedValueOnce(response({ contact_id: 2 }, 10, 201))
+    await api.caseDetail('first')
+    await api.logContact({ customer_uid: 'first' })
+    await api.logCaseContact('first', { result: 'NO_ANSWER' })
+    await api.caseDetail('second')
+    await api.logContact({ customer_uid: 'second' })
+    expect(fetch.mock.calls[4][1].headers['If-Match']).toBe('9')
+  })
+
   it('keeps attachment and service-ticket commands on the numeric global version', async () => {
     const detail = response({ customer: { uid: 'customer' } }, 7)
     detail.headers.get = (name) => name === 'x-volt-case-version' ? 'case:customer:2'

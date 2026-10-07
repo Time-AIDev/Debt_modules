@@ -1,7 +1,9 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import create_engine, text
+from sqlalchemy.exc import OperationalError
 
 from app import db, debt_imports, errors, migrate
 from tests.test_debt_import_profiles import customer, lease, workbook
@@ -77,6 +79,31 @@ def test_changed_source_epoch_invalidates_the_reviewed_preview(durable):
     with pytest.raises(errors.Problem) as failure:
         debt_imports.apply(preview["uid"], command(preview), "Manager", "MANAGER")
     assert failure.value.code == "debt_import_preview_stale"
+
+
+def test_proof_getters_do_not_wait_for_import_writer_but_publication_still_does(durable, monkeypatch):
+    preview = stage()
+    engine = db.engine()
+    def bounded_connection():
+        conn = engine.connect()
+        conn.execute(text("set lock_timeout='100ms'"))
+        conn.commit()
+        return conn
+    monkeypatch.setattr(db, "connect", bounded_connection)
+    durable.execute(text("select pg_advisory_xact_lock(:key)"), {"key": debt_imports.LOCK})
+    # A writer's uncommitted changes stay invisible through MVCC. Pure getters
+    # must remain readable while its publication lock is held on another socket.
+    assert debt_imports.get_preview(preview["uid"], "Manager")["state"] == "STAGED"
+    assert debt_imports.current_customers() == []
+    assert debt_imports.supplements() == {}
+    assert debt_imports.observations(customer().uid) == []
+    assert debt_imports.installation_for("synthetic-contract") is None
+    contract = SimpleNamespace(uid="synthetic-contract", customer_uid=customer().uid, product="LEASE")
+    assert debt_imports.pipeline_installation_for(contract) is None
+    with pytest.raises(OperationalError) as failure:
+        stage()
+    assert failure.value.orig.sqlstate == "55P03"
+    durable.rollback()
 
 
 def test_payment_components_survive_invoice_writer_and_book_read(durable):

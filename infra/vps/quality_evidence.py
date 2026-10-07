@@ -244,11 +244,12 @@ def validate_check(kind, data, now, production_fingerprint):
 
 
 def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
-                    production_fingerprint=None):
+                    production_fingerprint=None, defer_offsite_recovery=False):
     """Load checksum-bound private artifacts; return only non-sensitive outcomes."""
     now = now or datetime.now(timezone.utc)
     production_fingerprint = production_fingerprint or local_machine_fingerprint()
     try:
+        require(type(defer_offsite_recovery) is bool, "Offsite deferral must be an explicit boolean policy")
         bundle = json.loads(reader(Path(path)))
         require(bundle.get("format") == "volt-quality-bundle-v1", "Quality bundle format is unsupported")
         require(bundle.get("revision") == revision and bundle.get("images") == {"api": api_image, "web": web_image},
@@ -258,6 +259,7 @@ def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
         checks = bundle.get("checks", {})
         require(set(checks) == set(REQUIRED), "All mandatory release quality checks are required")
         outcomes = {}
+        deferred = []
         for kind in REQUIRED:
             reference = checks[kind]
             artifact_path = Path(reference["path"])
@@ -270,12 +272,26 @@ def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
                     "Quality artifact differs from release revision/images: " + kind)
             artifact_age = (now - timestamp(data.get("verified_at_utc"))).total_seconds()
             require(0 <= artifact_age <= 86400, "Quality artifact is stale: " + kind)
-            validate_check(kind, data, now, production_fingerprint)
-            outcomes[kind] = {"passed": True, "artifact_sha256": reference["sha256"]}
-        return {"passed": True, "revision": revision, "checks": outcomes,
+            if kind == "offsite_recovery" and data.get("status") == "deferred":
+                require(defer_offsite_recovery is True, "Offsite recovery deferral requires explicit release authorization")
+                require(data.get("passed") is False and data.get("scope") == "offsite_recovery"
+                        and data.get("authorization") == "explicit_user_request"
+                        and data.get("preparation_only") is not True
+                        and data.get("candidate_binding_pending_final_freeze") is not True
+                        and isinstance(data.get("reason"), str) and bool(data["reason"].strip())
+                        and len(data["reason"]) <= 512,
+                        "Offsite recovery deferral is incomplete")
+                deferred.append(kind)
+                outcomes[kind] = {"passed": False, "status": "deferred", "artifact_sha256": reference["sha256"]}
+            else:
+                validate_check(kind, data, now, production_fingerprint)
+                outcomes[kind] = {"passed": True, "artifact_sha256": reference["sha256"]}
+        return {"passed": not deferred, "eligible_for_rollout": True, "revision": revision, "checks": outcomes,
+                "deferred": deferred,
                 "policy": {"latency_policy": LATENCY_POLICY, "read_write_p95_ms": LATENCY_LIMIT_MS, "business_errors_max": .01,
                            "checks_min": .99, "max_vus": 25, "soak_seconds": 900,
-                           "rpo_hours": 24, "rto_hours": 4}}
+                           "offsite_recovery": "deferred" if deferred else "required",
+                           "rpo_hours": None if deferred else 24, "rto_hours": None if deferred else 4}}
     except QualityError:
         raise
     except (OSError, ValueError, TypeError, KeyError, AttributeError):

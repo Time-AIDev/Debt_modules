@@ -1,5 +1,6 @@
 """Public reports discard sensitive source fields and never inflate acceptance."""
 import importlib.util
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import zipfile
@@ -68,6 +69,30 @@ def test_unexecuted_scenarios_prevent_scoring_even_with_claimed_completion(tmp_p
     data = report.build_aggregate(fixture(tmp_path), REV, qa_execution={"revision": REV, "execution_status": "completed",
         "score": 10, "passed": 10, "skipped": 0, "unexecuted": 7})
     assert data["ux"]["usability_estimate_score"] is None
+
+
+def test_offsite_deferral_report_keeps_local_restore_alerts_and_external_inputs(tmp_path):
+    evidence = fixture(tmp_path)
+    images = {"api": "sha256:" + "1" * 64, "web": "sha256:" + "2" * 64}
+    progress = {"candidate_revision": REV, "candidate_api_image": images["api"], "candidate_web_image": images["web"],
+                "external_inputs_pending": list(report.INPUTS)}
+    write(evidence / "progress.json", progress)
+    decision = {"revision": REV, "images": images, "status": "deferred", "passed": False,
+                "verified_at_utc": datetime.now(timezone.utc).isoformat(), "scope": "offsite_recovery",
+                "authorization": "explicit_user_request", "reason": "PRIVATE-NOTE"}
+    data = report.build_aggregate(evidence, REV, offsite_deferral=decision)
+    policy = data["offsite_recovery_policy"]
+    assert policy["status"] == "deferred" and policy["restore_certified"] is False
+    assert policy["local_restore_required"] is True and policy["real_alerts_required"] is True
+    assert data["pending_external_inputs"] == list(report.INPUTS[3:])
+    assert "PRIVATE-NOTE" not in json.dumps(data)
+    assert data["deployment_certified"] is False and data["completion_certified"] is False
+    for change in ({"revision": OLD}, {"passed": True}, {"preparation_only": True},
+                   {"images": {"api": images["api"], "web": None}}, {"reason": " "},
+                   {"verified_at_utc": (datetime.now(timezone.utc) - timedelta(hours=25)).isoformat()}):
+        actual = report.build_aggregate(evidence, REV, offsite_deferral={**decision, **change})
+        assert actual["offsite_recovery_policy"]["status"] == "required"
+        assert actual["pending_external_inputs"] == list(report.INPUTS)
 
 
 def test_full_score_requires_completed_checkpoints_and_no_open_defects(tmp_path):

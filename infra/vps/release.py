@@ -509,10 +509,13 @@ class Release:
         try:
             outcome = validate_bundle(path, revision=self.args.revision,
                                       api_image=self.args.api_image, web_image=self.args.web_image,
+                                      defer_offsite_recovery=getattr(self.args, "defer_offsite_recovery", False),
                                       reader=lambda file: read_private(file, max_bytes=16 * 1024 * 1024))
         except QualityError as exc:
             raise ReleaseError(str(exc)) from None
         self.evidence["checks"]["quality"] = outcome
+        if outcome.get("deferred"):
+            self.evidence["remaining_risks"].append("Offsite backup/recovery deferred by explicit user request; external RPO/RTO unverified")
 
     def image_schema_version(self, image):
         result = self.run_command(["docker", "run", "--rm", "--network", "none", "--read-only",
@@ -652,6 +655,8 @@ def arguments(argv=None):
     parser.add_argument("--rollback-api-image")
     parser.add_argument("--browser-evidence", type=Path)
     parser.add_argument("--quality-evidence", type=Path)
+    parser.add_argument("--defer-offsite-recovery", action="store_true",
+                        help="Allow only an explicit, exact-candidate offsite recovery deferral; all other gates remain required")
     parser.add_argument("--go-live", action="store_true")
     parser.add_argument("--check", action="store_true", help="Verify preflight without changing production configuration or containers")
     args = parser.parse_args(argv)
