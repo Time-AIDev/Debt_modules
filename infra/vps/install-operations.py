@@ -12,7 +12,7 @@ import tempfile
 SOURCE = Path(__file__).resolve().parent
 MODULES = ('healthcheck.py', 'incident_alerts.py', 'external-watchdog.py', 'backup_evidence.py', 'backup-export.py',
            'backup-prune.py', 'restore-drill.py', 'resume-writers.py', 'recovery_support.py',
-           'package-release.py', 'cold-restore.py', 'restore-stack.py', 'offsite-backup.py', 'quality_evidence.py', 'backup.sh')
+           'package-release.py', 'cold-restore.py', 'restore-stack.py', 'offsite-backup.py', 'quality_evidence.py', 'backup_runtime.py', 'backup.sh')
 ENTRYPOINTS = {'volt-debt-health': ('python3', 'healthcheck.py'),
               'volt-debt-backup': ('bash', 'backup.sh'),
               'volt-debt-resume-writers': ('python3', 'resume-writers.py'),

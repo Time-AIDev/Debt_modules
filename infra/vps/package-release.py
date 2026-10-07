@@ -31,9 +31,9 @@ def package(args):
             os.chmod(temporary/'package.log', 0o600)
             commands = Commands(log)
             root = Path(args.source).resolve(strict=True)
-            actual = commands.run(['git', 'rev-parse', 'HEAD'], cwd=root, capture=True, timeout=30)
+            actual = commands.run(['git', 'rev-parse', '--verify', args.revision+'^{commit}'], cwd=root, capture=True, timeout=30)
             if actual != args.revision or commands.run(['git', 'status', '--porcelain', '--untracked-files=no'], cwd=root, capture=True, timeout=30):
-                raise RecoveryError('Package source must be the clean pinned commit')
+                raise RecoveryError('Package requires the pinned commit in a clean source repository')
             for name, image in images.items():
                 commands.image(image, revision=args.revision if name in ('api', 'web') else None, postgres=name == 'db')
             scanner = json.loads(commands.run(['docker', 'inspect', args.scanner_container], capture=True, timeout=30))[0]

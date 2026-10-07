@@ -279,3 +279,55 @@ def test_scheduled_offsite_configuration_requires_real_private_provider_configur
     (tmp_path/'remote.conf').write_text('simulation'); (tmp_path/'remote.conf').chmod(0o644)
     write_json(config, {'remote': 'offsite:backups', 'recipient': 'age1public', 'rclone_config': str(tmp_path/'remote.conf')})
     with pytest.raises(RecoveryError): offsite.configuration(config)
+
+
+def test_export_rejects_release_images_that_differ_from_captured_runtime(monkeypatch, tmp_path):
+    release = bundle(tmp_path/'release1')
+    backup = tmp_path/'backup1'; backup.mkdir(mode=0o700)
+    captured = now()-timedelta(hours=1)
+    (backup/'COMPLETE').write_text(captured.isoformat()+'\n')
+    (backup/'restore-evidence.json').write_text(json.dumps({'status': 'passed'}))
+    (backup/'SHA256SUMS').write_text('fixture manifest; no transport should occur')
+    (backup/'manifest.txt').write_text('source_commit='+REVISION+'\n')
+    (backup/'database-image-id.txt').write_text(IMAGES['db']+'\n')
+    write_json(backup/'runtime-binding.json', {'format': 'volt-backup-runtime-v1',
+               'revision': REVISION, 'images': dict(IMAGES, api='sha256:'+'0'*64)})
+    monkeypatch.setenv('BACKUP_AGE_RECIPIENT', 'age1simulationpublicrecipient')
+    monkeypatch.setenv('BACKUP_REMOTE', 'offsite:backups')
+    monkeypatch.setattr(exporter, 'remote_backend', lambda value: 's3')
+    monkeypatch.setattr(exporter.subprocess, 'run', lambda *a, **kw: pytest.fail('must fail before transfer'))
+    with pytest.raises(ValueError, match='Captured backup runtime'):
+        exporter.export(backup, release)
+
+
+def test_scheduled_export_packages_captured_images_without_rediscovering_later_runtime(monkeypatch, tmp_path):
+    """Only sequencing is simulated; this cannot certify an offsite gate."""
+    backup_root = tmp_path/'backups'; backup_root.mkdir(mode=0o700)
+    backup = backup_root/'backup1'
+    remote = tmp_path/'rclone.conf'; remote.write_text('simulated private provider'); remote.chmod(0o600)
+    config = tmp_path/'config.json'
+    write_json(config, {'remote': 'offsite:backups', 'recipient': 'age1public',
+                       'rclone_config': str(remote), 'status_path': str(tmp_path/'state/status.json'),
+                       'source': str(tmp_path/'new-candidate-checkout')})
+    calls = []
+    class Runner:
+        def __init__(self, log): pass
+        def run(self, arguments, **kwargs):
+            calls.append(arguments)
+            if arguments[0] == 'docker': pytest.fail('must use captured binding, not rediscover runtime')
+            if arguments[:2] == ['systemctl', 'start']:
+                backup.mkdir(mode=0o700); (backup/'COMPLETE').write_text(now().isoformat())
+                write_json(backup/'runtime-binding.json', {'format': 'volt-backup-runtime-v1',
+                           'revision': REVISION, 'images': IMAGES})
+            elif 'package-release.py' in arguments[1]:
+                bundle(Path(arguments[arguments.index('--output')+1]))
+            elif 'backup-export.py' in arguments[1]:
+                write_json(backup/'recovery-point.json', {'captured_at_utc': now().isoformat(),
+                           'archive_sha256': '1'*64, 'revision': REVISION})
+    monkeypatch.setattr(offsite, 'Commands', Runner)
+    monkeypatch.setattr(offsite.shutil, 'which', lambda name: '/simulated/'+name)
+    result = offsite.run(config, backup_root)
+    command = next(value for value in calls if len(value) > 1 and 'package-release.py' in value[1])
+    assert command[command.index('--revision')+1] == REVISION
+    for name, image in IMAGES.items(): assert command[command.index('--'+name+'-image')+1] == image
+    assert result['status'] == 'passed' and result['revision'] == REVISION

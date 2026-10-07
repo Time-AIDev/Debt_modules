@@ -76,6 +76,10 @@ Each completed backup contains:
   restarting writers. It contains metric names and counts, not customer values.
 - `containers.txt` and `database-image-id.txt`: image/container inventory without
   environment variables.
+- `runtime-binding.json`: immutable API/worker/web release identity and captured
+  service image IDs. The manifest and deployment files use that deployed commit,
+  even when the checkout contains a newer candidate. Mixed application releases
+  or missing committed source fail before writers are paused.
 - `SHA256SUMS`, `BACKUP_FORMAT` and `COMPLETE`: checksums, fixed format marker and
   UTC completion timestamp for monitoring the latest completed backup's age.
 
@@ -87,6 +91,11 @@ certificates and ClamAV signature volume are omitted; reissue certificates after
 DNS/network checks and redownload scanner signatures. The application source and
 container image layers are not archived; retain the source commit and release
 images separately, including any local source changes.
+
+Release packaging uses `git archive` of the pinned deployed commit. A clean
+checkout may be at a different revision; the selected commit must exist locally
+and match both application image labels. Scheduled offsite exports use the
+captured backup binding rather than images discovered after writers restart.
 
 ## Restore drill: isolated instance only
 

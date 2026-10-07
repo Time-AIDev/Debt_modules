@@ -2,13 +2,13 @@
 """Scheduled coordinated capture, restore check, release package and encrypted S3 export."""
 import argparse
 import fcntl
-import json
 import os
 from pathlib import Path
 import shutil
 
 from recovery_support import (Commands, RecoveryError, now, private_directory, private_file,
                               read_json, release_bundle, timestamp, write_json)
+from backup_runtime import recorded_binding
 
 HERE = Path(__file__).resolve().parent
 
@@ -54,12 +54,8 @@ def run(path, backup_root=Path('/srv/volt-debt-backups')):
             status['stage'] = 'local_restore'; write_json(status_path, status)
             commands.run(['/usr/bin/python3', str(HERE/'restore-drill.py'), '--backup', str(backup)], timeout=2400)
             status['stage'] = 'release_package'; write_json(status_path, status)
-            current = json.loads(commands.run(['docker', 'inspect', *['volt-debt-'+name+'-1' for name in ('api', 'worker', 'web', 'db', 'scanner', 'edge')]], capture=True, timeout=30))
-            by_name = {value['Name'].rsplit('-', 2)[-2]: value for value in current}
-            images = {name: by_name[name]['Image'] for name in ('api', 'web', 'db', 'scanner', 'edge')}
-            revision = by_name['api']['Config'].get('Labels', {}).get('org.opencontainers.image.revision')
-            if by_name['worker']['Image'] != images['api']:
-                raise RecoveryError('API and worker release images differ')
+            binding = recorded_binding(backup/'runtime-binding.json')
+            images, revision = binding['images'], binding['revision']
             bundles = Path(settings.get('bundle_root', str(backup_root/'release-bundles')))
             private_directory(bundles, create=True)
             bundle = bundles/('release-'+str(revision))

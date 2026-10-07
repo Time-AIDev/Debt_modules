@@ -6,7 +6,6 @@ this VPS. An unset destination is a failure, never a successful backup export.
 """
 import argparse
 import configparser
-import hashlib
 import ipaddress
 import json
 import os
@@ -21,6 +20,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from backup_evidence import REMOTE_BACKENDS, hashes, sha
 from recovery_support import NAME, fingerprint, release_bundle, timestamp, write_json
+from backup_runtime import recorded_binding
 
 
 def remote_backend(destination):
@@ -82,6 +82,10 @@ def export(backup, bundle=None):
         manifest = dict(line.split('=', 1) for line in (backup/'manifest.txt').read_text().splitlines())
         if manifest.get('source_commit') != release['revision'] or (backup/'database-image-id.txt').read_text().strip() != release['images']['db']:
             raise ValueError('Backup source/database image differs from the release bundle')
+        if (backup/'runtime-binding.json').exists():
+            binding = recorded_binding(backup/'runtime-binding.json')
+            if binding['revision'] != release['revision'] or binding['images'] != release['images']:
+                raise ValueError('Captured backup runtime differs from the release bundle')
         if release['production_host_fingerprint'] != fingerprint():
             raise ValueError('Release bundle was not captured on this backup source host')
         if manifest.get('consistency') != 'database-and-objects_writers-stopped':
@@ -101,7 +105,7 @@ def export(backup, bundle=None):
                 arguments += ['-C',str(bundle.parent),bundle.name]
             archive = subprocess.Popen(arguments,stdout=subprocess.PIPE)
             try:
-                result = subprocess.run(['age','-r',recipient],stdin=archive.stdout,stdout=output,check=True,timeout=1800)
+                subprocess.run(['age','-r',recipient],stdin=archive.stdout,stdout=output,check=True,timeout=1800)
                 archive.stdout.close()
                 if archive.wait(timeout=30) != 0: raise RuntimeError('backup packaging failed')
             finally:

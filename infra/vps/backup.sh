@@ -10,6 +10,7 @@ readonly BACKUP_ROOT=/srv/volt-debt-backups
 readonly OBJECTS_ROOT=/srv/volt-debt-data/objects
 readonly CONFIG_ROOT=/etc/volt-debt
 readonly QUIESCE_WRITERS=${QUIESCE_WRITERS:-1}
+readonly SCRIPT_ROOT=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 
 stage=preflight
 backup_dir=
@@ -60,7 +61,7 @@ trap 'exit 143' TERM
 
 ((EUID == 0)) || fail 'Run as root.'
 [[ "$QUIESCE_WRITERS" == 0 || "$QUIESCE_WRITERS" == 1 ]] || fail 'QUIESCE_WRITERS must be 0 or 1.'
-for command in docker flock install mktemp realpath stat date tar sha256sum find awk timeout; do
+for command in docker git python3 flock install mktemp realpath stat date tar sha256sum find awk timeout; do
     command -v "$command" >/dev/null || fail "Missing command: $command"
 done
 # This lock serializes manual and scheduled backups; deployments should honor it.
@@ -101,6 +102,8 @@ docker exec "$db_id" pg_isready --username=debt_migrate --dbname=debt \
 docker ps --filter "label=com.docker.compose.project=$PROJECT" \
     --format '{{.ID}} {{.Names}} {{.Image}} {{.Status}}' >"$backup_dir/containers.txt"
 docker inspect --format '{{.Image}}' "$db_id" >"$backup_dir/database-image-id.txt"
+source_commit=$(python3 "$SCRIPT_ROOT/backup_runtime.py" --source "$SOURCE_ROOT" --output "$backup_dir")
+[[ "$source_commit" =~ ^[0-9a-f]{40}$ ]] || fail 'Deployed release binding is unavailable.'
 
 started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 consistency=database-transactional_objects-best-effort
@@ -177,13 +180,6 @@ stage=deployment-config
 timeout --signal=TERM --kill-after=30s 2m \
     tar --create --gzip --numeric-owner --file="$backup_dir/config.tar.gz" \
     --directory=/etc volt-debt
-install -m 0600 "$SOURCE_ROOT/infra/vps/compose.yaml" "$backup_dir/compose.yaml"
-install -m 0600 "$SOURCE_ROOT/infra/vps/Caddyfile" "$backup_dir/Caddyfile"
-source_commit=unavailable
-if command -v git >/dev/null; then
-    source_commit=$(git -C "$SOURCE_ROOT" rev-parse HEAD 2>/dev/null) || source_commit=unavailable
-fi
-[[ "$source_commit" == unavailable || "$source_commit" =~ ^[0-9a-f]{40,64}$ ]] || source_commit=unavailable
 cat >"$backup_dir/manifest.txt" <<EOF
 format=volt-debt-backup-v1
 project=$PROJECT
@@ -214,7 +210,7 @@ find "$backup_dir" -type f -exec chmod 0600 {} +
 (
     cd "$backup_dir"
     sha256sum BACKUP_FORMAT COMPLETE database.dump globals.sql objects.tar.gz config.tar.gz \
-        compose.yaml Caddyfile containers.txt database-image-id.txt database-counts.tsv manifest.txt >SHA256SUMS
+        compose.yaml Caddyfile runtime-binding.json containers.txt database-image-id.txt database-counts.tsv manifest.txt >SHA256SUMS
     sha256sum --check --status SHA256SUMS
 )
 chmod 0600 "$backup_dir/SHA256SUMS"

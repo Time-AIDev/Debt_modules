@@ -2,7 +2,6 @@
 """Download, decrypt and restore a complete recovery point on an independent host."""
 import argparse
 import importlib.util
-import json
 import os
 from pathlib import Path
 import re
@@ -12,6 +11,7 @@ import tempfile
 from recovery_support import (Commands, IMAGE, NAME, REVISION, RecoveryError, checksums, extract,
                               fingerprint, now, private_directory, private_file, read_json,
                               release_bundle, sha, timestamp, write_json)
+from backup_runtime import recorded_binding
 
 HERE = Path(__file__).resolve().parent
 
@@ -112,6 +112,10 @@ def restore(args):
                     or timestamp(snapshot['started_at_utc']) != timestamp(point['captured_at_utc'])):
                 raise RecoveryError('Backup snapshot differs from the recovery point')
             release = release_bundle(bundle, revision=args.revision, images=point['images'])
+            if (backup/'runtime-binding.json').exists():
+                binding = recorded_binding(backup/'runtime-binding.json')
+                if binding['revision'] != args.revision or binding['images'] != point['images']:
+                    raise RecoveryError('Recovered runtime differs from the captured backup')
             if (release['production_host_fingerprint'] != args.production_fingerprint
                     or (backup/'database-image-id.txt').read_text().strip() != point['images']['db']):
                 raise RecoveryError('Backup and source images are not bound to the same source')
