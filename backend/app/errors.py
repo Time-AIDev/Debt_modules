@@ -997,12 +997,20 @@ def recovery_strategy_unavailable(strategy, decision=None):
     )
 
 
-def recovery_not_open(status):
+def recovery_not_open(status, *, action="change_strategy"):
+    detail = "A recovery in status %s cannot change strategy; open a new one instead." % status
+    message_th = "การเรียกคืนนี้ไม่อยู่ในสถานะเปิดอยู่ จึงเปลี่ยนแนวทางไม่ได้"
+    if action == "record_money":
+        detail = "A recovery in status %s cannot accept a manual payment; payments require IN_PROGRESS." % status
+        message_th = "บันทึกยอดรับคืนได้เฉพาะรายการที่อยู่ระหว่างดำเนินการ กรุณาตรวจสอบสถานะล่าสุด"
+    elif action == "resolve":
+        detail = "A recovery in status %s cannot be resolved again; confirmation requires IN_PROGRESS." % status
+        message_th = "ยืนยันผลการเรียกคืนได้เฉพาะรายการที่อยู่ระหว่างดำเนินการ กรุณาตรวจสอบประวัติรายการนี้"
     return Problem(
         code="recovery_not_open", status=409,
         title="That recovery is no longer open",
-        detail="A recovery in status %s cannot change strategy; open a new one instead." % status,
-        message_th="การเรียกคืนนี้ไม่อยู่ในสถานะเปิดอยู่ จึงเปลี่ยนแนวทางไม่ได้",
+        detail=detail,
+        message_th=message_th,
         error_id="DEBT-NPL-0433",
         extensions={"status": status},
     )

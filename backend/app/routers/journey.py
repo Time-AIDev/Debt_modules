@@ -925,7 +925,7 @@ def advance_cash_case(uid: str, body: dict = Body(...), x_volt_role: str = Heade
         rec = journey.make_recovery(state, uid, case["contract_uid"], strategy, EPC)
         case["recovery_uid"] = rec["uid"]
         if strategy == "REPOSSESSION":
-            found = journey.contract_by_uid(case["contract_uid"])
+            journey.contract_by_uid(case["contract_uid"])
             journey.make_lot(state, rec["uid"], case["contract_uid"],
                              "RP-%s" % case["contract_uid"], expected_count=10, watt=5000)
     case["stage"] = to_stage
@@ -1693,6 +1693,8 @@ def record_recovery(uid: str, body: dict = Body(...)):
     rec = state.recovery_cases.get(uid)
     if rec is None:
         raise errors.not_found("recovery case")
+    if rec.get("status") != "IN_PROGRESS":
+        raise errors.recovery_not_open(rec.get("status"), action="record_money")
     amount = _positive_amount((body or {}).get("amount"), "/amount")
     rec["recoveries"].append({"amount": str(amount),
                               "on": str(settings.business_date),
@@ -1712,6 +1714,8 @@ def resolve_recovery(uid: str, body: dict = Body(...)):
     rec = state.recovery_cases.get(uid)
     if rec is None:
         raise errors.not_found("recovery case")
+    if rec.get("status") != "IN_PROGRESS":
+        raise errors.recovery_not_open(rec.get("status"), action="resolve")
     outcome = (body or {}).get("outcome")
     if outcome not in journey.RECOVERY_OUTCOMES:
         raise errors.decision_unknown(outcome, journey.RECOVERY_OUTCOMES)
