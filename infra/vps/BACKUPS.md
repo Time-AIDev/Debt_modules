@@ -100,6 +100,14 @@ The scanner signature capture uses its immutable captured container ID. Bundle
 directories include a hash of all five image IDs so infrastructure image updates
 at the same application revision create a new bundle and retain the earlier one.
 
+Captured older application images without `--probe-only` use the operations
+runner's `recovery_worker_probe.py` inside the same pinned image. It validates the
+isolated staging policy and only calls the captured worker's heartbeat function;
+it does not schedule, execute jobs or run object retention. Evidence records the
+compatibility entry's checksum. Business and outbox fingerprints must remain
+unchanged across readiness checks. Install the reviewed operations tools on the
+independent recovery host before the drill.
+
 ## Restore drill: isolated instance only
 
 The checked-in runner automates a disposable container, checksum verification,

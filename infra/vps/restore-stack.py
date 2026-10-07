@@ -7,7 +7,7 @@ import secrets
 import time
 import uuid
 
-from recovery_support import Commands, RecoveryError, docker_env, parse_env
+from recovery_support import Commands, RecoveryError, docker_env, parse_env, sha
 
 COUNT_SQL = """SELECT 'schema_version',version::bigint FROM app.schema_version WHERE singleton=true
 UNION ALL SELECT 'app.business_record',count(*) FROM app.business_record
@@ -96,12 +96,29 @@ class RestoredStack:
             raise RecoveryError('Restored database is not PostgreSQL 16')
         return counts
 
+    def worker_probe_arguments(self, api_args, native):
+        if native:
+            return ([*api_args[:-1], '--memory', '1800m', api_args[-1],
+                     'python', '-m', 'app.local_worker', '--probe-only'],
+                    {'kind': 'native', 'sha256': None})
+        helper = self.directory/'worker-probe.py'
+        helper.write_bytes((Path(__file__).resolve().parent/'recovery_worker_probe.py').read_bytes())
+        # The containing recovery directory is private. The captured API UID10001
+        # needs read access to this code-only single-file mount.
+        helper.chmod(0o644)
+        return ([*api_args[:-1], '--memory', '1800m',
+                 '--volume', str(helper)+':/app/recovery-worker-probe.py:ro',
+                 api_args[-1], 'python', '/app/recovery-worker-probe.py'],
+                {'kind': 'compatibility_heartbeat', 'sha256': sha(helper)})
+
     def application(self, config, objects, signatures, revision):
-        # Fail before starting a worker if the candidate lacks the explicit safe probe.
+        # Older captured releases lack --probe-only and would silently run jobs
+        # if given that flag. Use a reviewed heartbeat-only entry for those images.
         probe = self.commands.run(['docker', 'run', '--rm', '--network', 'none', self.images['api'],
                                   'python', '-c', "from pathlib import Path; print('--probe-only' in Path('/app/app/local_worker.py').read_text())"], capture=True)
-        if probe != 'True':
-            raise RecoveryError('Recovery image must support the staging-only probe worker')
+        if probe not in ('True', 'False'):
+            raise RecoveryError('Recovery image probe capability could not be verified')
+        compatibility_probe = probe == 'False'
         runtime = parse_env(config/'api.env')
         runtime_password = secrets.token_hex(32)
         self.sql("ALTER ROLE debt_api WITH LOGIN PASSWORD '"+runtime_password+"';")
@@ -112,6 +129,7 @@ class RestoredStack:
         runtime.update(ENV='stg', DEPLOYMENT_ENV='stg', AUTH_MODE='on', AUTH_ALLOW_TEST_ACCOUNTS='false',
                        AUTH_SESSION_SECRET=secrets.token_hex(48), PROD_GO_LIVE_ENABLED='false',
                        PEAK_OUTBOUND_ENABLED='false', CRM_WON_ONLY='true', VOLT_SHARED_STATE_ENABLED='true',
+                       VOLT_RECOVERY_READ_ONLY='true',
                        TASK_QUEUE_BACKEND='postgres', DATABASE_URL='postgresql+psycopg://debt_api:'+runtime_password+'@db/debt',
                        OBJECT_STORAGE_BACKEND='filesystem', OBJECT_STORAGE_ROOT='/private-objects',
                        CLAMAV_HOST='scanner', CLAMAV_PORT='3310', REQUIRE_DEPENDENCY_READINESS='true')
@@ -129,8 +147,8 @@ class RestoredStack:
                                 'chown -R clamav:clamav /var/lib/clamav; exec clamd --foreground=true --config-file=/etc/clamav/recovery.conf'])
         api_args = ['--memory', '1g', '--env-file', str(self.directory/'api.env'),
                     '--volume', str(objects)+':/private-objects', '--security-opt', 'no-new-privileges:true', self.images['api']]
-        worker = self.create('worker', [*api_args[:-1], '--memory', '1800m', api_args[-1],
-                                         'python', '-m', 'app.local_worker', '--probe-only'])
+        worker_args, worker_probe = self.worker_probe_arguments(api_args, not compatibility_probe)
+        worker = self.create('worker', worker_args)
         api = self.create('api', api_args)
         self.retry(['docker', 'exec', worker, 'python', '-m', 'app.local_worker', '--healthcheck'], timeout=300)
         check = "import json,urllib.request; r=urllib.request.urlopen('http://127.0.0.1:8080/readyz',timeout=3); assert r.status==200 and json.load(r)['status']=='ready'; print('ready')"
@@ -140,7 +158,7 @@ class RestoredStack:
         edge_config = self.directory/'Caddyfile'
         edge_config.write_text('http://:8080 {\n handle /api/* {\n uri strip_prefix /api\n reverse_proxy api:8080\n }\n handle {\n reverse_proxy web:8080\n }\n}\n')
         edge_config.chmod(0o600)
-        edge = self.create('edge', ['--memory', '128m', '--volume', str(edge_config)+':/etc/caddy/Caddyfile:ro', self.images['edge']])
+        self.create('edge', ['--memory', '128m', '--volume', str(edge_config)+':/etc/caddy/Caddyfile:ro', self.images['edge']])
         edge_check = "import json,urllib.request; r=urllib.request.urlopen('http://edge:8080/api/readyz',timeout=3); assert r.status==200 and json.load(r)['status']=='ready'; print('ready')"
         self.retry(['docker', 'exec', api, 'python', '-c', edge_check])
         auth_check = "import json,urllib.request; r=json.load(urllib.request.urlopen('http://edge:8080/api/v1/auth/config',timeout=3)); assert r['mode']=='on' and r['password_enabled'] is False and r.get('google_client_id'); print('auth-on')"
@@ -161,7 +179,8 @@ class RestoredStack:
         if network.get('Internal') is not True:
             raise RecoveryError('Recovery network is not isolated')
         return {'api': 'ready', 'worker': 'probe-only-healthy', 'scanner': 'ping-via-readiness',
-                'web': 'ready', 'edge': 'isolated-proxy-ready', 'network': 'internal', 'published_ports': []}
+                'web': 'ready', 'edge': 'isolated-proxy-ready', 'network': 'internal', 'published_ports': [],
+                'worker_probe': worker_probe['kind'], 'worker_probe_sha256': worker_probe['sha256']}
 
     def cleanup(self):
         errors = []
