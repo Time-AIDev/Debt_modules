@@ -396,21 +396,24 @@ class ProductionUnitMiddleware:
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
             control_request = independent_control(scope)
-            if not mutation_request:
+            if not mutation_request and not book_exclusive:
                 await run_in_threadpool(conn.execute, text("set transaction isolation level repeatable read"))
             capacity = bool(await run_in_threadpool(lambda: conn.execute(text(
                 "select to_regclass('app.projection_current') is not null and "
                 "coalesce((select version from app.schema_version where singleton),0)>=3")).scalar_one()))
             scoped_customer = customer_scope(scope) if capacity else None
-            if mutation_request and not control_request:
-                if scoped_customer:
+            if not control_request and (mutation_request or book_exclusive):
+                if scoped_customer and not book_exclusive:
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock_shared(:k)"), {"k": LOCK_KEY})
+                else:
+                    # Cold/date/code publication reads after the complete global
+                    # barrier under RC, including any writer it waited behind.
+                    await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
+                if scoped_customer:
                     await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(hashtextextended(:uid,0))"),
                                              {"uid": "volt-customer:" + scoped_customer})
                     from . import customer_transactions
                     await run_in_threadpool(customer_transactions.revalidate, conn, scope.get('volt_customer_plan'))
-                else:
-                    await run_in_threadpool(conn.execute, text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
             version = await run_in_threadpool(lambda: conn.execute(text(
                 "select version from app.business_version where singleton=true")).scalar_one())
             unit = {"conn": conn, "version": version, "subject": "anonymous",

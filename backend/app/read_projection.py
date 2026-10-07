@@ -139,6 +139,14 @@ def _rebuild(conn):
     from .config import settings
     from .routers.today import _legacy_workbook
     unit = _unit()
+    if unit.get("customer_uid") and unit.get("book_exclusive") is False:
+        from .production_runtime import BookRefreshRequired
+        raise BookRefreshRequired()
+    # All publication entrypoints use the same source barrier before BUILD_LOCK.
+    # A scoped/shared holder retries with a fresh exclusive unit above instead
+    # of upgrading its lock while other customer writers may still be running.
+    from .production_unit import LOCK_KEY
+    conn.execute(text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
     old_scope = unit.pop("customer_uid", None)
     unit["seeding"] = True
     # A global writer or cold-read build holds this transaction lock. Other readers
