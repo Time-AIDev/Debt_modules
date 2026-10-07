@@ -8,19 +8,36 @@ def test_api_launch_uses_shared_workers_and_preserves_process_signals(monkeypatc
     commands = []
     monkeypatch.setattr(serve_api.os, 'execvp', lambda executable, arguments: commands.append((executable, arguments)))
     monkeypatch.delenv('API_WORKERS', raising=False)
+    monkeypatch.delenv('API_WORKER_HEALTHCHECK_SECONDS', raising=False)
     monkeypatch.setenv('PORT', '8080')
     serve_api.main()
     assert commands == [('uvicorn', runtime_policy.api_command({'PORT': '8080'}))]
     for environment in ('dev', 'staging', 'production'):
-        assert runtime_policy.api_command(runtime_policy.environment_defaults(environment))[-2:] == ['--workers', '2']
+        command = runtime_policy.api_command(runtime_policy.environment_defaults(environment))
+        assert command[-2:] == ['--workers', '2']
+        assert command[command.index('--timeout-worker-healthcheck')+1] == '30'
     assert runtime_policy.api_command({'API_WORKERS': '1', 'PORT': '8000'})[-4:] == ['--port', '8000', '--workers', '1']
 
 
 @pytest.mark.parametrize('values', [{'API_WORKERS': '0'}, {'API_WORKERS': '5'}, {'API_WORKERS': 'bad'},
-                                    {'PORT': '0'}, {'PORT': '65536'}, {'PORT': 'bad'}])
+                                    {'PORT': '0'}, {'PORT': '65536'}, {'PORT': 'bad'},
+                                    {'API_WORKER_HEALTHCHECK_SECONDS': '0'},
+                                    {'API_WORKER_HEALTHCHECK_SECONDS': '4'},
+                                    {'API_WORKER_HEALTHCHECK_SECONDS': '121'},
+                                    {'API_WORKER_HEALTHCHECK_SECONDS': 'bad'}])
 def test_api_launch_refuses_invalid_process_settings(values):
     with pytest.raises(ValueError):
         runtime_policy.api_command(values)
+
+
+@pytest.mark.parametrize('value', ['5', '30', '120'])
+def test_worker_liveness_window_is_explicit_and_does_not_change_job_or_read_limits(value):
+    policy = runtime_policy.environment_defaults('production')
+    command = runtime_policy.api_command(dict(policy, API_WORKER_HEALTHCHECK_SECONDS=value))
+    assert command[command.index('--timeout-worker-healthcheck')+1] == value
+    assert policy['JOB_EXECUTION_TIMEOUT_SECONDS'] == '300'
+    assert policy['PROD_READ_CONCURRENCY'] == '4'
+    assert policy['API_WORKERS'] == '2'
 
 
 def test_release_environments_share_limits_and_durable_paths():

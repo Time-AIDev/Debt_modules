@@ -36,6 +36,13 @@ ClamAV needs at least 3 GiB RAM by its official recommendation; this server has
 limits are ceilings, not evidence that the host can satisfy concurrent peak demand.
 
 The two-CPU VPS API uses the shared `API_WORKERS=2` launcher, with
+`API_WORKER_HEALTHCHECK_SECONDS=30` passed explicitly to Uvicorn. This internal
+process liveness window gives Python worker boot more headroom than the implicit
+five-second default. It is a conservative mitigation: earlier child deaths were
+observed without a reproduced cause. Business read/write p95 remains below three
+seconds, the HTTP health guard remains two seconds, and job/readiness budgets are
+unchanged. Validate native startup cycles and real financial reads before release.
+The shared database connection policy uses
 `PROD_READ_CONCURRENCY=4` and pool size 5 + overflow 2 **per process** (up to 14 API
 connections in total). The API's 1 GiB memory limit covers both workers. Dev and
 staging containers use the same launcher/defaults. The separate single-CPU Cloud

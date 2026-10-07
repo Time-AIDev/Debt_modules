@@ -22,6 +22,7 @@ DEFAULTS = {
     "XLSX_MAX_SHARED_STRING_BYTES": "16777216", "PEAK_OUTBOUND_ENABLED": "false",
     "DB_POOL_SIZE": "5", "DB_MAX_OVERFLOW": "2",
     "API_WORKERS": "2",
+    "API_WORKER_HEALTHCHECK_SECONDS": "30",
     "REQUIRE_DEPENDENCY_READINESS": "true",
     "PROD_READ_CONCURRENCY": "4", "PROD_STORE_CACHE_ENABLED": "true",
     "PROD_STORE_CACHE_BYTES": "8388608", "PROD_STORE_CACHE_ENTRIES": "16",
@@ -39,11 +40,14 @@ def api_command(environ=None):
     try:
         workers = int(environ.get("API_WORKERS", DEFAULTS["API_WORKERS"]))
         port = int(environ.get("PORT", "8080"))
+        worker_health = int(environ.get("API_WORKER_HEALTHCHECK_SECONDS", DEFAULTS["API_WORKER_HEALTHCHECK_SECONDS"]))
     except (TypeError, ValueError):
-        raise ValueError("API_WORKERS and PORT must be integers") from None
-    if not 1 <= workers <= 4 or not 1 <= port <= 65535:
-        raise ValueError("API_WORKERS or PORT is outside its permitted range")
-    return ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", str(port), "--workers", str(workers)]
+        raise ValueError("API process, port and worker health settings must be integers") from None
+    if not 1 <= workers <= 4 or not 1 <= port <= 65535 or not 5 <= worker_health <= 120:
+        raise ValueError("API process, port or worker health setting is outside its permitted range")
+    return ["uvicorn", "app.main:app", "--host", "0.0.0.0",
+            "--timeout-worker-healthcheck", str(worker_health),
+            "--port", str(port), "--workers", str(workers)]
 
 
 def environment_defaults(environment, state="shared"):
