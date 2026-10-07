@@ -127,7 +127,8 @@ describe('complete payment evidence in the case', () => {
     await user.click(await screen.findByRole('tab', { name: 'ใบแจ้งหนี้และเงินเข้า' }))
     const invoices = screen.getByRole('table', { name: 'ใบแจ้งหนี้และเงินเข้า' })
     expect(within(invoices).getAllByText('RE-SPLIT')).toHaveLength(2)
-    expect(within(invoices).getByText('เงินส่วนนี้รวมอยู่ในยอดตามวันที่ใบแจ้งหนี้แล้ว')).toBeInTheDocument()
+    expect(within(invoices).getByText('รับเงินก่อนหรือในวันที่รายงานใบแจ้งหนี้ วันที่เพียงอย่างเดียวไม่ยืนยันว่ารายการนี้รวมในยอดรายงาน')).toBeInTheDocument()
+    expect(within(invoices).queryByText('เงินส่วนนี้รวมอยู่ในยอดตามวันที่ใบแจ้งหนี้แล้ว')).not.toBeInTheDocument()
     const row = within(invoices).getByText('IV-1').closest('tr')
     expect(within(row).getAllByText('100.00')).toHaveLength(2) // face and served confirmed-paid only
   })

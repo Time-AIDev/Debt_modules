@@ -91,6 +91,39 @@ def test_zero_amount_cancellation_uses_prior_paid_evidence():
     assert result["exceptions"] == []
 
 
+@pytest.mark.parametrize("replacement", ["35.00", "100.00"])
+def test_distinct_paid_receipt_settles_a_cancelled_snapshot_payment(replacement):
+    """Cancellation restores liability, while a separate valid receipt still pays it.
+
+    A proof-removal comparison is not a before-cancellation ledger: the current
+    paid replacement and opening snapshot remain in that comparison. Gross
+    cancelled cash therefore need not equal the increase in unpaid invoices.
+    """
+    invoices = [dict(_invoice("0.00", "2026-09-14"), doc_no=doc,
+                     source_payments=[{"receipt_no": old, "on": on, "amount": "100.00"}])
+                for doc, old, on in (("IV-1", "RE-OLD-1", "2026-08-11"),
+                                     ("IV-2", "RE-OLD-2", "2026-09-03"))]
+    cancelled = [_receipt(None, None, doc_no=old, invoice_ref=doc,
+                          status="CANCELLED", exported_at="2026-09-30", run_id=2)
+                 for doc, old in (("IV-1", "RE-OLD-1"), ("IV-2", "RE-OLD-2"))]
+    paid = _receipt(replacement, "2026-09-08", doc_no="RE-REPLACEMENT",
+                    exported_at="2026-09-30", run_id=2)
+    result = payment_claims.reconcile_receipts(invoices, [*cancelled, paid])
+    unpaid = sum((Decimal(row["confirmed_outstanding"])
+                  for row in result["invoices"].values()), Decimal(0))
+    cash = sum((Decimal(row["amount"]) for row in result["allocations"]), Decimal(0))
+    assert unpaid + cash == Decimal("200.00")
+    assert cash == Decimal(replacement)
+    assert result["invoices"]["IV-1"]["confirmed_outstanding"] == str(Decimal("100.00") - cash)
+    assert result["invoices"]["IV-2"]["confirmed_outstanding"] == "100.00"
+    assert {row["receipt_doc_no"] for row in result["allocations"]} == {"RE-REPLACEMENT"}
+    assert result["credit_by_customer"] == {} and result["exceptions"] == []
+    assert payment_claims.reconcile_receipts(invoices, [*cancelled, paid] * 2) == result
+    without_replacement = payment_claims.reconcile_receipts(invoices, cancelled)
+    assert sum(Decimal(row["confirmed_outstanding"])
+               for row in without_replacement["invoices"].values()) == Decimal("200.00")
+
+
 def test_undated_receipt_or_balance_is_queued_for_review_instead_of_guessing():
     invalid_date = payment_claims.reconcile_receipts([_invoice()], [_receipt(paid_on=None)])
     assert invalid_date["exceptions"][0]["reason"] == "PAID_DATE_INVALID"

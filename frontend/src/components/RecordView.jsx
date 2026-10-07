@@ -134,7 +134,8 @@ export function InvoicePaymentEvidence({ invoice, receipts = [] }) {
           : component.status === 'UNALLOCATED' ? <NeutralChip>{english ? 'Awaiting allocation' : 'รอจัดสรร'}</NeutralChip>
             : <span className="case__rowNote num">{english ? 'Allocated to this invoice' : 'จัดสรรเข้าบิลนี้'}: {money(component.allocated_amount)}</span>}
         {component.included_in_snapshot ? <small className="case__rowNote">{english
-          ? 'Already included in the dated invoice balance.' : 'เงินส่วนนี้รวมอยู่ในยอดตามวันที่ใบแจ้งหนี้แล้ว'}</small> : null}
+          ? 'Received on or before the invoice report date. The date alone does not confirm inclusion in that report.'
+          : 'รับเงินก่อนหรือในวันที่รายงานใบแจ้งหนี้ วันที่เพียงอย่างเดียวไม่ยืนยันว่ารายการนี้รวมในยอดรายงาน'}</small> : null}
       </li>
     })}
   </ul> : null}
