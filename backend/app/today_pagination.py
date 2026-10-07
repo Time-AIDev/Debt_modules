@@ -28,7 +28,10 @@ def page(data, filters, sort, limit, cursor, business_date):
     try:
         offset = workbook_cursor.decode(cursor, epoch, query) if cursor else 0
     except errors.Problem as exc:
-        raise _problem('today', stale=exc.status == 409 or 'different filters' in exc.detail) from None
+        # Indexed cursors are opaque 43-character handles. Switching to the
+        # compatible reader invalidates them, so the existing UI reloads page 1.
+        indexed_handle = isinstance(cursor, str) and len(cursor) == 43
+        raise _problem('today', stale=indexed_handle or exc.status == 409 or 'different filters' in exc.detail) from None
     rows = data['items'][offset:offset + limit]
     next_offset = offset + len(rows)
     more = next_offset < len(data['items'])

@@ -72,3 +72,9 @@ def test_compatible_cursor_requires_a_page_and_refuses_malformed_tokens(client):
     assert client.get('/v1/today', params={'cursor': 'bad'}).status_code == 422
     response = client.get('/v1/today', params={'limit': 1, 'cursor': 'bad'})
     assert response.status_code == 422 and response.json()['code'] == 'today_cursor_invalid'
+
+
+def test_rollback_invalidates_indexed_cursor_with_the_existing_ui_reload_signal(client):
+    response = client.get('/v1/today', params={'limit': 25, 'cursor': 'x' * 43})
+    assert response.status_code == 409
+    assert response.json()['code'] == 'today_cursor_stale'
