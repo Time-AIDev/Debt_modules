@@ -462,7 +462,15 @@ class Release:
         if assignment_value(self.api_env, "VOLT_BUSINESS_DATE"):
             raise ReleaseError("Production refuses a pinned business date")
         self.evidence["source"] = self.source_evidence()
-        self.evidence["backup"] = self.verified_backup()
+        policy = getattr(self.args, "release_policy", "full")
+        self.evidence["release_policy"] = policy
+        if policy == "dataflow-expedited":
+            self.evidence["backup"] = {"status": "deferred", "passed": False,
+                "authorization": "explicit_user_request", "revision": self.args.revision,
+                "images": {"api": self.args.api_image, "web": self.args.web_image}}
+            self.evidence["remaining_risks"].append("Backup and data-loss recovery deferred for this exact release")
+        else:
+            self.evidence["backup"] = self.verified_backup()
         self.evidence["candidate_images"] = {"api": self.inspect_image(self.args.api_image),
                                              "web": self.inspect_image(self.args.web_image)}
         for image in self.evidence["candidate_images"].values():
@@ -510,12 +518,15 @@ class Release:
             outcome = validate_bundle(path, revision=self.args.revision,
                                       api_image=self.args.api_image, web_image=self.args.web_image,
                                       defer_offsite_recovery=getattr(self.args, "defer_offsite_recovery", False),
+                                      release_policy=getattr(self.args, "release_policy", "full"),
                                       reader=lambda file: read_private(file, max_bytes=16 * 1024 * 1024))
         except QualityError as exc:
             raise ReleaseError(str(exc)) from None
         self.evidence["checks"]["quality"] = outcome
         if outcome.get("deferred"):
-            self.evidence["remaining_risks"].append("Offsite backup/recovery deferred by explicit user request; external RPO/RTO unverified")
+            self.evidence["remaining_risks"].append("Explicitly deferred checks: " + ", ".join(outcome["deferred"]))
+            if "offsite_recovery" in outcome["deferred"]:
+                self.evidence["remaining_risks"].append("Offsite backup/recovery deferred by explicit user request; external RPO/RTO unverified")
 
     def image_schema_version(self, image):
         result = self.run_command(["docker", "run", "--rm", "--network", "none", "--read-only",
@@ -658,6 +669,8 @@ def arguments(argv=None):
     parser.add_argument("--defer-offsite-recovery", action="store_true",
                         help="Allow only an explicit, exact-candidate offsite recovery deferral; all other gates remain required")
     parser.add_argument("--go-live", action="store_true")
+    parser.add_argument("--release-policy", choices=("full", "dataflow-expedited"), default="full",
+                        help="Explicit per-release backup/external-operations deferral; all functional gates remain required")
     parser.add_argument("--check", action="store_true", help="Verify preflight without changing production configuration or containers")
     args = parser.parse_args(argv)
     for value in (args.api_image, args.web_image, args.rollback_api_image, args.db_image, args.scanner_image, args.edge_image):

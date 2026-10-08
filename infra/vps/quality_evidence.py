@@ -137,13 +137,15 @@ def native_capacity(run, minimum_duration, minimum_vus):
             and run.get("queue_growth") is False, "k6 resource or queue stability failed")
 
 
-def capacity(data):
+def capacity(data, *, allow_colocated=False):
     require(data.get("target_isolated") is True and data.get("matching_resource_profile") is True,
             "Capacity target must be isolated and match production resources")
     generator, target = data.get("generator_fingerprint"), data.get("target_fingerprint")
     require(isinstance(generator, str) and isinstance(target, str)
             and re.fullmatch(r"[a-f0-9]{64}", generator) and re.fullmatch(r"[a-f0-9]{64}", target)
-            and generator != target, "Capacity generator must be on an independent host")
+            and (generator != target or allow_colocated and data.get("generator_co_located") is True
+                 and data.get("independent_generator") == "deferred"),
+            "Capacity generator must be on an independent host or explicitly deferred by the selected policy")
     historical = data.get("historical", [])
     require(isinstance(historical, list), "Historical k6 matrix is missing")
     for vus in (1, 10, 25):
@@ -187,7 +189,7 @@ def capacity(data):
             require(number(runs[0].get("customers")) >= 1431, "Soak fixture must represent the current portfolio")
 
 
-def validate_check(kind, data, now, production_fingerprint):
+def validate_check(kind, data, now, production_fingerprint, *, allow_colocated=False):
     require(data.get("status") == "passed", "Quality check is not passed: " + kind)
     if kind == "lint":
         require(zero(data.get("errors")) and set(data.get("areas", [])) >= {"backend", "frontend"},
@@ -195,7 +197,7 @@ def validate_check(kind, data, now, production_fingerprint):
     elif kind == "regression":
         regression(data)
     elif kind == "capacity":
-        capacity(data)
+        capacity(data, allow_colocated=allow_colocated)
     elif kind == "financial":
         for key in ("staging_isolated", "actual_input_files", "rows_accounted", "cash_conserved",
                     "snapshot_cash_not_double_counted", "duplicate_import_once", "book_preserved"):
@@ -244,13 +246,16 @@ def validate_check(kind, data, now, production_fingerprint):
 
 
 def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
-                    production_fingerprint=None, defer_offsite_recovery=False):
+                    production_fingerprint=None, defer_offsite_recovery=False, release_policy="full"):
     """Load checksum-bound private artifacts; return only non-sensitive outcomes."""
     now = now or datetime.now(timezone.utc)
     production_fingerprint = production_fingerprint or local_machine_fingerprint()
     try:
         require(type(defer_offsite_recovery) is bool, "Offsite deferral must be an explicit boolean policy")
+        require(release_policy in ("full", "dataflow-expedited"), "Unknown release policy")
         bundle = json.loads(reader(Path(path)))
+        require(bundle.get("release_policy", "full") == release_policy,
+                "Quality bundle differs from the explicitly selected release policy")
         require(bundle.get("format") == "volt-quality-bundle-v1", "Quality bundle format is unsupported")
         require(bundle.get("revision") == revision and bundle.get("images") == {"api": api_image, "web": web_image},
                 "Quality bundle differs from the release revision/images")
@@ -272,9 +277,11 @@ def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
                     "Quality artifact differs from release revision/images: " + kind)
             artifact_age = (now - timestamp(data.get("verified_at_utc"))).total_seconds()
             require(0 <= artifact_age <= 86400, "Quality artifact is stale: " + kind)
-            if kind == "offsite_recovery" and data.get("status") == "deferred":
-                require(defer_offsite_recovery is True, "Offsite recovery deferral requires explicit release authorization")
-                require(data.get("passed") is False and data.get("scope") == "offsite_recovery"
+            if (kind == "offsite_recovery" or kind == "alerts" and release_policy == "dataflow-expedited") and data.get("status") == "deferred":
+                require(release_policy == "dataflow-expedited" or
+                        kind == "offsite_recovery" and defer_offsite_recovery is True,
+                        "Deferral requires explicit release authorization")
+                require(data.get("passed") is False and data.get("scope") == kind
                         and data.get("authorization") == "explicit_user_request"
                         and data.get("preparation_only") is not True
                         and data.get("candidate_binding_pending_final_freeze") is not True
@@ -284,11 +291,17 @@ def validate_bundle(path, *, revision, api_image, web_image, reader, now=None,
                 deferred.append(kind)
                 outcomes[kind] = {"passed": False, "status": "deferred", "artifact_sha256": reference["sha256"]}
             else:
-                validate_check(kind, data, now, production_fingerprint)
+                validate_check(kind, data, now, production_fingerprint,
+                               allow_colocated=release_policy == "dataflow-expedited")
                 outcomes[kind] = {"passed": True, "artifact_sha256": reference["sha256"]}
+                if kind == "capacity" and data.get("generator_fingerprint") == data.get("target_fingerprint"):
+                    deferred.append("independent_load_generator")
+        if release_policy == "dataflow-expedited":
+            deferred.append("backup")
         return {"passed": not deferred, "eligible_for_rollout": True, "revision": revision, "checks": outcomes,
                 "deferred": deferred,
-                "policy": {"latency_policy": LATENCY_POLICY, "read_write_p95_ms": LATENCY_LIMIT_MS, "business_errors_max": .01,
+                "policy": {"release_policy": release_policy,
+                           "latency_policy": LATENCY_POLICY, "read_write_p95_ms": LATENCY_LIMIT_MS, "business_errors_max": .01,
                            "checks_min": .99, "max_vus": 25, "soak_seconds": 900,
                            "offsite_recovery": "deferred" if deferred else "required",
                            "rpo_hours": None if deferred else 24, "rto_hours": None if deferred else 4}}

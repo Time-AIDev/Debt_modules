@@ -66,7 +66,11 @@ class _XlsxBudget:
         self.started = time.monotonic()
         self.seconds = float(env("XLSX_PARSE_MAX_SECONDS", "120"))
         self.max_processed = int(env("XLSX_MAX_PROCESSED_CELLS", "10000000"))
-        self.max_kept = int(env("XLSX_MAX_KEPT_CELLS", "1000000"))
+        # Two million retained slots consume at most 16 MiB of list pointers on
+        # the supported 64-bit runtime. Text, processed cells, inflation and time
+        # retain their separate bounds; full multi-tab master exports need this
+        # allowance even after blank tails have been removed.
+        self.max_kept = int(env("XLSX_MAX_KEPT_CELLS", "2000000"))
         self.max_text = int(env("XLSX_MAX_KEPT_TEXT_BYTES", str(64 * 1024 * 1024)))
         self.max_shared = int(env("XLSX_MAX_SHARED_STRINGS", "250000"))
         self.max_shared_bytes = int(env("XLSX_MAX_SHARED_STRING_BYTES", str(16 * 1024 * 1024)))
@@ -479,8 +483,12 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None, budget=
         width = max(width, idx + 1)
         ctype = c.get("t")
         style = int(c.get("s") or 0)
-        v_el = next((e for e in c if e.tag == value_tag), None)
-        is_el = next((e for e in c if e.tag == inline_tag), None)
+        if not len(c):
+            # Millions of styled blank cells need bounds checks, but no value
+            # lookup, text conversion or retained dictionary entry.
+            continue
+        v_el = c.find(value_tag)
+        is_el = c.find(inline_tag)
         if ctype == "s":
             i = int(v_el.text) if v_el is not None and v_el.text else 0
             if i < 0 or i >= len(shared):
@@ -556,14 +564,21 @@ def _sheet_rows(zf, part, shared, date_styles, epoch_1904, budget=None, diagnost
             # named the wrong spreadsheet row. Nothing is padded, so one stray value at
             # row 1,048,576 costs one row. No `r` falls back to sequence; a row with
             # nothing in it is skipped.
-            if not any(cells.values()):
+            # Formatting can extend a short business row to hundreds of columns.
+            # Clean before retaining: cached spreadsheet errors and whitespace
+            # are empty in the importer, so they must not keep a template row.
+            # Internal gaps retain their indexes; a genuine zero stays present.
+            cells = {i: cleaned for i, value in cells.items()
+                     if (cleaned := _clean_cell(value)) != ""}
+            if not cells:
                 continue
+            width = max(cells) + 1
             if budget:
                 budget.retain(width, cells)
             numbers.append(int(r) if r.isdigit() else (numbers[-1] + 1 if numbers else 1))
             if diagnostics is not None and missing_cache:
                 diagnostics[str(numbers[-1])] = missing_cache
-            rows.append([_clean_cell(cells.get(i, "")) for i in range(width)])
+            rows.append([cells.get(i, "") for i in range(width)])
     return rows, numbers
 
 
@@ -912,6 +927,7 @@ def parse_upload(raw: bytes, filename, x_volt_officer, x_volt_role, with_payload
         sheets_raw = [{"name": None, "rows": _clean_rows(reader_rows)}]
 
     sheets_out = []
+    formula_cache = []
     all_leasing, all_cash, all_cash_inv, all_assets, all_orders = [], [], [], [], []
     all_tracking, tracking_summary, flow = [], [], {}
     all_refusals, contact_log_count = [], 0
@@ -939,6 +955,13 @@ def parse_upload(raw: bytes, filename, x_volt_officer, x_volt_role, with_payload
         # the "-1 means the markdown header line itself" case in `find_header`'s own
         # docstring cannot arise from how this module calls it.
         header_row = nums[hi] if hi is not None else None
+        missing = sheet.get("formula_missing_cache_by_row") or {}
+        if missing and hdr:
+            fields = Counter(hdr[column] if column < len(hdr) and hdr[column] else
+                             "column_%d" % (column + 1)
+                             for columns in missing.values() for column in columns)
+            formula_cache.append({"sheet": name, "rows": len(missing), "fields": dict(fields),
+                                  "source_rows": [int(row) for row in list(missing)[:20]]})
         sheets_out.append({
             "index": index, "name": name, "kind": sheet_kind,
             "header_row": header_row, "header_cells": header_cells, "rows": len(rows),
@@ -1046,6 +1069,7 @@ def parse_upload(raw: bytes, filename, x_volt_officer, x_volt_role, with_payload
             for reason, count in Counter(r["reason"] for r in all_refusals).most_common()
         ],
         "warnings": warnings,
+        "formula_cache": {"rows": sum(item["rows"] for item in formula_cache), "sheets": formula_cache},
         "reconciliation": reconciliation,
         "truncation": {"cut": False, "at_bytes": None, "cap_bytes": MAX_BYTES, "reason_th": None, "reason_en": None},
         "masking": {

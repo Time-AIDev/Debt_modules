@@ -1,5 +1,20 @@
 # Debt Platform SSH server
 
+For the explicitly authorized data upload release, `scripts/release.sh production`
+accepts `--release-policy dataflow-expedited`. Its checksum-bound quality bundle
+must declare the same policy and still pass lint, full PostgreSQL/backend/frontend
+regression, actual-file financial validation, workflows, native load thresholds,
+authentication/readiness and schema-compatible rollback. Backup, offsite recovery
+and external alerts may be recorded as deferred for this exact revision/images;
+co-located load evidence must declare the independent generator deferred. Deferred
+checks remain unverified in the release evidence. The default `full` policy keeps
+the original requirements. This option neither creates nor removes backups.
+
+The XLSX reader retains up to two million cell slots after removing blank tails;
+the 100 MiB input, 512 MiB inflation, 64 MiB retained text, ten million processed
+cells and 120-second parsing bounds remain independent. Missing cached formulas
+are reported by worksheet and field and are never evaluated as zero.
+
 Server: `debt-production` / `143.198.207.143`. Source directory:
 `/srv/volt-debt-platform`. Intended domain: `collection.volt.co.th`.
 

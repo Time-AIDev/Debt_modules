@@ -103,8 +103,12 @@ async def _execute_job_body(uid):
     from .pipelines import runs
     run = await run_in_threadpool(runs.get, uid)
     if run and run["state"] == "failed":
-        await run_in_threadpool(_dead_letter, uid, "run_failed")
-        return {"completed": False, "dead_letter": True}
+        problem = run.get("problem") or {}
+        if problem.get("retryable") is True and not run.get("committed") and not run.get("cancel_requested_at"):
+            await run_in_threadpool(_reset_retryable_run, uid)
+        else:
+            await run_in_threadpool(_dead_letter, uid, "run_failed")
+            return {"completed": False, "dead_letter": True}
     if run and run["state"] in ("done", "cancelled"):
         await run_in_threadpool(_finished, uid)
         return {"completed": True}
@@ -165,6 +169,23 @@ def _retry(uid, code, delay):
         conn.execute(text("update app.task_outbox set last_error_code=:e,"
                           "next_attempt_at=now()+:d * interval '1 second' where uid=:u"),
                      {"u": uid, "e": code, "d": delay})
+        _reset_retryable_run(uid, conn=conn)
+
+
+def _reset_retryable_run(uid, conn=None):
+    """Requeue an uncommitted transient failure without losing attempt evidence."""
+    if conn is None:
+        with db.connect() as active, active.begin():
+            return _reset_retryable_run(uid, conn=active)
+    conn.execute(text(
+        "update app.operation_run set payload=payload || "
+        "jsonb_build_object('state','queued','phase','queued','problem',null,'finished_at',null, "
+        "'last_attempt_problem',payload->'problem'),updated_at=now() "
+        "where uid=:u and payload->>'state'='failed' "
+        "and payload->'problem'->>'retryable'='true' "
+        "and coalesce(payload->>'committed','false')='false' "
+        "and (payload->'cancel_requested_at' is null or payload->'cancel_requested_at'='null'::jsonb)"),
+        {"u": uid})
 
 
 def _dead_letter(uid, code):

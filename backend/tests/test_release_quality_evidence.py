@@ -108,11 +108,36 @@ def bundle(tmp_path, documents):
     return path
 
 
-def validate(path, *, defer_offsite_recovery=False):
+def validate(path, *, defer_offsite_recovery=False, release_policy="full"):
     return quality.validate_bundle(path, revision=REVISION, api_image=IMAGES["api"],
                                    web_image=IMAGES["web"], reader=lambda file: file.read_bytes(),
                                    now=NOW, production_fingerprint="6" * 64,
-                                   defer_offsite_recovery=defer_offsite_recovery)
+                                   defer_offsite_recovery=defer_offsite_recovery, release_policy=release_policy)
+
+
+def test_expedited_policy_is_explicit_and_keeps_financial_and_capacity_gates(tmp_path):
+    documents = artifacts()
+    for kind in ("offsite_recovery", "alerts"):
+        documents[kind].update(status="deferred", passed=False, scope=kind,
+                              authorization="explicit_user_request", reason="User requests dataflow go-live now")
+    documents["capacity"].update(generator_fingerprint="4" * 64, generator_co_located=True,
+                                independent_generator="deferred")
+    path = bundle(tmp_path, documents)
+    value = json.loads(path.read_text())
+    value["release_policy"] = "dataflow-expedited"
+    path.write_text(json.dumps(value))
+    with pytest.raises(quality.QualityError):
+        validate(path)
+    result = validate(path, release_policy="dataflow-expedited")
+    assert result["eligible_for_rollout"] is True and result["passed"] is False
+    assert set(result["deferred"]) == {"backup", "offsite_recovery", "alerts", "independent_load_generator"}
+    documents["financial"]["cash_conserved"] = False
+    path = bundle(tmp_path, documents)
+    value = json.loads(path.read_text())
+    value["release_policy"] = "dataflow-expedited"
+    path.write_text(json.dumps(value))
+    with pytest.raises(quality.QualityError):
+        validate(path, release_policy="dataflow-expedited")
 
 
 def test_complete_exact_release_evidence_passes_without_exporting_contents(tmp_path):

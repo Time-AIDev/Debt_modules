@@ -1176,6 +1176,7 @@ export default {
   'data.chooseFile': 'Choose a file',
   'data.receipt': 'Receipt · {file}',
   'data.rowsRead': 'Rows read',
+  'data.formulaCacheMissing': '{n} rows contain formulas without saved values. Review these fields before confirming the import.',
   'data.rowsImported': 'Imported',
   'data.rowsRefused': 'Refused',
   'data.customers': 'Customers',

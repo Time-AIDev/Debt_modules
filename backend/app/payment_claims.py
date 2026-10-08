@@ -23,6 +23,19 @@ ACTIVE_STATES = ("PENDING",)
 STATES = ("PENDING", "CONFIRMED", "PARTIALLY_CONFIRMED", "NEEDS_REVIEW", "CANCELLED")
 GOVERNED_PAYMENT_STATUSES = ("NPL", "CLOSED", "TERMINATED", "NOT_INSTALLED")
 
+
+def effective_receipt_coverage(meta):
+    """An export cannot prove the absence of payments after it was produced."""
+    try:
+        start = date.fromisoformat(str(meta.get("covers_from") or ""))
+        end = date.fromisoformat(str(meta.get("covers_to") or ""))
+        observed = date.fromisoformat(str(meta.get("exported_at") or
+                                          meta.get("report_as_of") or "")[:10])
+    except ValueError:
+        return None, None
+    end = min(end, observed)
+    return (start.isoformat(), end.isoformat()) if start <= end else (None, None)
+
 _LOCK = threading.RLock()
 _MEMORY = {}              # uid -> claim
 _REMINDERS = {}           # (customer_uid, YYYY-MM) -> reminder
@@ -1238,7 +1251,7 @@ def reconcile_applied(conn, run_id, reason="report_apply"):
         "and status='OK' and meta ? 'applied' order by id")).mappings().all()
     for covered in coverage_runs:
         applied = covered["meta"] or {}
-        covers_from, covers_to = applied.get("covers_from"), applied.get("covers_to")
+        covers_from, covers_to = effective_receipt_coverage(applied)
         if not covers_from or not covers_to:
             continue
         changed = conn.execute(text(

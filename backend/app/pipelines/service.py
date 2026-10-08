@@ -246,7 +246,10 @@ def _failure(exc):
     if isinstance(exc, runs.RunCancelled):
         return {"code": "cancelled", "detail": "operation cancelled"}, "cancelled"
     if isinstance(exc, PipelineRefused):
-        return exc.problem, exc.problem.get("code") or "pipeline_failed"
+        problem = dict(exc.problem)
+        if problem.get("code") == "crm_lead_run_in_progress":
+            problem.update(status=503, retryable=True)
+        return problem, problem.get("code") or "pipeline_failed"
     if isinstance(exc, writer.TooMuchToRetire):
         return {"code": exc.code, "detail": str(exc), "detail_th": TOO_MUCH_TO_RETIRE_TH}, exc.code
     if isinstance(exc, writer.PreviewCountMismatch):
@@ -261,7 +264,10 @@ def _failure(exc):
     if isinstance(exc, odoo_client.OdooError):
         return {"code": "integration_unavailable", "detail": str(exc)}, "odoo_refused"
     if isinstance(exc, httpx.HTTPError):
-        return {"code": "integration_unavailable", "detail": name}, "odoo_unreachable"
+        transient = not isinstance(exc, httpx.HTTPStatusError) or (
+            exc.response.status_code >= 500 or exc.response.status_code in (408, 425, 429))
+        return {"code": "integration_unavailable", "detail": name,
+                "status": 503 if transient else 422, "retryable": transient}, "odoo_unreachable"
     return {"code": "pipeline_failed", "detail": name}, "pipeline_failed"
 
 

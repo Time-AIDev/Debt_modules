@@ -1177,6 +1177,7 @@ export default {
   'data.chooseFile': 'เลือกไฟล์',
   'data.receipt': 'ใบรับรอง · {file}',
   'data.rowsRead': 'อ่านได้',
+  'data.formulaCacheMissing': 'พบสูตรที่ยังไม่มีค่า {n} แถว ตรวจคอลัมน์เหล่านี้ก่อนยืนยันนำเข้า',
   'data.rowsImported': 'รับเข้า',
   'data.rowsRefused': 'ปฏิเสธ',
   'data.customers': 'ลูกค้า',

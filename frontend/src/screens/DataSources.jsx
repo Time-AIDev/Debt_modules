@@ -545,6 +545,14 @@ export function DataSources() {
                       <Figure label={t('data.rowsRefused')} value={int(sr.counts?.rows_refused)} />
                       <Figure label={t('data.customers')} value={int(sr.counts?.customers)} />
                     </div>
+                    {sr.formula_cache?.rows > 0 ? (
+                      <details className="imp__meta">
+                        <summary>{t('data.formulaCacheMissing', { n: int(sr.formula_cache.rows) })}</summary>
+                        <ul>{sr.formula_cache.sheets.map((tab) => (
+                          <li key={tab.sheet}>{tab.sheet}: {Object.keys(tab.fields).join(', ')}</li>
+                        ))}</ul>
+                      </details>
+                    ) : null}
                     {retire && !sr.installed ? (
                       <p className="imp__meta">
                         {t('data.sheetRetireCount', { n: int(retire.customers), live: int(retire.live) })}
