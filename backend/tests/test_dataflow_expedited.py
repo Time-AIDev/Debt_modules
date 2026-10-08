@@ -32,6 +32,31 @@ def test_xml_declaration_is_refused_when_split_across_chunks(monkeypatch):
             pass
 
 
+@pytest.mark.parametrize("result_type", ["s", "b"])
+@pytest.mark.parametrize("empty_cache", [False, True])
+def test_uncached_typed_formula_stays_unknown_and_preserves_real_zero(result_type, empty_cache):
+    import xml.etree.ElementTree as ET
+    original = _xlsx_bytes_multi([("data", [["identity", "formula", 0]])])
+    output = io.BytesIO()
+    namespace = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(original)) as source, zipfile.ZipFile(output, "w") as target:
+        for info in source.infolist():
+            raw = source.read(info.filename)
+            if info.filename == "xl/worksheets/sheet1.xml":
+                root = ET.fromstring(raw)
+                cell = next(cell for cell in root.iter(namespace + "c") if cell.get("r") == "B1")
+                cell.clear()
+                cell.attrib.update(r="B1", t=result_type)
+                ET.SubElement(cell, namespace + "f").text = "IF(A1,1,0)"
+                if empty_cache:
+                    ET.SubElement(cell, namespace + "v")
+                raw = ET.tostring(root)
+            target.writestr(info, raw)
+    parsed = imports.read_xlsx(output.getvalue())[0]
+    assert parsed["rows"] == [["identity", "", "0"]]
+    assert parsed["formula_missing_cache_by_row"] == {"1": [1]}
+
+
 def test_formatted_columns_and_error_only_templates_do_not_consume_kept_budget(monkeypatch):
     monkeypatch.setenv("XLSX_MAX_KEPT_CELLS", "3")
     original = _xlsx_bytes_multi([("data", [["identity", "", "0"]])])

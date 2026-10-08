@@ -507,7 +507,12 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None, budget=
             continue
         v_el = c.find(value_tag)
         is_el = c.find(inline_tag)
-        if ctype == "s":
+        if ctype in ("s", "b") and (v_el is None or not v_el.text):
+            # An uncached formula is unknown for every scalar result type.
+            # Shared-string index zero and FALSE are actual cached values,
+            # never replacements for an absent value.
+            text = ""
+        elif ctype == "s":
             i = int(v_el.text) if v_el is not None and v_el.text else 0
             if i < 0 or i >= len(shared):
                 _xlsx_refused("An XLSX shared-string reference is invalid.")
