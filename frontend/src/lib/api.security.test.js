@@ -232,7 +232,7 @@ describe('production write transport', () => {
     expect(fetch).toHaveBeenCalledTimes(2)
   })
 
-  it('keeps an uncertain file intake locked for reconciliation when a reload creates new chunks', async () => {
+  it('keeps the original upload identity across reload when reconciliation refuses a replay', async () => {
     let starts = 0
     const fetch = vi.spyOn(globalThis, 'fetch').mockImplementation(async (path, init) => {
       if (String(path).endsWith('/v1/imports:start')) {
@@ -244,13 +244,15 @@ describe('production write transport', () => {
     })
     const file = new File(['csv contents'], 'private-name.csv', { type: 'text/csv', lastModified: 123 })
     file.arrayBuffer = async () => new TextEncoder().encode('csv contents').buffer
-    await expect(api.createImport(file)).rejects.toThrow('connection lost')
+    await expect(api.createImport(file)).rejects.toMatchObject({ problem: { code: 'operation_outcome_unknown' } })
     vi.resetModules()
     ;({ api } = await import('./api.js'))
     await expect(api.createImport(file)).rejects.toMatchObject({ problem: { code: 'operation_outcome_unknown' } })
     const startCalls = fetch.mock.calls.filter(([path]) => String(path).endsWith('/v1/imports:start'))
     expect(startCalls[1][1].headers['Idempotency-Key']).toBe(startCalls[0][1].headers['Idempotency-Key'])
-    expect(startCalls[1][1].headers['X-Volt-Upload']).not.toBe(startCalls[0][1].headers['X-Volt-Upload'])
+    expect(startCalls).toHaveLength(3)
+    expect(startCalls[2][1].headers['X-Volt-Upload']).toBe(startCalls[0][1].headers['X-Volt-Upload'])
+    expect(startCalls[2][1].headers['Idempotency-Key']).toBe(startCalls[0][1].headers['Idempotency-Key'])
     const saved = window.sessionStorage.getItem('volt.pending-operations.v1')
     expect(saved).not.toContain('private-name')
     expect(saved).not.toContain('csv contents')

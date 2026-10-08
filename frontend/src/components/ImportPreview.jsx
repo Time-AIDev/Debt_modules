@@ -53,6 +53,7 @@ export function ImportPreview({ preview, canApply, onApplied }) {
     try {
       const result = await api.applyImportPreview(preview.uid, {
         preview_version: preview.version, idempotency_key: idempotencyKey,
+        ...(preview.review_state_version ? { review_state_version: preview.review_state_version } : {}),
         selected_keys: chosen.map((r) => r.key),
         termination_confirmations: terminating.map((r) => ({ key: r.key,
           cause: termination[r.key].cause, reason: termination[r.key].reason.trim(),

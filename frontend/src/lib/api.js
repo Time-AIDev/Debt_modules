@@ -159,6 +159,21 @@ const caseVersions = new Map()
 const caseResourceOwners = new Map()
 let seenStateVersion = null
 
+function uploadControl(path, method = 'POST', wire) {
+  const [clean, query = ''] = path.split('?')
+  if (/^\/v1\/imports\/parts\/[0-9a-f-]{36}(?:\/\d+)?$/.test(clean)) {
+    return method === 'POST' || method === 'DELETE'
+  }
+  if (method !== 'POST') return false
+  if (['/v1/pipelines/peak-report:start', '/v1/pipelines/peak-receipt:start'].includes(clean)) {
+    return !query && !(typeof wire === 'string' && wire.trim().startsWith('{'))
+  }
+  if (clean !== '/v1/imports:start') return false
+  const params = new URLSearchParams(query)
+  return [...params.keys()].every((key) => ['profile', 'install'].includes(key))
+    && !['true', '1', 'on', 'yes'].includes((params.get('install') || 'false').toLowerCase())
+}
+
 function resourceKey(path) {
   const clean = path.split('?')[0]
   const customer = /^\/v1\/(?:cases\/by-customer|customers)\/([^/:]+)/.exec(clean)
@@ -187,7 +202,7 @@ function noteState(response, path) {
   if (seenStateVersion === null || BigInt(version) > BigInt(seenStateVersion)) seenStateVersion = version
   // Background polling may announce new data, but must not make an open edit
   // silently claim it was based on that unseen newer version.
-  if (response.ok && !backgroundResponses.has(response)) resourceVersions.set(resourceKey(path), version)
+  if (response.ok && !backgroundResponses.has(response) && !uploadControl(path)) resourceVersions.set(resourceKey(path), version)
   const contactOwner = responseMutations.get(response)?.contactOwner
   if (contactOwner && path.split('?')[0] === '/v1/contacts' && response.ok && !backgroundResponses.has(response)) {
     // The first contact step is a global command and advances case versions.
@@ -220,8 +235,12 @@ function restorePendingMutations() {
           !/^[A-Za-z0-9_.:-]{1,200}$/.test(entry.key) || !Number.isFinite(entry.at) || entry.at <= 0 ||
           !(entry.expectedVersion === null || /^\d{1,20}$/.test(String(entry.expectedVersion))
             || /^case:[A-Za-z0-9_.:-]{1,200}:\d{1,20}$/.test(String(entry.expectedVersion)))) throw new Error('metadata')
+      if (entry.uploadId !== undefined && !/^[0-9a-f-]{36}$/.test(entry.uploadId)) throw new Error('upload metadata')
+      if (entry.uploadPhase !== undefined && !['uploading', 'submitting'].includes(entry.uploadPhase)) throw new Error('upload phase')
       pendingMutations.set(entry.fingerprint, {
         key: entry.key, at: entry.at, expectedVersion: entry.expectedVersion, persistent: true,
+        ...(entry.uploadId ? { uploadId: entry.uploadId } : {}),
+        ...(entry.uploadPhase ? { uploadPhase: entry.uploadPhase } : {}),
       })
     }
   } catch { pendingStorageCorrupt = true }
@@ -229,7 +248,9 @@ function restorePendingMutations() {
 
 function persistPendingMutations() {
   const entries = [...pendingMutations].filter(([, item]) => item.persistent)
-    .map(([fingerprint, item]) => ({ fingerprint, key: item.key, expectedVersion: item.expectedVersion, at: item.at }))
+    .map(([fingerprint, item]) => ({ fingerprint, key: item.key, expectedVersion: item.expectedVersion, at: item.at,
+      ...(item.uploadId ? { uploadId: item.uploadId } : {}), ...(item.uploadPhase ? { uploadPhase: item.uploadPhase } : {}),
+    }))
   const serialized = JSON.stringify(entries)
   if (entries.length > PENDING_MAX_ENTRIES || serialized.length > PENDING_MAX_BYTES) {
     throw pendingProblem('pending_operations_full', 'มีงานที่ผลลัพธ์ยังไม่ยืนยันมากเกินไป กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
@@ -331,7 +352,7 @@ function contactCustomerOwner(path, wire) {
   } catch { return null }
 }
 
-function mutationHeaders(path, signature, wire) {
+function mutationHeaders(path, signature, wire, expectedStateVersion, method = 'POST') {
   const headers = roleHeaders()
   if (signature === null) return headers
   if (pendingStorageCorrupt) throw pendingProblem('operation_outcome_unknown', 'ข้อมูลตรวจสอบงานก่อนหน้าอ่านไม่ได้ กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
@@ -349,10 +370,10 @@ function mutationHeaders(path, signature, wire) {
     const childOwner = safeCase && /^\/v1\/case-ptps\/[^/]+:close(?:\?|$)/.test(path) ? caseResourceOwners.get(path.split('?')[0]) : null
     const contactOwner = contactCustomerOwner(path, wire)
     operation = { key: uploadId(), at: Date.now(),
-      expectedVersion: (caseNote && caseVersions.get(decodeURIComponent(caseNote[1])))
+      expectedVersion: expectedStateVersion ?? ((caseNote && caseVersions.get(decodeURIComponent(caseNote[1])))
         || (childOwner && caseVersions.get(childOwner))
         || (contactOwner && resourceVersions.get(resourceKey(`/v1/cases/by-customer/${encodeURIComponent(contactOwner)}`)))
-        || resourceVersions.get(resourceKey(path)) || seenStateVersion,
+        || resourceVersions.get(resourceKey(path)) || seenStateVersion),
       persistent: !signature.startsWith('volatile:') }
     pendingMutations.set(signature, operation)
     if (operation.persistent) {
@@ -360,17 +381,17 @@ function mutationHeaders(path, signature, wire) {
     }
   }
   headers['Idempotency-Key'] = operation.key
-  if (operation.expectedVersion !== null && !path.startsWith('/v1/operation-runs/')) headers['If-Match'] = operation.expectedVersion
+  if (operation.expectedVersion !== null && !path.startsWith('/v1/operation-runs/') && !uploadControl(path, method, wire)) headers['If-Match'] = operation.expectedVersion
   return headers
 }
 
 async function mutationFetch(method, path, body, extra = {}) {
-  const { stableUploadIdentity, ...options } = extra
+  const { stableUploadIdentity, expectedStateVersion, ...options } = extra
   const signature = await operationFingerprint(method, path, body, extra.headers, stableUploadIdentity)
   if (extra.signal?.aborted) throw new DOMException('aborted', 'AbortError')
   const response = await fetch(BASE + path, {
     ...options, method, body,
-    headers: { ...mutationHeaders(path, signature, body), ...extra.headers },
+    headers: { ...mutationHeaders(path, signature, body, expectedStateVersion, method), ...extra.headers },
   })
   if (signature !== null) {
     const contactOwner = method === 'POST' ? contactCustomerOwner(path, body) : null
@@ -379,14 +400,14 @@ async function mutationFetch(method, path, body, extra = {}) {
   return response
 }
 
-async function post(path, payload) {
-  return send('POST', path, payload || {})
+async function post(path, payload, options = {}) {
+  return send('POST', path, payload || {}, options)
 }
 
-async function send(method, path, payload) {
+async function send(method, path, payload, options = {}) {
   const response = await mutationFetch(method, path,
     payload === undefined ? undefined : JSON.stringify(payload),
-    { headers: { 'Content-Type': 'application/json' } })
+    { ...options, headers: { 'Content-Type': 'application/json' } })
   const body = await readJson(response, path)
   notifyChanged(path, method)
   return body
@@ -449,20 +470,35 @@ async function discardParts(id) {
   const path = `/v1/imports/parts/${id}`
   try {
     const response = await mutationFetch('DELETE', path)
-    finishMutation(response)
+    await readJson(response, path)
+    for (const [signature, operation] of pendingMutations) {
+      if (operation.uploadId === id) pendingMutations.delete(signature)
+    }
+    persistPendingMutations()
   } catch { /* best effort; the backend also expires abandoned chunks */ }
 }
 
-async function sendParts(file, { signal, onProgress } = {}) {
-  const id = uploadId()
+async function retryUpload(work, signal) {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      const response = await work()
+      if (![502, 503, 504].includes(response.status) || attempt >= 3) return response
+    } catch (error) {
+      if (error.name === 'AbortError' || !(error instanceof TypeError) || attempt >= 3) throw error
+    }
+    await waitFor(1000 * 2 ** attempt, signal)
+  }
+}
+
+async function sendParts(file, id, { signal, onProgress } = {}) {
   const of = Math.ceil(file.size / PART_BYTES)
   try {
     for (let i = 0; i < of; i += 1) {
       const path = `/v1/imports/parts/${id}/${i}?of=${of}`
-      const response = await mutationFetch('POST', path, file.slice(i * PART_BYTES, (i + 1) * PART_BYTES), {
+      const response = await retryUpload(() => mutationFetch('POST', path, file.slice(i * PART_BYTES, (i + 1) * PART_BYTES), {
         headers: { 'Content-Type': 'application/octet-stream' },
         signal,
-      })
+      }), signal)
       await readJson(response, path)
       onProgress?.({
         phase: 'uploading',
@@ -471,35 +507,52 @@ async function sendParts(file, { signal, onProgress } = {}) {
       })
     }
   } catch (error) {
-    await discardParts(id)
+    if (error.name === 'AbortError' || error.status && error.status < 500) await discardParts(id)
     throw error
   }
   return id
 }
 
 async function postRaw(path, file, extraHeaders = {}, {
-  chunk = true, signal, onProgress,
+  chunk = true, signal, onProgress, expectedStateVersion,
 } = {}) {
   let upload = null
   const stableUploadIdentity = await fileIdentity(file)
+  const filename = encodeURIComponent(file.name || 'upload')
+  const contentType = file.type || 'application/octet-stream'
+  const signature = await operationFingerprint('POST', path, '', {
+    'Content-Type': contentType, 'X-Volt-Filename': filename, ...extraHeaders,
+  }, stableUploadIdentity)
+  mutationHeaders(path, signature, '', expectedStateVersion)
+  const operation = pendingMutations.get(signature)
   try {
-    upload = chunk && file.size ? await sendParts(file, { signal, onProgress }) : null
+    if (chunk && file.size) {
+      upload = operation.uploadId || uploadId()
+      operation.uploadId = upload
+      operation.uploadPhase ||= 'uploading'
+      if (operation.persistent) persistPendingMutations()
+      if (operation.uploadPhase === 'uploading') await sendParts(file, upload, { signal, onProgress })
+      operation.uploadPhase = 'submitting'
+      if (operation.persistent) persistPendingMutations()
+    }
     onProgress?.({ phase: 'parsing', uploadedBytes: file.size, totalBytes: file.size })
-    const response = await mutationFetch('POST', path, upload ? '' : file, {
-      stableUploadIdentity,
+    const submit = () => mutationFetch('POST', path, upload ? '' : file, {
+      stableUploadIdentity, expectedStateVersion,
       headers: {
-        'Content-Type': file.type || 'application/octet-stream',
-        'X-Volt-Filename': encodeURIComponent(file.name || 'upload'),
+        'Content-Type': contentType,
+        'X-Volt-Filename': filename,
         ...(upload ? { 'X-Volt-Upload': upload } : {}),
         ...extraHeaders,
       },
       signal,
     })
+    const response = uploadControl(path) ? await retryUpload(submit, signal) : await submit()
     const body = await readJson(response, path)
     notifyChanged(path, 'POST')
     return body
   } catch (error) {
-    if (upload) await discardParts(upload)
+    if (upload && (error.name === 'AbortError' || error.status && error.status < 500
+      && !['idempotency_conflict', 'operation_outcome_unknown'].includes(error.problem?.code))) await discardParts(upload)
     throw error
   }
 }
@@ -529,7 +582,7 @@ async function postOperation(path, file, extraHeaders = {}, options = {}) {
 }
 
 async function postJsonOperation(path, body, options = {}) {
-  return runOperation(() => post(path, body), options)
+  return runOperation(() => post(path, body, options), options)
 }
 
 async function runOperation(start, options) {
@@ -835,7 +888,8 @@ export const api = {
     const query = profile ? `?profile=${encodeURIComponent(profile)}` : ''
     return postOperation(`/v1/imports:start${query}`, file, {}, operationOptions)
   },
-  applyImportPreview: (uid, payload) => post(`/v1/imports/previews/${encodeURIComponent(uid)}:apply`, payload),
+  applyImportPreview: (uid, payload) => post(`/v1/imports/previews/${encodeURIComponent(uid)}:apply`, payload,
+    { expectedStateVersion: payload.review_state_version }),
   confirmInstallation: (uid, payload) => post(`/v1/contracts/${encodeURIComponent(uid)}/installation-confirmation`, payload),
   // Fix-all leg S (Arina 2026-09-24): a manager installs the checked New Order Master
   // as the book; the review list names where PEAK and the sheet disagree.
@@ -864,7 +918,8 @@ export const api = {
   peakReportRun: (uid) => get(`/v1/pipelines/peak-report/runs/${uid}`),
   peakReportLastRun: () => get('/v1/pipelines/peak-report/last-run'),
   peakReportRows: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/rows`, params),
-  peakReportApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-report/landing-runs/${runId}:apply`, body || {}, options),
+  peakReportApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-report/landing-runs/${runId}:apply`, body || {},
+    { ...options, expectedStateVersion: body?.review_state_version }),
   // Repairs a committed apply whose served reload failed (`served: false`).
   peakReportRefreshServed: (runId) => post(`/v1/pipelines/peak-report/landing-runs/${runId}:refresh-served`, {}),
   peakLinks: (params) => get('/v1/pipelines/peak-report/links', params),
@@ -880,7 +935,8 @@ export const api = {
   peakReceiptLastRun: () => get('/v1/pipelines/peak-receipt/last-run'),
   peakReceiptRows: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rows`, params),
   peakReceiptRejectedDocuments: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rejected-documents`, params),
-  peakReceiptApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-receipt/landing-runs/${runId}:apply`, body || {}, options),
+  peakReceiptApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-receipt/landing-runs/${runId}:apply`, body || {},
+    { ...options, expectedStateVersion: body?.review_state_version }),
   peakConflicts: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts`, params),
   peakConflictsDecide: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts:decide`, body),
   peakDecisionRetire: (uid) => post(`/v1/pipelines/peak-report/field-decisions/${uid}:retire`, {}),

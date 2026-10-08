@@ -80,7 +80,7 @@ def append_audit_tail(conn, unit, refusal=None, fresh=False):
 def independent_control(scope):
     from . import operational_transactions
     from .durable_runs import WORKER_RUN
-    if (operational_transactions.is_peak_enqueue(scope, worker_run=bool(WORKER_RUN.get())) or
+    if (operational_transactions.is_upload_control(scope, worker_run=bool(WORKER_RUN.get())) or
             operational_transactions.is_peak_apply_enqueue(scope, worker_run=bool(WORKER_RUN.get()))):
         return True
     if scope.get("path", "").startswith("/v1/operation-runs/"):
@@ -397,6 +397,8 @@ class ProductionUnitMiddleware:
             await run_in_threadpool(conn.execute, text("set local statement_timeout='300s'"))
             mutation_request = scope.get("method") in ("POST", "PUT", "PATCH", "DELETE")
             control_request = independent_control(scope)
+            from . import operational_transactions
+            upload_control = operational_transactions.is_upload_control(scope)
             if not mutation_request and not book_exclusive:
                 await run_in_threadpool(conn.execute, text("set transaction isolation level repeatable read"))
             capacity = bool(await run_in_threadpool(lambda: conn.execute(text(
@@ -420,6 +422,9 @@ class ProductionUnitMiddleware:
             unit = {"conn": conn, "version": version, "subject": "anonymous",
                     "capacity": capacity, "mutation": mutation_request, "book_exclusive": book_exclusive}
             unit_token = CURRENT.set(unit)
+            expected_worker_version = scope.get("volt_expected_state_version")
+            if expected_worker_version is not None and str(expected_worker_version) != str(version):
+                raise self.problem("preview_stale", 409)
             from . import auth
             auth_session = await timed_work(phases, "auth_resolution", auth.resolve_session, scope) if auth.current_config().on else None
             unit["subject"] = (auth_session or {}).get("sub", "anonymous")
@@ -558,7 +563,7 @@ class ProductionUnitMiddleware:
             if scoped_customer:
                 token = case_token(scoped_customer, unit["customer_version"]).encode()
                 allowed_versions += (token, b'"' + token + b'"')
-            if mutation and headers.get(b"if-match") not in allowed_versions:
+            if mutation and not upload_control and headers.get(b"if-match") not in allowed_versions:
                 raise self.problem("state_conflict", 409)
             handler_began = time.monotonic()
             try:
@@ -617,6 +622,9 @@ class ProductionUnitMiddleware:
                     unit["version"] = committed_version
                 start["headers"] = [(k, v) for k, v in start.get("headers", []) if k.lower() != b"cache-control"] + [
                     (b"cache-control", b"no-store"), (b"x-volt-state-version", str(unit["version"]).encode())]
+                if mutation:
+                    from . import preview_review
+                    await run_in_threadpool(preview_review.publish, conn, unit, scope, messages)
                 if scoped_customer:
                     token = case_token(scoped_customer, unit["customer_version"]).encode()
                     start["headers"] += [(b"etag", b'"' + token + b'"'), (b"x-volt-case-version", token)]
@@ -651,7 +659,9 @@ class ProductionUnitMiddleware:
             if transaction and transaction.is_active:
                 await run_in_threadpool(transaction.rollback)
             # Error details can contain PII; the response and log contain no driver text.
-            problem = exc if isinstance(exc, errors.Problem) else self.problem("production_write_unavailable", 503)
+            sqlstate = getattr(getattr(exc, 'orig', None), 'sqlstate', None)
+            problem = exc if isinstance(exc, errors.Problem) else self.problem(
+                "production_busy" if sqlstate == '55P03' else "production_write_unavailable", 503)
             if conn is not None and unit_token is not None:
                 try:
                     await run_in_threadpool(append_audit_tail, conn, unit, problem, fresh=True)
@@ -707,6 +717,15 @@ class ProductionUnitMiddleware:
 
     @staticmethod
     def problem(code, status):
+        if code in ('state_conflict', 'preview_stale'):
+            return errors.Problem(code, status, "Review current data",
+                                  "Data changed after review; refresh the preview before confirming.",
+                                  "ข้อมูลเปลี่ยนหลังตรวจ กรุณาตรวจตัวอย่างล่าสุดก่อนยืนยันอีกครั้ง", "DEBT-PRD-001")
+        if code == 'production_busy':
+            return errors.Problem(code, status, "System is processing another operation",
+                                  "Another operation is using the required lock. Retry this same request.",
+                                  "ระบบกำลังประมวลผลงานอื่น กรุณารอสักครู่แล้วลองคำขอเดิมอีกครั้ง",
+                                  "DEBT-PRD-001", retryable=True)
         return errors.Problem(code, status, "Request could not be committed",
                               "Reload current data before retrying; the request was not committed.",
                               "ยังไม่บันทึกข้อมูล กรุณาโหลดข้อมูลล่าสุดแล้วลองใหม่", "DEBT-PRD-001", retryable=status == 503)

@@ -12,6 +12,7 @@ from pathlib import Path
 
 from fastapi import APIRouter, Body, Header, Query, Request
 from fastapi.responses import JSONResponse
+from sqlalchemy import text
 from starlette.concurrency import run_in_threadpool
 
 from .. import audit, db, errors, journey, landing, payment_claims
@@ -317,11 +318,23 @@ def _queue_apply(request, run_id, body, kind):
     from ..durable_runs import WORKER_RUN
     if not enabled() or WORKER_RUN.get():
         return None
+    _require_review_version(run_id, body)
     from ..task_outbox import enqueue_request
     uid = runs.start(kind + "-apply", landing_run_id=run_id)
     runs.progress(uid, phase="queued")
     enqueue_request(request, uid, json.dumps(body).encode("utf-8"))
     return JSONResponse(status_code=202, content=runs.get(uid))
+
+
+def _require_review_version(run_id, body):
+    from ..production_unit import enabled
+    if not enabled():
+        return
+    from .. import preview_review
+    with db.connect() as conn:
+        reviewed = conn.execute(text("select meta->>'review_state_version' from landing.import_run where id=:r"),
+                                {'r': run_id}).scalar()
+        preview_review.require(conn, reviewed, body.get('review_state_version'))
 
 
 def _finish_apply(result):
@@ -344,6 +357,7 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
     queued = _queue_apply(request, run_id, body, "peak-report")
     if queued is not None:
         return queued
+    _require_review_version(run_id, body)
     from ..durable_runs import WORKER_RUN
     if WORKER_RUN.get():
         runs.checkpoint(WORKER_RUN.get())
@@ -560,6 +574,7 @@ def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role:
     queued = _queue_apply(request, run_id, body, "peak-receipt")
     if queued is not None:
         return queued
+    _require_review_version(run_id, body)
     from ..durable_runs import WORKER_RUN
     if WORKER_RUN.get():
         runs.checkpoint(WORKER_RUN.get())

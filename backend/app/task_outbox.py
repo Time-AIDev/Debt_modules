@@ -38,6 +38,14 @@ def enqueue_request(request, uid, raw):
     actor = auth.resolve_session(request.scope)
     if not actor: raise auth.auth_required()
     enqueue(uid, request.scope["path"], raw, request.scope.get("query_string", b""), dict(request.headers), actor)
+    from .production_unit import CURRENT
+    from .operational_transactions import is_peak_apply_enqueue
+    from urllib.parse import parse_qs
+    query = parse_qs(request.scope.get("query_string", b"").decode("ascii"))
+    financial = is_peak_apply_enqueue(request.scope) or (request.scope['path'] == '/v1/imports:start'
+                and query.get('install', ['false'])[0].lower() in ('true', '1', 'on', 'yes'))
+    if financial and CURRENT.get() is not None:
+        CURRENT.get().setdefault('review_jobs', []).append(uid)
 
 
 def relay():

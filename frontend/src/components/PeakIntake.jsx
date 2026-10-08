@@ -199,7 +199,12 @@ export function PeakIntake({ onSummary }) {
     setBusy(true)
     setApplyProblem(null)
     try {
-      const result = await api.peakReportApply(stagedId, atLeast('MANAGER') && allowOlder ? { allow_older: true } : {})
+      const result = await api.peakReportApply(stagedId, {
+        ...(atLeast('MANAGER') && allowOlder ? { allow_older: true } : {}),
+        ...((staged?.meta?.review_state_version || run?.review_state_version) ? {
+          review_state_version: staged?.meta?.review_state_version || run?.review_state_version,
+        } : {}),
+      })
       setApplied(result)
       setRepairId(result.served === false ? stagedId : null)
       setApplyOpen(false)

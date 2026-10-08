@@ -189,7 +189,7 @@ export function DataSources() {
     sheetAbort.current = controller
     setSheetTask({ phase: 'uploading', uploadedBytes: 0, totalBytes: sheet.raw.size })
     const run = await api.installSheet(sheet.raw, sheet.run?.retire?.customers,
-      { signal: controller.signal, onProgress: setSheetTask })
+      { signal: controller.signal, onProgress: setSheetTask, expectedStateVersion: sheet.run?.review_state_version })
     setSheet({ ...sheet, run })
     setSheetTask(null)
     setAskInstall(false)

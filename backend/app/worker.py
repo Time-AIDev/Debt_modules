@@ -125,6 +125,8 @@ async def _execute_job_body(uid):
     async def trusted(scope, receive, send):
         scope["volt_resolved_auth"] = payload["actor"]
         scope["volt_worker"] = True
+        if payload.get("expected_state_version") is not None:
+            scope["volt_expected_state_version"] = payload["expected_state_version"]
         await api_app(scope, receive, send)
     token = WORKER_RUN.set(uid)
     try:

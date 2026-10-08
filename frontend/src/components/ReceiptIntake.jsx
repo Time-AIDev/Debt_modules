@@ -164,7 +164,12 @@ export function ReceiptIntake({ modes, schema }) {
     setBusy(true)
     setApplyProblem(null)
     try {
-      const result = await api.peakReceiptApply(stagedId, atLeast('MANAGER') && allowOlder ? { allow_older: true } : {})
+      const result = await api.peakReceiptApply(stagedId, {
+        ...(atLeast('MANAGER') && allowOlder ? { allow_older: true } : {}),
+        ...((staged?.meta?.review_state_version || run?.review_state_version) ? {
+          review_state_version: staged?.meta?.review_state_version || run?.review_state_version,
+        } : {}),
+      })
       setApplied(result)
       setApplyOpen(false)
       toast(t('peak.appliedToast'))

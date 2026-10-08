@@ -467,6 +467,9 @@ def apply(uid, body, actor, role):
             return payload["result"]
         if payload["version"] != body.get("preview_version") or payload["epoch"] != _epoch(conn):
             raise problem("preview_stale", "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจตัวอย่างใหม่", 409)
+        if payload.get('review_state_version') is not None:
+            from . import preview_review
+            preview_review.require(conn, payload['review_state_version'], body.get('review_state_version'))
         selected = body.get("selected_keys")
         if (not isinstance(selected, list) or not selected or any(not isinstance(value, str) for value in selected)
                 or len(selected) != len(set(selected))):
