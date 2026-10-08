@@ -80,7 +80,8 @@ def append_audit_tail(conn, unit, refusal=None, fresh=False):
 def independent_control(scope):
     from . import operational_transactions
     from .durable_runs import WORKER_RUN
-    if operational_transactions.is_peak_enqueue(scope, worker_run=bool(WORKER_RUN.get())):
+    if (operational_transactions.is_peak_enqueue(scope, worker_run=bool(WORKER_RUN.get())) or
+            operational_transactions.is_peak_apply_enqueue(scope, worker_run=bool(WORKER_RUN.get()))):
         return True
     if scope.get("path", "").startswith("/v1/operation-runs/"):
         return True

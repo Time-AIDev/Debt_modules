@@ -5,6 +5,16 @@ const ok = (body) => ({ ok: true, status: 200, json: async () => body, headers: 
 const refused = (body, status = 409) => ({ ok: false, status, json: async () => body, headers: { get: () => null } })
 afterEach(() => vi.restoreAllMocks())
 
+it('waits for durable PEAK apply completion before returning the served result', async () => {
+  const applied = { served: true, run: { id: 42 } }
+  const fetchMock = vi.spyOn(globalThis, 'fetch')
+    .mockResolvedValueOnce({ ...ok({ uid: 'run-apply', state: 'queued' }), status: 202 })
+    .mockResolvedValueOnce(ok({ uid: 'run-apply', state: 'done', result: applied }))
+  expect(await api.peakReceiptApply(42, {})).toEqual(applied)
+  expect(fetchMock.mock.calls[1][0]).toContain('/v1/operation-runs/run-apply')
+  expect(fetchMock.mock.calls[0][1].headers['Content-Type']).toBe('application/json')
+})
+
 describe('a big upload goes up in parts (Cloud Run refuses a body over 32 MiB)', () => {
   it('sends parts, then names them on the upload with no body', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(ok({ run: {} }))

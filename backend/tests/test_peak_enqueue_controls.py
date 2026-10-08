@@ -20,6 +20,22 @@ RAW = b"synthetic queue bytes, no financial application\n"
 PATHS = ("/api/v1/pipelines/peak-report:start", "/api/v1/pipelines/peak-receipt:start")
 
 
+@pytest.mark.parametrize("kind", ("peak-report", "peak-receipt"))
+def test_apply_submission_is_durable_and_replayed_without_reading_portfolio(enqueue_api, kind):
+    api, actor, totals, objects = enqueue_api
+    path = "/api/v1/pipelines/%s/landing-runs/42:apply" % kind
+    headers = dict(actor(key="synthetic-apply"), **{"Content-Type": "application/json"})
+    before = totals()
+    with db.connect() as barrier, barrier.begin():
+        barrier.execute(text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
+        response = api.post(path, json={}, headers=headers)
+        assert response.status_code == 202
+    replay = api.post(path, json={}, headers=headers)
+    assert replay.status_code == 202 and replay.content == response.content
+    assert totals() == (before[0] + 1, before[1] + 1, *before[2:])
+    assert [p.read_bytes() for p in objects.rglob("body")] == [b"{}"]
+
+
 @pytest.fixture
 def enqueue_api(production, monkeypatch, tmp_path):
     api, headers = production

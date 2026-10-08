@@ -312,14 +312,42 @@ def _served(payload, kind="peak", run_id=None):
     return payload
 
 
+def _queue_apply(request, run_id, body, kind):
+    from ..production_unit import enabled
+    from ..durable_runs import WORKER_RUN
+    if not enabled() or WORKER_RUN.get():
+        return None
+    from ..task_outbox import enqueue_request
+    uid = runs.start(kind + "-apply", landing_run_id=run_id)
+    runs.progress(uid, phase="queued")
+    enqueue_request(request, uid, json.dumps(body).encode("utf-8"))
+    return JSONResponse(status_code=202, content=runs.get(uid))
+
+
+def _finish_apply(result):
+    from ..durable_runs import WORKER_RUN
+    uid = WORKER_RUN.get()
+    if uid:
+        runs.mark_committed(uid)
+        runs.finish(uid, {"result": result})
+    return result
+
+
 @router.post(PREFIX + "/landing-runs/{run_id}:apply")
-def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
+def apply_run(run_id: int, request: Request, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
               x_volt_officer: str = Header(default=None)):
     _officer_or_above(x_volt_role)
     body = body or {}
     if body.get("allow_older") or body.get("force"):
         _manager_only(x_volt_role)
     _require_db()
+    queued = _queue_apply(request, run_id, body, "peak-report")
+    if queued is not None:
+        return queued
+    from ..durable_runs import WORKER_RUN
+    if WORKER_RUN.get():
+        runs.checkpoint(WORKER_RUN.get())
+        runs.progress(WORKER_RUN.get(), phase="applying")
     conn = db.connect()
     try:
         with _write_tx(conn):
@@ -340,10 +368,10 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
                    detail={"report_as_of": meta.get("report_as_of"), "matched": meta.get("matched"),
                            "candidates": meta.get("candidates"), "unmatched": meta.get("unmatched"),
                            "allow_older": bool(body.get("allow_older")), "reconciliation": reconciliation})
-    return _served({"run": run, "reconciliation": reconciliation,
+    return _finish_apply(_served({"run": run, "reconciliation": reconciliation,
                     "note_th": "ใช้รายงานนี้แล้ว — เซสชันนี้เห็นข้อมูลใหม่ทันที เซสชันอื่นอัปเดตอัตโนมัติเมื่อเปิดหน้าถัดไป",
                     "note_en": "This report is now in use — this session sees the new data at once; other sessions catch up automatically on their next request"},
-                   "peak", run_id)
+                   "peak", run_id))
 
 
 @router.post(PREFIX + "/landing-runs/{run_id}:refresh-served")
@@ -522,13 +550,20 @@ def receipt_rejected_documents(run_id: int, limit: int = Query(default=50, ge=1,
 
 
 @router.post(PREFIX_RECEIPT + "/landing-runs/{run_id}:apply")
-def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
+def apply_receipt_run(run_id: int, request: Request, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
                       x_volt_officer: str = Header(default=None)):
     _officer_or_above(x_volt_role)
     body = body or {}
     if body.get("allow_older"):
         _manager_only(x_volt_role)
     _require_db()
+    queued = _queue_apply(request, run_id, body, "peak-receipt")
+    if queued is not None:
+        return queued
+    from ..durable_runs import WORKER_RUN
+    if WORKER_RUN.get():
+        runs.checkpoint(WORKER_RUN.get())
+        runs.progress(WORKER_RUN.get(), phase="applying")
     conn = db.connect()
     try:
         with _write_tx(conn):
@@ -545,10 +580,10 @@ def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role:
                    detail={"report_as_of": meta.get("report_as_of"), "matched": meta.get("matched"),
                            "unmatched": meta.get("unmatched"), "allow_older": bool(body.get("allow_older")),
                            "reconciliation": reconciliation})
-    return _served({"run": run, "reconciliation": reconciliation,
+    return _finish_apply(_served({"run": run, "reconciliation": reconciliation,
                     "note_th": "ใช้รายงานใบเสร็จนี้แล้ว — สถานะการชำระรายงวดอัปเดตทันที",
                     "note_en": "This receipt report is now in use — per-instalment payment status updates at once"},
-                   "peak-receipt", run_id)
+                   "peak-receipt", run_id))
 
 
 @router.post(PREFIX_RECEIPT + "/landing-runs/{run_id}:refresh-served")

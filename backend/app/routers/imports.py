@@ -22,6 +22,7 @@ import contextvars
 import io
 import re
 import threading
+import urllib.parse
 from pathlib import Path
 
 from fastapi import APIRouter, Header, Request
@@ -131,7 +132,7 @@ def _filename(header):
     path (ruling 71's own line on this)."""
     if not header:
         return None
-    return re.sub(r"[^\w.\- ]", "", Path(header).name)[:120] or None
+    return re.sub(r"[^\w\u0E00-\u0E7F.\- ()]", "", Path(urllib.parse.unquote(header)).name)[:120] or None
 
 
 def _problem_payload(exc):

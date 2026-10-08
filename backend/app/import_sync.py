@@ -78,6 +78,23 @@ def reset():
 
 
 def heal_session():
+    """Use one fresh read scope for the complete post-import refresh batch.
+
+    Global write requests do not have the normal read-request memo. Without this
+    boundary each case reloads and decodes every installation/pipeline proof.
+    A fresh scope also prevents reads made before the import from being reused.
+    """
+    from . import main, request_context
+    read_token = request_context.begin_read()
+    memo_token = main._VIEW_MEMO.set({})
+    try:
+        return _heal_session()
+    finally:
+        main._VIEW_MEMO.reset(memo_token)
+        request_context.end_read(read_token)
+
+
+def _heal_session():
     """Refresh this session's import-derived state, in place. Returns counts.
 
     Under the session's heal lock, so every caller is covered: the per-request hook,

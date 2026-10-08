@@ -525,9 +525,17 @@ const ACTIVE_OPERATION_STATES = new Set([
 ])
 
 async function postOperation(path, file, extraHeaders = {}, options = {}) {
+  return runOperation(() => postRaw(path, file, extraHeaders, options), options)
+}
+
+async function postJsonOperation(path, body, options = {}) {
+  return runOperation(() => post(path, body), options)
+}
+
+async function runOperation(start, options) {
   let run = null
   try {
-    run = await postRaw(path, file, extraHeaders, options)
+    run = await start()
     options.onProgress?.(run)
     if (!run?.uid || !run?.state) return run
     while (ACTIVE_OPERATION_STATES.has(run.state)) {
@@ -856,7 +864,7 @@ export const api = {
   peakReportRun: (uid) => get(`/v1/pipelines/peak-report/runs/${uid}`),
   peakReportLastRun: () => get('/v1/pipelines/peak-report/last-run'),
   peakReportRows: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/rows`, params),
-  peakReportApply: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}:apply`, body || {}),
+  peakReportApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-report/landing-runs/${runId}:apply`, body || {}, options),
   // Repairs a committed apply whose served reload failed (`served: false`).
   peakReportRefreshServed: (runId) => post(`/v1/pipelines/peak-report/landing-runs/${runId}:refresh-served`, {}),
   peakLinks: (params) => get('/v1/pipelines/peak-report/links', params),
@@ -872,7 +880,7 @@ export const api = {
   peakReceiptLastRun: () => get('/v1/pipelines/peak-receipt/last-run'),
   peakReceiptRows: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rows`, params),
   peakReceiptRejectedDocuments: (runId, params) => get(`/v1/pipelines/peak-receipt/landing-runs/${runId}/rejected-documents`, params),
-  peakReceiptApply: (runId, body) => post(`/v1/pipelines/peak-receipt/landing-runs/${runId}:apply`, body || {}),
+  peakReceiptApply: (runId, body, options) => postJsonOperation(`/v1/pipelines/peak-receipt/landing-runs/${runId}:apply`, body || {}, options),
   peakConflicts: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts`, params),
   peakConflictsDecide: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts:decide`, body),
   peakDecisionRetire: (uid) => post(`/v1/pipelines/peak-report/field-decisions/${uid}:retire`, {}),
