@@ -97,18 +97,24 @@ def test_review_fence_is_published_at_commit_and_checked_again(production, monke
     from app import preview_review
     from app.durable_runs import WORKER_RUN
     from app.production_unit import CURRENT
+    import gzip
     api, headers = production
     monkeypatch.setenv('PROD_GO_LIVE_ENABLED', 'true')
     with db.connect() as conn, conn.begin():
         conn.execute(text("insert into app.operation_run(uid,payload) values('test-preview',cast(:p as jsonb))"),
                      {'p': json.dumps({'kind': 'master-sheet', 'state': 'done', 'result': {'installed': False}})})
         token = WORKER_RUN.set('test-preview')
+        compressed = gzip.compress(b'{"state":"done","result":{"installed":false}}')
+        messages = [{'type': 'http.response.start', 'status': 202,
+                     'headers': [(b'content-encoding', b'gzip')]},
+                    {'type': 'http.response.body', 'body': compressed}]
         try:
-            preview_review.publish(conn, {'version': 8}, {}, [])
+            preview_review.publish(conn, {'version': 8}, {}, messages)
         finally:
             WORKER_RUN.reset(token)
         payload = conn.execute(text("select payload from app.operation_run where uid='test-preview'")).scalar_one()
         assert payload['result']['review_state_version'] == '8'
+        assert messages[1]['body'] == compressed
         conn.execute(text('update app.business_version set version=9'))
         with pytest.raises(Exception) as caught:
             preview_review.require(conn, '8')

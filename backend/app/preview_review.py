@@ -45,14 +45,5 @@ def publish(conn, unit, scope, messages):
                      {'v': version, 'r': row['run_id']})
     conn.execute(text('update app.operation_run set payload=cast(:p as jsonb) where uid=:u'),
                  {'u': uid, 'p': json.dumps(row)})
-    # The worker's immediate reply must carry the same fence as durable polling.
-    for message in messages:
-        if message['type'] != 'http.response.body' or not message.get('body'):
-            continue
-        body = json.loads(message['body'])
-        if isinstance(body, dict):
-            body['review_state_version'] = version
-            message['body'] = json.dumps(body).encode()
-    for message in messages:
-        if message['type'] == 'http.response.start':
-            message['headers'] = [(k, v) for k, v in message.get('headers', []) if k.lower() != b'content-length']
+    # Responses may already be compressed by inner middleware. The public
+    # operation poll reads this committed row; never decode/rewrite wire bytes.
