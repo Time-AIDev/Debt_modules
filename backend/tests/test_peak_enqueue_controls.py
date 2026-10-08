@@ -28,12 +28,12 @@ def test_apply_submission_is_durable_and_replayed_without_reading_portfolio(enqu
     before = totals()
     with db.connect() as barrier, barrier.begin():
         barrier.execute(text("select pg_advisory_xact_lock(:k)"), {"k": LOCK_KEY})
-        response = api.post(path, json={}, headers=headers)
+        response = api.post(path, json={"by": "forged"}, headers=headers)
         assert response.status_code == 202
-    replay = api.post(path, json={}, headers=headers)
+    replay = api.post(path, json={"by": "forged"}, headers=headers)
     assert replay.status_code == 202 and replay.content == response.content
     assert totals() == (before[0] + 1, before[1] + 1, *before[2:])
-    assert [p.read_bytes() for p in objects.rglob("body")] == [b"{}"]
+    assert [json.loads(p.read_bytes()) for p in objects.rglob("body")] == [{"by": "owner"}]
 
 
 @pytest.fixture

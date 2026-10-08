@@ -334,8 +334,8 @@ def _finish_apply(result):
 
 
 @router.post(PREFIX + "/landing-runs/{run_id}:apply")
-def apply_run(run_id: int, request: Request, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
-              x_volt_officer: str = Header(default=None)):
+def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
+              x_volt_officer: str = Header(default=None), request: Request = None):
     _officer_or_above(x_volt_role)
     body = body or {}
     if body.get("allow_older") or body.get("force"):
@@ -550,8 +550,8 @@ def receipt_rejected_documents(run_id: int, limit: int = Query(default=50, ge=1,
 
 
 @router.post(PREFIX_RECEIPT + "/landing-runs/{run_id}:apply")
-def apply_receipt_run(run_id: int, request: Request, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
-                      x_volt_officer: str = Header(default=None)):
+def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = Header(default="OFFICER"),
+                      x_volt_officer: str = Header(default=None), request: Request = None):
     _officer_or_above(x_volt_role)
     body = body or {}
     if body.get("allow_older"):

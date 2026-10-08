@@ -11,7 +11,7 @@ it('waits for durable PEAK apply completion before returning the served result',
     .mockResolvedValueOnce({ ...ok({ uid: 'run-apply', state: 'queued' }), status: 202 })
     .mockResolvedValueOnce(ok({ uid: 'run-apply', state: 'done', result: applied }))
   expect(await api.peakReceiptApply(42, {})).toEqual(applied)
-  expect(fetchMock.mock.calls[1][0]).toContain('/v1/operation-runs/run-apply')
+  expect(String(fetchMock.mock.calls[1][0])).toContain('/v1/operation-runs/run-apply')
   expect(fetchMock.mock.calls[0][1].headers['Content-Type']).toBe('application/json')
 })
 
