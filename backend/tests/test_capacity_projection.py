@@ -236,7 +236,12 @@ def test_compatible_fallback_uses_legacy_calculations_without_old_codec(monkeypa
 ])
 def test_only_owned_preview_profiles_bypass_publication_lock(query, expected):
     assert independent_control({"path": "/v1/imports", "method": "POST", "query_string": query}) is expected
-    assert independent_control({"path": "/v1/imports:start", "method": "POST", "query_string": query}) is expected
+    # A browser fullbook preview enqueue is operational; direct parsing remains
+    # protected, and worker execution retains the publication barrier.
+    start = {"path": "/v1/imports:start", "method": "POST", "query_string": query}
+    assert independent_control(start) is (expected or query == b"")
+    if query == b"":
+        assert independent_control(dict(start, volt_worker=True)) is False
     assert independent_control({"path": "/v1/imports/example:apply", "method": "POST", "query_string": query}) is False
 
 
