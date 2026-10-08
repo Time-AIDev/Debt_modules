@@ -6,15 +6,26 @@ const base=process.env.BASE_URL || 'https://collection.volt.co.th';
 const output=process.env.EVIDENCE_FILE || '/results/browser-evidence.json';
 const browser=await puppeteer.launch({executablePath:process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium-browser',headless:true,args:['--no-sandbox','--disable-dev-shm-usage']});
 const page=await browser.newPage();
-const diagnostics=[];const failed=[];
-page.on('console',msg=>{if(['error','warning'].includes(msg.type()))diagnostics.push(msg.text());});
+const diagnostics=[];const failed=[];const expectedUnauthenticated=[];
+page.on('console',msg=>{
+  if(!['error','warning'].includes(msg.type()))return;
+  let location;
+  try{location=new URL(msg.location().url);}catch{}
+  // The login screen deliberately probes the current session before offering
+  // Google sign-in. Its own 401 is expected; Google and other API errors count.
+  if(location?.origin===new URL(base).origin&&location.pathname==='/api/v1/auth/me'
+      &&/status of 401/.test(msg.text())){
+    expectedUnauthenticated.push({path:location.pathname,status:401});return;
+  }
+  diagnostics.push(msg.text());
+});
 page.on('pageerror',error=>diagnostics.push(error.message));
 page.on('requestfailed',request=>{const u=new URL(request.url());failed.push({origin:u.origin,path:u.pathname,error:request.failure()?.errorText});});
 const response=await page.goto(base,{waitUntil:'networkidle2',timeout:30000});
 await new Promise(resolve=>setTimeout(resolve,2500));
 const text=await page.evaluate(()=>document.body.innerText);
 const googleOriginDenied=diagnostics.some(x=>/origin.*not allowed|origin_mismatch/i.test(x));
-const result={timestamp:new Date().toISOString(),target:base,status:response.status(),title:await page.title(),visible_body_characters:text.length,login_visible:/Google|เข้าสู่ระบบ|sign in|login/i.test(text),google_origin_denied:googleOriginDenied,page_error_count:diagnostics.length,failed_requests:failed,browser_login_performed:false,diagnostics:diagnostics.map(x=>x.replace(/[A-Za-z0-9_-]+\.apps\.googleusercontent\.com/g,'[PUBLIC_CLIENT_ID]'))};
+const result={timestamp:new Date().toISOString(),target:base,status:response.status(),title:await page.title(),visible_body_characters:text.length,login_visible:/Google|เข้าสู่ระบบ|sign in|login/i.test(text),google_origin_denied:googleOriginDenied,page_error_count:diagnostics.length,expected_unauthenticated_responses:expectedUnauthenticated,failed_requests:failed,browser_login_performed:false,diagnostics:diagnostics.map(x=>x.replace(/[A-Za-z0-9_-]+\.apps\.googleusercontent\.com/g,'[PUBLIC_CLIENT_ID]'))};
 await page.screenshot({path:output.replace(/\.json$/,'.png'),fullPage:true});
 fs.writeFileSync(output,JSON.stringify(result,null,2));
 console.log(JSON.stringify({status:result.status,login_visible:result.login_visible,google_origin_denied:result.google_origin_denied,page_error_count:result.page_error_count,failed_requests:failed.length}));

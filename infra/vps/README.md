@@ -14,6 +14,12 @@ The XLSX reader retains up to two million cell slots after removing blank tails;
 the 100 MiB input, 512 MiB inflation, 64 MiB retained text, ten million processed
 cells and 120-second parsing bounds remain independent. Missing cached formulas
 are reported by worksheet and field and are never evaluated as zero.
+XML token checks scan bounded chunks without allocating one object per tag, and
+column decoding caches only valid Excel columns while checking every row reference.
+
+The web sends `Referrer-Policy: strict-origin-when-cross-origin` so Google Identity
+Services receives the authorized site origin. A login screen's expected session
+probe returning 401 is recorded separately from Google or other application errors.
 
 Server: `debt-production` / `143.198.207.143`. Source directory:
 `/srv/volt-debt-platform`. Intended domain: `collection.volt.co.th`.

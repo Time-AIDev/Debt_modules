@@ -4,11 +4,32 @@ import json
 import zipfile
 
 import httpx
+import pytest
 from sqlalchemy import text
 
 from app import db, imports, migrate, payment_claims, worker
 from app.pipelines import service
 from tests.test_round5_data_flow import _xlsx_bytes_multi
+
+
+@pytest.mark.parametrize("length,refused", [(63, False), (64, False), (65, True)])
+def test_xml_token_bound_spanning_read_chunks(monkeypatch, length, refused):
+    import xml.etree.ElementTree as ET
+    monkeypatch.setattr(imports, "XLSX_MAX_XML_TOKEN_BYTES", 64)
+    source = imports._SafeXmlReader(io.BytesIO(b"<a>" + b"x" * length + b"</a>"))
+    if refused:
+        with pytest.raises(imports.UploadRefused, match="token exceeds"):
+            ET.parse(source)
+    else:
+        assert ET.parse(source).getroot().text == "x" * length
+
+
+def test_xml_declaration_is_refused_when_split_across_chunks(monkeypatch):
+    monkeypatch.setattr(imports, "XLSX_MAX_XML_TOKEN_BYTES", 6)
+    source = imports._SafeXmlReader(io.BytesIO(b"<!DOCTYPE a><a/>"))
+    with pytest.raises(imports.UploadRefused, match="declarations"):
+        while source.read():
+            pass
 
 
 def test_formatted_columns_and_error_only_templates_do_not_consume_kept_budget(monkeypatch):

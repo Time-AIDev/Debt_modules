@@ -95,16 +95,24 @@ class _SafeXmlReader:
         self.token_bytes, self.tail = 0, b""
 
     def read(self, size=-1):
-        data = self.source.read(min(size, 64 * 1024) if size >= 0 else 64 * 1024)
+        # A chunk cannot contain an over-limit token on its own. Only a token
+        # continuing from the previous chunk needs a rolling length check.
+        # Avoid splitting every XML tag into Python objects: styled templates
+        # contain millions of empty cells but still need the same XML bounds.
+        cap = min(64 * 1024, XLSX_MAX_XML_TOKEN_BYTES)
+        data = self.source.read(min(size, cap) if size >= 0 else cap)
         scan = self.tail + data
         if b"<!DOCTYPE" in scan or b"<!ENTITY" in scan:
             _xlsx_refused("Workbook XML declarations are not allowed.")
         self.tail = scan[-16:]
-        pieces = re.split(br"[<>]", data)
-        for index, piece in enumerate(pieces):
-            self.token_bytes = self.token_bytes + len(piece) if index == 0 else len(piece)
-            if self.token_bytes > XLSX_MAX_XML_TOKEN_BYTES:
-                _xlsx_refused("A workbook XML token exceeds the safe limit.")
+        starts, ends = data.find(b"<"), data.find(b">")
+        first = min((position for position in (starts, ends) if position >= 0), default=len(data))
+        self.token_bytes += first
+        if self.token_bytes > XLSX_MAX_XML_TOKEN_BYTES:
+            _xlsx_refused("A workbook XML token exceeds the safe limit.")
+        last = max(data.rfind(b"<"), data.rfind(b">"))
+        if last >= 0:
+            self.token_bytes = len(data) - last - 1
         if self.budget:
             self.budget.check()
         return data
@@ -349,16 +357,25 @@ def _tag_prefix(tag):
     return tag[:end + 1] if end >= 0 else ""
 
 
+_CELL_REFERENCE = re.compile(r"([A-Z]{1,3})([1-9][0-9]{0,6})")
+_COLUMN_INDEXES = {}  # Valid Excel columns only: at most 16,384 small entries.
+
+
 def _col_index(ref):
     """"C7" -> 2 (0-based), after checking Excel's complete cell-reference limits."""
-    match = re.fullmatch(r"([A-Z]{1,3})([1-9][0-9]{0,6})", ref)
+    match = _CELL_REFERENCE.fullmatch(ref)
     if not match or int(match[2]) > 1048576:
         _xlsx_refused("An XLSX cell reference is invalid.")
+    letters = match[1]
+    cached = _COLUMN_INDEXES.get(letters)
+    if cached is not None:
+        return cached
     n = 0
-    for ch in match[1]:
+    for ch in letters:
         n = n * 26 + (ord(ch) - ord("A") + 1)
     if n > XLSX_MAX_COLUMNS:
         _xlsx_refused("An XLSX column exceeds Excel's column limit.")
+    _COLUMN_INDEXES[letters] = n - 1
     return n - 1
 
 
@@ -480,7 +497,8 @@ def _row_cells(row_el, shared, date_styles, epoch_1904, tag_prefix=None, budget=
         idx = _col_index(ref) if ref else width
         if idx >= XLSX_MAX_COLUMNS:
             _xlsx_refused("An XLSX row exceeds Excel's column limit.")
-        width = max(width, idx + 1)
+        if idx >= width:
+            width = idx + 1
         ctype = c.get("t")
         style = int(c.get("s") or 0)
         if not len(c):
