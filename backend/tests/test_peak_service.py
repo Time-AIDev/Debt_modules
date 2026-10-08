@@ -28,6 +28,13 @@ def test_an_unreadable_file_fails_with_the_parsers_own_code(monkeypatch):
     monkeypatch.setattr(db, "configured", lambda: True)
     run = peak_service.run_upload(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1 not really", "old.xls")
     assert run["state"] == "failed" and run["problem"]["code"] == "unreadable"
+    assert run['problem']['status'] == 422 and run['problem']['retryable'] is False
+
+
+def test_invalid_receipt_is_permanent_and_does_not_request_delivery_retry():
+    run = peak_service.run_receipt_upload(b'invalid,headers\n1,2', 'receipt.csv')
+    assert run['state'] == 'failed'
+    assert run['problem']['status'] == 422 and run['problem']['retryable'] is False
 
 
 def test_a_receipt_run_announces_reading_then_matching(monkeypatch):

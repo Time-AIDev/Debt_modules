@@ -176,6 +176,8 @@ def _process_import(raw, filename, officer, role, install, confirm_retire, run_u
     try:
         if profile:
             from .. import debt_imports
+            if run_uid:
+                runs.progress(run_uid, phase='parsing')
             if install:
                 raise debt_imports.problem("profile_apply", "ตรวจตัวอย่างก่อน แล้วใช้คำสั่งยืนยันแถวที่เลือก")
             preview = debt_imports.stage(raw, filename, profile, officer or "officer")

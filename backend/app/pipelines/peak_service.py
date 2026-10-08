@@ -330,6 +330,7 @@ def run_upload(raw, filename, uid=None):
         result = _land(uid, parsed, filename, fingerprint=fingerprint)
     except peak_report.ReportError as exc:
         runs.fail(uid, {"code": exc.code, "detail": exc.detail, "detail_th": exc.detail_th,
+                        "status": 422, "retryable": False,
                         "schema": exc.schema})
     except PipelineRefused as exc:
         runs.fail(uid, exc.problem)
@@ -365,6 +366,7 @@ def run_receipt_upload(raw, filename, uid=None):
                        stage_timings=stage_timings)
     except peak_report.ReportError as exc:
         runs.fail(uid, {"code": exc.code, "detail": exc.detail, "detail_th": exc.detail_th,
+                        "status": 422, "retryable": False,
                         "schema": exc.schema})
     except PipelineRefused as exc:
         runs.fail(uid, exc.problem)
