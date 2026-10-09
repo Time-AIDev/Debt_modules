@@ -1,22 +1,60 @@
-collection.volt.co.th, debt.143-198-207-143.sslip.io {
-    header Strict-Transport-Security "max-age=31536000"
-    request_body {
-        max_size 100MB
-    }
-    handle /readyz {
-        reverse_proxy api:8080
-    }
-    handle /healthz {
-        reverse_proxy api:8080
-    }
-    handle /api/readyz {
-        uri strip_prefix /api
-        reverse_proxy api:8080
-    }
-    handle /api/* {
-        reverse_proxy api:8080
-    }
-    handle {
-        reverse_proxy web:8080
-    }
+# ============================================================
+# STAGING / UAT — temporary access via sslip.io
+# Active hostname: debt.143-198-207-143.sslip.io (resolves by IP; no DNS needed).
+# debt.volt.co.th is disabled until its A record is live in the PORAR zone.
+# To re-enable, change the site address back to:
+#   debt.volt.co.th, debt.143-198-207-143.sslip.io {
+# Upstream: api-stg:8080, web-stg:8080 (volt-debt-stg project, volt-edge-net)
+# ============================================================
+debt.143-198-207-143.sslip.io {
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		max_size 100MB
+	}
+	handle /readyz {
+		reverse_proxy api-stg:8080
+	}
+	handle /healthz {
+		reverse_proxy api-stg:8080
+	}
+	handle /api/readyz {
+		uri strip_prefix /api
+		reverse_proxy api-stg:8080
+	}
+	handle /api/* {
+		reverse_proxy api-stg:8080
+	}
+	handle {
+		reverse_proxy web-stg:8080
+	}
+}
+
+# ============================================================
+# PRODUCTION — collection.volt.co.th
+# DNS: A record → VPS IP. Caddy provisions TLS automatically.
+# Upstream: api:8080 / web:8080 — the existing volt-debt stack,
+# which holds the live production database. Do not repoint to
+# api-prd/web-prd without a planned data migration.
+# ============================================================
+collection.volt.co.th {
+	header Strict-Transport-Security "max-age=31536000"
+	request_body {
+		max_size 100MB
+	}
+	handle /readyz {
+		reverse_proxy api:8080
+	}
+	handle /healthz {
+		reverse_proxy api:8080
+	}
+	handle /api/readyz {
+		uri strip_prefix /api
+		reverse_proxy api:8080
+	}
+	handle /api/* {
+		reverse_proxy api:8080
+	}
+	handle {
+		reverse_proxy web:8080
+	}
 }

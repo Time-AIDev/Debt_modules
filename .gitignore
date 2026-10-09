@@ -11,7 +11,13 @@ frontend/node_modules
 .superpowers/
 *.sqlite3
 .env
+.env.staging
+.env.production
 .pytest_cache/
+
+# Operational evidence reports — contain real customer/bank data (account
+# numbers, payment amounts, contact codes). Never commit; keep private.
+/reports/
 
 # Odoo sync snapshot cache — runtime data, never committed.
 backend/var/

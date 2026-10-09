@@ -3,6 +3,51 @@
 Verified on `143.198.207.143` at `/srv/volt-debt-platform`, approximately 09:57
 Asia/Bangkok. This supersedes the initial installation history below.
 
+## Update — 2026-10-09: staging served via sslip.io (DNS still pending)
+
+`debt.volt.co.th` still has no A record in the authoritative PORAR zone
+(`ns5.porar.com`/`ns6.porar.com`), so Caddy's ACME orders failed with NXDOMAIN and
+no certificate could be issued. The staging site in `infra/vps/Caddyfile` now serves
+only `debt.143-198-207-143.sslip.io` (valid Let's Encrypt certificate, HTTPS 200,
+`environment: staging`); `debt.volt.co.th` is commented out with a re-enable note.
+Production `collection.volt.co.th` is unchanged (HTTPS 200). Note: a `debt` A record
+added in DigitalOcean DNS has no effect while the domain's NS still point at PORAR.
+
+## Update — 2026-10-08: staging deployed, routing incident resolved
+
+- **Routing incident**: an in-progress two-environment `Caddyfile` was applied to
+  the live edge while no `api-stg`/`web-stg`/`api-prd`/`web-prd` containers
+  existed, so both `collection.volt.co.th` and the sslip.io hostname returned 502
+  (`lookup api-prd ... server misbehaving`). Resolved by restoring routing to the
+  running stack; production data was never at risk or modified.
+- **Staging stack deployed**: project `volt-debt-stg` from
+  `infra/vps/compose.staging.yaml`, images pinned to the production digests via
+  `/srv/volt-debt-platform/.env.staging`. Containers `db-stg`, `api-stg`
+  (127.0.0.1:8091), `worker-stg`, `scanner-stg`, `web-stg` (127.0.0.1:8090) — all
+  healthy. Fresh database: 204 migration statements plus runtime-role grants;
+  `debt_api` created by `/etc/volt-debt/staging/init-runtime.sql` (owned uid 999,
+  the container postgres user — root-owned 0600 is silently skipped by initdb).
+  Secrets in `/etc/volt-debt/staging/api.env` (fresh session secret, Odoo
+  credentials removed, `PROD_GO_LIVE_ENABLED=false`); data in
+  `/srv/volt-debt-data-staging/objects` (10001:10001).
+- **Edge**: attached to shared external network `volt-edge-net`
+  (live connect, persisted in `/etc/volt-debt/compose.edge.override.yaml`).
+  `infra/vps/Caddyfile` routes `debt.volt.co.th` (+ sslip.io hostname) to
+  `api-stg`/`web-stg` and `collection.volt.co.th` to `api`/`web` (legacy stack,
+  live database).
+- **Production unchanged**: still the `volt-debt` project with the pool override
+  and `/etc/volt-debt/stack.env`. `compose.production.yaml` is deferred; using it
+  requires a planned data migration and cutover.
+- Verified: staging and production both HTTPS 200; `/api/v1/auth/config` reports
+  `staging` and `production` respectively; no OOM events; swap ~0; staging
+  api/worker logs clean.
+- Pending: DNS A record `debt.volt.co.th` → `143.198.207.143` (still NXDOMAIN);
+  Google OAuth origins for staging (`https://debt.volt.co.th` and
+  `https://debt.143-198-207-143.sslip.io`); staging backup/health systemd timers
+  exist under `infra/vps/` but are not installed yet.
+
+## Verified state — 2026-10-05
+
 - Six application containers running: PostgreSQL, ClamAV, API, worker, web, Caddy.
   No additional application workloads found. SSH, editor/agent processes and
   required host services remain available.
