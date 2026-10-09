@@ -17,9 +17,35 @@ def require(conn, reviewed, supplied=None):
         raise ProductionUnitMiddleware.problem('preview_stale', 409)
 
 
+def restamp(conn, run_id, source):
+    """Re-bind a staged (not yet applied) landing run to the version that stands now.
+
+    A `state_conflict`/`preview_stale` answer means data moved after the review;
+    the honest repair is to LOOK at the run again, not to re-upload the same bytes
+    (the duplicate refusal already says the staged run is the one to use). The
+    recheck route reloads the run's rows/conflicts and calls this, so the fence
+    follows the version the reviewer just saw. Returns the new fence, or None
+    when the run is not a staged one worth re-checking. Landing metadata only —
+    never the mutable book, never the version itself."""
+    current = conn.execute(text('select version from app.business_version where singleton')).scalar_one()
+    stamped = conn.execute(text(
+        "update landing.import_run set meta = meta || jsonb_build_object("
+        "'review_state_version', cast(:v as text), "
+        "'review_state_version_at', to_char(now() at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')) "
+        "where id = :r and source_system = :s and status = 'OK' and not (meta ? 'applied') "
+        "returning id"), {'v': str(current), 'r': int(run_id), 's': source}).scalar()
+    return str(current) if stamped is not None else None
+
+
 def publish(conn, unit, scope, messages):
     version = str(unit['version'])
     for uid in unit.get('review_jobs', []):
+        forced = conn.execute(text("select payload->>'force_state_change' from app.task_outbox where uid=:u"),
+                              {'u': uid}).scalar()
+        if forced == 'true':
+            # A manager's forced confirm carries no fence of its own — the force
+            # IS the decision that the version it reviewed no longer stands.
+            continue
         conn.execute(text("update app.task_outbox set payload=payload || "
                           "jsonb_build_object('expected_state_version',cast(:v as text)) where uid=:u"),
                      {'v': version, 'u': uid})
@@ -40,8 +66,11 @@ def publish(conn, unit, scope, messages):
                           "jsonb_build_object('review_state_version',cast(:v as text)) where uid=:u"),
                      {'v': version, 'u': preview['uid']})
     if row['kind'] in ('peak-report', 'peak-receipt') and row.get('run_id'):
+        # The stamp carries `_at` as well, so the run's changes read has the exact
+        # fence moment as its watermark (not an earlier inner-commit timestamp).
         conn.execute(text("update landing.import_run set meta=meta || "
-                          "jsonb_build_object('review_state_version',cast(:v as text)) where id=:r"),
+                          "jsonb_build_object('review_state_version',cast(:v as text), "
+                          "'review_state_version_at', to_char(now() at time zone 'utc', 'YYYY-MM-DD\"T\"HH24:MI:SS.US')) where id=:r"),
                      {'v': version, 'r': row['run_id']})
     conn.execute(text('update app.operation_run set payload=cast(:p as jsonb) where uid=:u'),
                  {'u': uid, 'p': json.dumps(row)})

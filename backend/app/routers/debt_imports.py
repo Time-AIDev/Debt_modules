@@ -15,7 +15,9 @@ def apply(uid: str, body: dict = Body(...), x_volt_role: str = Header(default="O
           x_volt_officer: str = Header(default=None)):
     audit.describe(act="DEBT_IMPORT_APPLIED", subject=("import_preview", uid))
     result = domain.apply(uid, body, x_volt_officer or "officer", x_volt_role.upper())
-    audit.describe(detail={key: result[key] for key in ("profile", "applied", "customers", "terminated")})
+    audit.describe(detail={key: result[key] for key in ("profile", "applied", "customers", "terminated")}
+                   | {"forced_state": bool(result.get("forced")),
+                      **({"force_reason": body.get("reason")} if result.get("forced") else {})})
     return {"apply": result}
 
 

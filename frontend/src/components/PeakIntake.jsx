@@ -11,7 +11,7 @@ import { SegmentedControl } from './SegmentedControl.jsx'
 import { FailedRun, ReceiptIntake } from './ReceiptIntake.jsx'
 import { ConflictList } from './ConflictList.jsx'
 import { useToast } from './Toast.jsx'
-import { ApplyDialog, Dropzone, Fig, FileInput, Progress, ReviewRows, RowSheet, runProblem } from './import/parts.jsx'
+import { ApplyDialog, ChangesDrawer, Dropzone, Fig, FileInput, Progress, ReviewRows, RowSheet, runProblem } from './import/parts.jsx'
 import { SchemaFeedback } from './import/SchemaFeedback.jsx'
 import { isRunActive } from '../lib/operation.js'
 
@@ -45,6 +45,8 @@ export function PeakIntake({ onSummary }) {
   const [problem, setProblem] = useState(null)
   const [applyOpen, setApplyOpen] = useState(false)
   const [applyProblem, setApplyProblem] = useState(null)
+  const [stale, setStale] = useState(false)
+  const [changesOpen, setChangesOpen] = useState(false)
   const [allowOlder, setAllowOlder] = useState(false)
   const [applied, setApplied] = useState(null)
   const [repairId, setRepairId] = useState(null)
@@ -195,21 +197,48 @@ export function PeakIntake({ onSummary }) {
     loadRows(reviewId, 'UNMATCHED')
   }, [run, reviewId, loadRows])
 
-  async function applyReport() {
+  const STALE_CODES = ['state_conflict', 'preview_stale']
+
+  async function applyReport(force = false, reason = '') {
     setBusy(true)
     setApplyProblem(null)
     try {
       const result = await api.peakReportApply(stagedId, {
         ...(atLeast('MANAGER') && allowOlder ? { allow_older: true } : {}),
+        ...(force ? { force_state_change: true, reason } : {}),
         ...((staged?.meta?.review_state_version || run?.review_state_version) ? {
           review_state_version: staged?.meta?.review_state_version || run?.review_state_version,
         } : {}),
       })
       setApplied(result)
+      setStale(false)
       setRepairId(result.served === false ? stagedId : null)
       setApplyOpen(false)
       toast(t('peak.appliedToast'))
       loadLast()
+    } catch (e) {
+      const problem = e?.problem || { code: 'request_failed' }
+      setApplyProblem(problem)
+      setStale(STALE_CODES.includes(problem.code))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function recheckReport() {
+    if (!stagedId || busy) return
+    setBusy(true)
+    setApplyProblem(null)
+    try {
+      // Re-binds the staged run's fence to the version that stands now after the
+      // rows/conflicts have been read again (loadLast re-reads the run's meta).
+      await api.peakReportRecheck(stagedId)
+      setStale(false)
+      loadLast()
+      loadRows(stagedId, 'CANDIDATE')
+      loadRows(stagedId, 'UNMATCHED')
+      setConflictTick((n) => n + 1)
+      toast(t('peak.rechecked'))
     } catch (e) {
       setApplyProblem(e?.problem || { code: 'request_failed' })
     } finally {
@@ -352,7 +381,7 @@ export function PeakIntake({ onSummary }) {
           </button>
           {waiting ? (
             <button type="button" className="btn btn--primary" disabled={busy || !!lastProblem || !!conflictProblem}
-                    onClick={() => { setApplyProblem(null); setAllowOlder(false); setApplyOpen(true) }}>
+                    onClick={() => { setApplyProblem(null); setStale(false); setAllowOlder(false); setApplyOpen(true) }}>
               {t('peak.apply')}
             </button>
           ) : alreadyApplied ? <StatusPill kind="done">{t('peak.applied')}</StatusPill> : null}
@@ -445,11 +474,16 @@ export function PeakIntake({ onSummary }) {
         ]}
         busy={busy}
         problem={applyProblem}
+        stale={stale}
         allowOlder={allowOlder}
         onAllowOlder={setAllowOlder}
+        onRecheck={recheckReport}
+        onShowChanges={() => setChangesOpen(true)}
+        onForce={(reason) => applyReport(true, reason)}
         onClose={() => setApplyOpen(false)}
-        onConfirm={applyReport}
+        onConfirm={() => applyReport()}
       />
+      <ChangesDrawer open={changesOpen} runId={reviewId} onClose={() => setChangesOpen(false)} />
     </div>
   )
 }

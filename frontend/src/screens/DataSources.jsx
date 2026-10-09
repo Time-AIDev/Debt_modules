@@ -531,6 +531,7 @@ export function DataSources() {
               <FileInput inputRef={sheetRef} label={t('data.chooseFile')} disabled={!!busy} onFile={checkFile} />
               <Problem problem={sheetProblem} />
               {sheetPreview ? <ImportPreview key={sheetPreview.uid} preview={sheetPreview} canApply={mgr}
+                onRecheck={() => sheet?.raw && checkFile(sheet.raw)}
                 onApplied={() => { load(); refreshImports().catch(() => {}) }} /> : sr ? (
                 <section className="imp__box imp__box--flush">
                   <div className="imp__receiptHead">

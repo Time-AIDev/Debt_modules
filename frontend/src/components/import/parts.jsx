@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { api } from '../../lib/api.js'
 import { usePrefs } from '../../lib/prefs.jsx'
 import { atLeast, useIdentity } from '../../lib/identity.jsx'
-import { date, money, int } from '../../lib/format.js'
+import { date, money, int, when } from '../../lib/format.js'
 import { runStatus } from '../../lib/status.js'
 import { StatusIcon, StatusPill } from '../StatusIcon.jsx'
 import { Icon } from '../Icon.jsx'
@@ -266,17 +266,70 @@ export function RowSheet({ row, busy, problem, onClose, onLink }) {
   )
 }
 
+/** The "what changed since the review" list the fence's refusal offers: one line
+ *  per committed act (who · what · when), served by the run's own changes read. */
+export function ChangesDrawer({ open, runId, onClose }) {
+  const { t } = usePrefs()
+  const [page, setPage] = useState(null)
+  const [problem, setProblem] = useState(null)
+  useEffect(() => {
+    if (!open || !runId) return undefined
+    let alive = true
+    setProblem(null)
+    api.peakRunChanges(runId, { limit: 50 })
+      .then((body) => { if (alive) setPage(body) })
+      .catch((e) => { if (alive) setProblem(e?.problem || { code: 'request_failed' }) })
+    return () => { alive = false }
+  }, [open, runId])
+  return (
+    <Drawer open={open} onClose={onClose} width={440}
+            title={t('peak.changesTitle')} subtitle={page?.since ? when(page.since) : undefined}>
+      {problem ? <Problem problem={problem} /> : !page ? (
+        <p className="empty" role="status">{t('common.loading')}</p>
+      ) : !page.rows?.length ? (
+        <p className="empty">{t('peak.changesEmpty')}</p>
+      ) : (
+        <>
+          <p className="scr-meta">{t('peak.changesCount', { n: int(page.total) })}</p>
+          <ul className="imp-changes">
+            {page.rows.map((row, i) => (
+              <li key={row.at + row.act + i}>
+                <span className="num">{when(row.at)}</span>
+                <span className="imp-changes__act">{row.act || '—'}</span>
+                <span className="imp-changes__who">{row.actor || '—'}{row.subject_uid ? ` · ${row.subject_uid}` : ''}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </Drawer>
+  )
+}
+
 /**
  * The confirmation both PEAK reports ask before they move payment status: what the act
  * does, the report's own figures, and "use an older report" (Manager and above).
+ *
+ * A confirm the review fence refused (`state_conflict` / `preview_stale`) offers its
+ * own honest answers in place: re-check the run against the version that stands now,
+ * see what changed since the review — and, Manager and above, a forced confirm that
+ * crosses the fence on record, with a reason the audit row will keep.
  */
-export function ApplyDialog({ open, title, facts, busy, problem, allowOlder, onAllowOlder, onClose, onConfirm }) {
+export function ApplyDialog({ open, title, facts, busy, problem, allowOlder, onAllowOlder,
+                              stale = false, onRecheck, onShowChanges, onForce, onClose, onConfirm }) {
   const { t } = usePrefs()
   useIdentity() // re-gate live when the role changes
   const mgr = atLeast('MANAGER')
+  const [force, setForce] = useState(false)
+  const [reason, setReason] = useState('')
+  useEffect(() => { if (!open) { setForce(false); setReason('') } }, [open])
+  const fence = stale && ['state_conflict', 'preview_stale'].includes(problem?.code)
+  const forcing = fence && force
   return (
-    <ConfirmDialog open={open} onClose={onClose} onConfirm={onConfirm} busy={busy} title={title}
-                   confirmLabel={t('peak.applyConfirm')}>
+    <ConfirmDialog open={open} onClose={onClose}
+                   onConfirm={() => (forcing ? onForce?.(reason.trim()) : onConfirm())}
+                   busy={busy} title={title}
+                   confirmLabel={t(forcing ? 'peak.forceConfirm' : 'peak.applyConfirm')}>
       <p>{t('peak.applyNote')}</p>
       {facts.filter(Boolean).map((f) => <p key={f} className="imp-apply__fact num">{f}</p>)}
       <label className="imp-apply__check" title={mgr ? undefined : t('data.managerOnly')}>
@@ -285,6 +338,29 @@ export function ApplyDialog({ open, title, facts, busy, problem, allowOlder, onA
         {t('peak.allowOlder')}
       </label>
       {mgr ? null : <span className="imp-apply__reason">{t('data.managerOnly')}</span>}
+      {fence ? (
+        <div className="imp-apply__fence" role="alert">
+          <p>{t('peak.staleNote')}</p>
+          <div className="imp-apply__fenceActs">
+            <button type="button" className="btn btn--sm" disabled={busy} onClick={onRecheck}>{t('peak.recheck')}</button>
+            <button type="button" className="btn btn--sm" disabled={busy} onClick={onShowChanges}>{t('peak.showChanges')}</button>
+          </div>
+          {mgr ? (
+            <label className="imp-apply__check">
+              <input type="checkbox" checked={force} disabled={busy} onChange={(e) => setForce(e.target.checked)} />
+              {t('peak.forceState')}
+            </label>
+          ) : null}
+          {forcing ? (
+            <label className="label">
+              {t('peak.forceReason')}
+              <input className="field" value={reason} disabled={busy} autoFocus
+                     placeholder={t('peak.forceReasonHint')} onChange={(e) => setReason(e.target.value)} />
+            </label>
+          ) : null}
+          {forcing && !reason.trim() ? <p className="imp-apply__reason">{t('peak.forceReasonRequired')}</p> : null}
+        </div>
+      ) : null}
       <Problem problem={problem} />
     </ConfirmDialog>
   )

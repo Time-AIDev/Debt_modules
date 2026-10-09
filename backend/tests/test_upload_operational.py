@@ -37,11 +37,24 @@ def test_upload_control_is_narrow_and_never_applies_to_worker(path, query):
     ('/v1/imports:start', b'profile=unknown'),
     ('/v1/imports:start', b'install=false&unknown=true'),
     ('/v1/pipelines/peak-receipt/landing-runs/1:apply', b''),
+    ('/v1/pipelines/peak-report/landing-runs/1:recheck', b'x=1'),
     (f'/v1/imports/parts/{UPLOAD}/0', b'of=1&of=2'),
     ('/v1/imports/parts/not-a-uuid/0', b'of=1'),
 ])
 def test_unproved_routes_remain_business_transactions(path, query):
     assert not is_upload_control(scope(path, query=query))
+
+
+@pytest.mark.parametrize('path', [
+    '/v1/pipelines/peak-report/landing-runs/7:recheck',
+    '/v1/pipelines/peak-receipt/landing-runs/7:recheck',
+])
+def test_the_landing_recheck_is_operational_and_never_applies_to_worker(path):
+    # A re-check re-binds a staged run's review fence to the version that stands
+    # now — landing metadata only, so it is control, like the upload transport.
+    assert is_upload_control(scope(path))
+    assert not is_upload_control(dict(scope(path), volt_worker=True))
+    assert not is_upload_control(scope(path), worker_run=True)
 
 
 @pytest.fixture

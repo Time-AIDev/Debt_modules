@@ -318,12 +318,31 @@ def _queue_apply(request, run_id, body, kind):
     from ..durable_runs import WORKER_RUN
     if not enabled() or WORKER_RUN.get():
         return None
-    _require_review_version(run_id, body)
+    forced = _forced_state(body)
+    if not forced:
+        _require_review_version(run_id, body)
     from ..task_outbox import enqueue_request
     uid = runs.start(kind + "-apply", landing_run_id=run_id)
     runs.progress(uid, phase="queued")
-    enqueue_request(request, uid, json.dumps(body).encode("utf-8"))
+    enqueue_request(request, uid, json.dumps(body).encode("utf-8"), force_state_change=forced)
     return JSONResponse(status_code=202, content=runs.get(uid))
+
+
+def _forced_state(body):
+    """True when a manager crossed the review fence on purpose (`force_state_change`
+    with a reason). The caller has already enforced the role; this only reads the
+    flag so both the direct apply and the queued one skip the fence consistently."""
+    return bool((body or {}).get("force_state_change"))
+
+
+def _require_force_reason(body):
+    """A forced confirm names why the fence was crossed — the audit row (and the
+    reviewer who reads it later) needs the sentence, not just the fact."""
+    if _forced_state(body) and not str((body or {}).get("reason") or "").strip():
+        raise errors.validation_failed([{
+            "pointer": "/reason", "code": "required",
+            "message": "A forced confirm names why it crosses the review fence.",
+            "message_th": "ต้องระบุเหตุผลของการยืนยันทับ"}])
 
 
 def _require_review_version(run_id, body):
@@ -351,13 +370,15 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
               x_volt_officer: str = Header(default=None), request: Request = None):
     _officer_or_above(x_volt_role)
     body = body or {}
-    if body.get("allow_older") or body.get("force"):
+    if body.get("allow_older") or body.get("force") or _forced_state(body):
         _manager_only(x_volt_role)
+    _require_force_reason(body)
     _require_db()
     queued = _queue_apply(request, run_id, body, "peak-report")
     if queued is not None:
         return queued
-    _require_review_version(run_id, body)
+    if not _forced_state(body):
+        _require_review_version(run_id, body)
     from ..durable_runs import WORKER_RUN
     if WORKER_RUN.get():
         runs.checkpoint(WORKER_RUN.get())
@@ -381,7 +402,11 @@ def apply_run(run_id: int, body: dict = Body(default=None), x_volt_role: str = H
     audit.describe(act="PEAK_REPORT_APPLIED", subject=("import_run", str(run_id)),
                    detail={"report_as_of": meta.get("report_as_of"), "matched": meta.get("matched"),
                            "candidates": meta.get("candidates"), "unmatched": meta.get("unmatched"),
-                           "allow_older": bool(body.get("allow_older")), "reconciliation": reconciliation})
+                           "allow_older": bool(body.get("allow_older")), "reconciliation": reconciliation,
+                           # A forced confirm crosses the review fence: the row says so
+                           # and keeps the reason, so the log alone explains the act.
+                           "forced_state": _forced_state(body),
+                           **({"force_reason": body.get("reason")} if _forced_state(body) else {})})
     return _finish_apply(_served({"run": run, "reconciliation": reconciliation,
                     "note_th": "ใช้รายงานนี้แล้ว — เซสชันนี้เห็นข้อมูลใหม่ทันที เซสชันอื่นอัปเดตอัตโนมัติเมื่อเปิดหน้าถัดไป",
                     "note_en": "This report is now in use — this session sees the new data at once; other sessions catch up automatically on their next request"},
@@ -568,13 +593,15 @@ def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role:
                       x_volt_officer: str = Header(default=None), request: Request = None):
     _officer_or_above(x_volt_role)
     body = body or {}
-    if body.get("allow_older"):
+    if body.get("allow_older") or _forced_state(body):
         _manager_only(x_volt_role)
+    _require_force_reason(body)
     _require_db()
     queued = _queue_apply(request, run_id, body, "peak-receipt")
     if queued is not None:
         return queued
-    _require_review_version(run_id, body)
+    if not _forced_state(body):
+        _require_review_version(run_id, body)
     from ..durable_runs import WORKER_RUN
     if WORKER_RUN.get():
         runs.checkpoint(WORKER_RUN.get())
@@ -594,7 +621,9 @@ def apply_receipt_run(run_id: int, body: dict = Body(default=None), x_volt_role:
     audit.describe(act="PEAK_RECEIPT_APPLIED", subject=("import_run", str(run_id)),
                    detail={"report_as_of": meta.get("report_as_of"), "matched": meta.get("matched"),
                            "unmatched": meta.get("unmatched"), "allow_older": bool(body.get("allow_older")),
-                           "reconciliation": reconciliation})
+                           "reconciliation": reconciliation,
+                           "forced_state": _forced_state(body),
+                           **({"force_reason": body.get("reason")} if _forced_state(body) else {})})
     return _finish_apply(_served({"run": run, "reconciliation": reconciliation,
                     "note_th": "ใช้รายงานใบเสร็จนี้แล้ว — สถานะการชำระรายงวดอัปเดตทันที",
                     "note_en": "This receipt report is now in use — per-instalment payment status updates at once"},
@@ -755,3 +784,164 @@ def conflicts_undecided(conn, run_id):
     no person has decided (they take PEAK on apply)."""
     page = _conflicts_page(conn, run_id, offset=0, limit=100)
     return page["undecided_fields"]
+
+
+# --- the review fence: re-check, what changed, and one decision for every field ------
+
+def _staged_run_or_refuse(run_id, source):
+    """The staged (OK, not applied) run of one PEAK source, or the Problem that says
+    why this run has no fence worth re-checking."""
+    _require_db()
+    conn = db.connect()
+    try:
+        run = landing.get_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None or run.get("source_system") != source:
+        raise errors.not_found("PEAK run %s" % run_id)
+    if run.get("status") != "OK" or (run.get("meta") or {}).get("applied"):
+        raise errors.Problem(
+            code="run_not_staged", status=409, title="This import run is not waiting for review",
+            detail="only a staged, not-yet-applied run can be re-checked",
+            message_th="รอบนำเข้านี้ไม่ได้รอการตรวจอยู่ — ตรวจใหม่ได้เฉพาะรอบที่ยังไม่ได้ใช้",
+            error_id="DEBT-PEAK-0409")
+    return run
+
+
+def _recheck(run_id, source, act):
+    from .. import preview_review
+    _staged_run_or_refuse(run_id, source)
+    conn = db.connect()
+    try:
+        with _write_tx(conn):
+            version = preview_review.restamp(conn, run_id, source)
+    finally:
+        conn.close()
+    if version is None:
+        raise errors.not_found("PEAK run %s" % run_id)
+    audit.describe(act=act, subject=("import_run", str(run_id)),
+                   detail={"review_state_version": version})
+    return {"run_id": run_id, "review_state_version": version}
+
+
+@router.post(PREFIX + "/landing-runs/{run_id}:recheck")
+def recheck_run(run_id: int, x_volt_role: str = Header(default="OFFICER"),
+                x_volt_officer: str = Header(default=None)):
+    """Re-binds a staged invoice run's review fence to the version that stands now.
+
+    A `state_conflict`/`preview_stale` answer means data moved after the review.
+    The honest repair is to LOOK at the run again (its rows, its conflicts), and
+    this re-stamps the fence the reload just made current — never a re-upload of
+    the same bytes, which the duplicate refusal already turns away."""
+    _officer_or_above(x_volt_role)
+    return _recheck(run_id, peak_writer.SOURCE, "PEAK_RUN_RECHECKED")
+
+
+@router.post(PREFIX_RECEIPT + "/landing-runs/{run_id}:recheck")
+def recheck_receipt_run(run_id: int, x_volt_role: str = Header(default="OFFICER"),
+                        x_volt_officer: str = Header(default=None)):
+    """The receipt report's own re-check — same fence, same repair."""
+    _officer_or_above(x_volt_role)
+    return _recheck(run_id, peak_writer.RECEIPT_SOURCE, "PEAK_RECEIPT_RECHECKED")
+
+
+def _parse_fence_moment(value):
+    """The fence's stamp as a timezone-aware instant (UTC when it says nothing)."""
+    from datetime import datetime, timezone
+    stamp = str(value or "").strip().replace(" ", "T").rstrip("Z")
+    if not stamp:
+        return None
+    try:
+        moment = datetime.fromisoformat(stamp)
+    except ValueError:
+        return None
+    return moment if moment.tzinfo else moment.replace(tzinfo=timezone.utc)
+
+
+@router.get(PREFIX + "/landing-runs/{run_id}/changes")
+def run_changes(run_id: int, limit: int = Query(default=50, ge=1, le=200)):
+    """What committed after this run's review fence was stamped — the honest answer
+    to a `state_conflict`: the acts that moved the data the review has not seen.
+    One line per act (act, who, when, what) — no detail; the log screen owns the
+    details. The fence stamp is the watermark; runs staged before it existed fall
+    back to their own finish."""
+    _require_db()
+    conn = db.connect()
+    try:
+        run = landing.get_run(conn, run_id)
+    finally:
+        conn.close()
+    if run is None or run.get("source_system") not in (peak_writer.SOURCE, peak_writer.RECEIPT_SOURCE):
+        raise errors.not_found("PEAK run %s" % run_id)
+    meta = run.get("meta") or {}
+    since = _parse_fence_moment(meta.get("review_state_version_at") or run.get("finished_at"))
+    rows = []
+    if since is not None:
+        from .. import audit_store
+        for entry in audit_store.read({"since": since}, limit=limit, before_seq=None):
+            if entry.get("outcome") == "REFUSED":
+                continue        # a refused act changed nothing — it is not "what changed"
+            if entry.get("subject_uid") == str(run_id) and entry.get("subject_type") == "import_run":
+                continue        # this run's own staging/apply acts are not "what changed"
+            rows.append({
+                "act": entry.get("act"), "actor": entry.get("actor_claimed"),
+                "actor_role": entry.get("actor_role"),
+                "at": landing._iso(entry.get("at")),
+                "subject_type": entry.get("subject_type"), "subject_uid": entry.get("subject_uid"),
+                "route": entry.get("route_template"),
+            })
+    return {"run_id": run_id, "since": landing._iso(since),
+            "review_state_version": meta.get("review_state_version"),
+            "rows": rows, "total": len(rows)}
+
+
+@router.post(PREFIX + "/landing-runs/{run_id}/conflicts:decide-all")
+def decide_all_conflicts(run_id: int, body: dict = Body(default=None),
+                         x_volt_role: str = Header(default="OFFICER"),
+                         x_volt_officer: str = Header(default=None)):
+    """Every undecided field of the run takes one source in one act — the same
+    PEAK/ODOO choice the per-field sheet offers, decided for every customer at
+    once. `volt_id` never takes one (fix-all P5: a person decides it); a field a
+    person already decided keeps that decision. The reason is optional and is
+    recorded on every row, like the per-field decide."""
+    _officer_or_above(x_volt_role)
+    body = body or {}
+    source = str(body.get("source") or "PEAK").strip().upper()
+    reason = str(body.get("reason") or "").strip() or None
+    if source not in ("PEAK", "ODOO"):
+        raise errors.validation_failed([{
+            "pointer": "/source", "code": "unknown",
+            "message": "source must be PEAK or ODOO",
+            "message_th": "แหล่งข้อมูลต้องเป็น PEAK หรือ ODOO"}])
+    _require_db()
+    conn = db.connect()
+    try:
+        if landing.get_run(conn, run_id) is None:
+            raise errors.not_found("PEAK run %s" % run_id)
+        with _write_tx(conn):
+            rows = peak_writer.conflict_rows(conn, run_id)
+            active = field_decisions.load(conn, [r["customer_no"] for r in rows])
+            decided, seen = 0, set()
+            for row in rows:
+                no = row["customer_no"]
+                if not no:
+                    continue
+                for c in (row["conflicts"] or []):
+                    if c.get("same") or c.get("field") == "volt_id":
+                        continue
+                    key = (no, c.get("field"))
+                    if key in seen or active.get(no, {}).get(c.get("field")):
+                        continue
+                    seen.add(key)
+                    field_decisions.decide(conn, no, c["field"], source, by=x_volt_officer or x_volt_role.upper(),
+                                           reason=reason, run_id=run_id,
+                                           peak_value=c.get("peak_value"), odoo_value=c.get("odoo_value"))
+                    decided += 1
+    finally:
+        conn.close()
+    customers = len({key[0] for key in seen}) if decided else 0
+    audit.describe(act="PEAK_FIELD_DECIDED", subject=("import_run", str(run_id)),
+                   detail={"decide_all": True, "source": source, "decisions": decided,
+                           "customers": customers})
+    return _served({"run_id": run_id, "source": source, "decisions": decided,
+                    "customers": customers}, "peak-field", run_id)

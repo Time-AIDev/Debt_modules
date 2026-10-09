@@ -10,6 +10,10 @@ from urllib.parse import parse_qs
 
 PEAK_STARTS = frozenset({"/v1/pipelines/peak-report:start", "/v1/pipelines/peak-receipt:start"})
 
+# An officer's re-check re-binds a staged run's review fence to the version that
+# stands now (preview_review.restamp) — landing metadata only, never the book.
+LANDING_RECHECK = re.compile(r"^/v1/pipelines/peak-(report|receipt)/landing-runs/[0-9]+:recheck$")
+
 UPLOAD_ID = r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 
 
@@ -41,7 +45,17 @@ def is_master_preview_enqueue(scope, *, worker_run=False):
 
 def is_upload_control(scope, *, worker_run=False):
     return (not worker_run and (is_upload_transport(scope)
-            or is_master_preview_enqueue(scope) or is_peak_enqueue(scope)))
+            or is_master_preview_enqueue(scope) or is_peak_enqueue(scope)
+            or is_landing_recheck(scope)))
+
+
+def is_landing_recheck(scope, *, worker_run=False):
+    if (scope.get("type", "http") != "http" or scope.get("method") != "POST"
+            or scope.get("volt_worker") or worker_run
+            or scope.get("query_string", b"") != b""
+            or not LANDING_RECHECK.fullmatch(scope.get("path", ""))):
+        return False
+    return True
 
 
 def is_peak_apply_enqueue(scope, *, worker_run=False):

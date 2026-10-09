@@ -239,6 +239,24 @@
 .imp-apply__check:has(input:disabled) { cursor: not-allowed; }
 .imp-apply__reason { padding-left: 24px; font-size: 12px; line-height: 16px; }
 
+/* The review fence's refusal: data changed after the review — re-check, see
+   what changed, or (Manager) confirm across it with a reason. */
+.imp-apply__fence { display: flex; flex-direction: column; gap: 8px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--volt-line); border-radius: 8px; background: var(--volt-warm); }
+.imp-apply__fence > p { margin: 0; font-size: 13px; line-height: 18px; color: var(--volt-ink); }
+.imp-apply__fenceActs { display: flex; flex-wrap: wrap; gap: 8px; }
+.imp-apply__fence .imp-apply__reason { padding-left: 32px; }
+
+/* "What changed since the review": one line per committed act. */
+.imp-changes { display: flex; flex-direction: column; margin-top: 10px; }
+.imp-changes > li { display: grid; grid-template-columns: 92px minmax(0, 1fr); column-gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--volt-line); font-size: 12px; line-height: 16px; }
+.imp-changes > li:last-child { border-bottom: 0; }
+.imp-changes__act { font-weight: 600; color: var(--volt-ink); }
+.imp-changes__who { grid-column: 2; color: var(--volt-ink-2); }
+
+/* One decision for every customer in the run, above the list. */
+.imp-conf__bulk { display: flex; align-items: center; gap: 10px; padding: 10px 16px; border-bottom: 1px solid var(--volt-line); }
+.imp-conf__bulkCount { font-size: 12px; line-height: 16px; color: var(--volt-ink-2); }
+
 /* Narrow windows: the column drops under the panel and the page scrolls as a whole. */
 @media (max-width: 1100px) {
   .imp { height: auto; min-height: 0; }

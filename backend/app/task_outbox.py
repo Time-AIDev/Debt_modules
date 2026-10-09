@@ -9,7 +9,7 @@ from .integrations import env
 SAFE_HEADERS = {"content-type", "x-volt-filename", "x-volt-role", "x-volt-officer", "x-volt-attach-to"}
 
 
-def enqueue(uid, path, raw, query, headers, actor):
+def enqueue(uid, path, raw, query, headers, actor, force_state_change=False):
     with db.connect() as conn, conn.begin():
         conn.execute(text("select pg_advisory_xact_lock(hashtext('jobs:quota'))"))
         quota = conn.execute(text(
@@ -29,15 +29,20 @@ def enqueue(uid, path, raw, query, headers, actor):
         payload = {"path": path, "query": query.decode("ascii"), "object_name": object_name, "size": len(raw),
                    "sha256": hashlib.sha256(raw).hexdigest(), "actor": actor,
                    "headers": {k.lower(): v for k, v in headers.items() if k.lower() in SAFE_HEADERS}}
+        if force_state_change:
+            # A manager's forced confirm: the job carries no review fence, and
+            # preview_review.publish leaves expected_state_version off it.
+            payload["force_state_change"] = True
         conn.execute(text("insert into app.task_outbox(uid,payload) values(:u,cast(:p as jsonb))"),
                      {"u": uid, "p": json.dumps(payload)})
 
 
-def enqueue_request(request, uid, raw):
+def enqueue_request(request, uid, raw, force_state_change=False):
     from . import auth
     actor = auth.resolve_session(request.scope)
     if not actor: raise auth.auth_required()
-    enqueue(uid, request.scope["path"], raw, request.scope.get("query_string", b""), dict(request.headers), actor)
+    enqueue(uid, request.scope["path"], raw, request.scope.get("query_string", b""), dict(request.headers), actor,
+            force_state_change=force_state_change)
     from .production_unit import CURRENT
     from .operational_transactions import is_peak_apply_enqueue
     from urllib.parse import parse_qs

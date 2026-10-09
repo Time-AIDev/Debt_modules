@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# volt-debt-health-production — wrapper for production environment health checks
+# Called by volt-debt-health-production.service
+import os
+import sys
+from pathlib import Path
+
+# Set environment for production
+os.environ['VOLT_ENV'] = 'production'
+os.environ['COMPOSE_FILE'] = '/srv/volt-debt-platform/infra/vps/compose.production.yaml'
+os.environ['COMPOSE_ENV_FILE'] = '/srv/volt-debt-platform/.env.production'
+os.environ['API_SERVICE'] = 'api-prd'
+os.environ['WEB_SERVICE'] = 'web-prd'
+os.environ['API_HEALTH_URL'] = 'http://127.0.0.1:8082/readyz'
+os.environ['WEB_HEALTH_URL'] = 'http://127.0.0.1:8083/healthz'
+
+# Add ops library to path
+sys.path.insert(0, '/usr/local/lib/volt-debt-ops')
+
+# Import and run healthcheck
+import healthcheck
+
+if __name__ == '__main__':
+    sys.exit(healthcheck.main())

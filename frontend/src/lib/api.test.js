@@ -233,6 +233,19 @@ describe('feedback round 2 data routes (TASK-212)', () => {
     expect(String(fetchMock.mock.calls[2][0])).toBe('/api/v1/pipelines/peak-report/field-decisions/3:retire')
   })
 
+  it('serves the review fence: the bulk decision, the re-check and what changed', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ review_state_version: '42', rows: [] }))
+    await api.peakConflictsDecideAll(7, { source: 'PEAK' })
+    expect(String(fetchMock.mock.calls[0][0])).toBe('/api/v1/pipelines/peak-report/landing-runs/7/conflicts:decide-all')
+    await api.peakReportRecheck(7)
+    expect(String(fetchMock.mock.calls[1][0])).toBe('/api/v1/pipelines/peak-report/landing-runs/7:recheck')
+    await api.peakReceiptRecheck(7)
+    expect(String(fetchMock.mock.calls[2][0])).toBe('/api/v1/pipelines/peak-receipt/landing-runs/7:recheck')
+    await api.peakRunChanges(7, { limit: 10 })
+    expect(String(fetchMock.mock.calls[3][0])).toContain('/api/v1/pipelines/peak-report/landing-runs/7/changes')
+    expect(String(fetchMock.mock.calls[3][0])).toContain('limit=10')
+  })
+
   it('searches and links the case-side PEAK codes', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(jsonResponse({ codes: [] }))
     await api.casePeakCodes('c-1', 'VC')

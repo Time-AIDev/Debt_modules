@@ -465,9 +465,17 @@ def apply(uid, body, actor, role):
             if payload.get("command_signature") != signature:
                 raise problem("idempotency_conflict", "ตัวอย่างนี้ถูกยืนยันด้วยคำสั่งอื่นแล้ว", 409)
             return payload["result"]
-        if payload["version"] != body.get("preview_version") or payload["epoch"] != _epoch(conn):
+        forced = bool(body.get("force_state_change"))
+        if forced and not str(body.get("reason") or "").strip():
+            raise problem("reason", "ต้องระบุเหตุผลของการยืนยันทับ", 422)
+        # The preview's own digest must always be echoed back (an anti-mixup
+        # fence, not a state one); a manager's forced confirm crosses the two
+        # state fences — the epoch and the review fence — on purpose, on record.
+        if payload["version"] != body.get("preview_version"):
             raise problem("preview_stale", "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจตัวอย่างใหม่", 409)
-        if payload.get('review_state_version') is not None:
+        if not forced and payload["epoch"] != _epoch(conn):
+            raise problem("preview_stale", "ข้อมูลเปลี่ยนแล้ว กรุณาตรวจตัวอย่างใหม่", 409)
+        if payload.get('review_state_version') is not None and not forced:
             from . import preview_review
             preview_review.require(conn, payload['review_state_version'], body.get('review_state_version'))
         selected = body.get("selected_keys")
@@ -520,7 +528,8 @@ def apply(uid, body, actor, role):
         _publish(conn, affected, "DEBT_" + payload["profile"].upper())
         result = {"preview_uid": uid, "profile": payload["profile"], "applied": len(selected),
                   "customers": len(affected), "terminated": terminated, "review_remaining":
-                  len(entries) - len(selected), "affected_customer_uids": sorted(affected)}
+                  len(entries) - len(selected), "affected_customer_uids": sorted(affected),
+                  "forced": forced}
         payload.update(state="APPLIED", applied_at=clock.stamp(), command_signature=signature, result=result)
         _save_preview(conn, payload)
     from . import book, data_epoch

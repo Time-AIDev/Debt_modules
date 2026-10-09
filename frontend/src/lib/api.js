@@ -168,6 +168,12 @@ function uploadControl(path, method = 'POST', wire) {
   if (['/v1/pipelines/peak-report:start', '/v1/pipelines/peak-receipt:start'].includes(clean)) {
     return !query && !(typeof wire === 'string' && wire.trim().startsWith('{'))
   }
+  // A re-check re-binds a staged run's review fence to the version that stands
+  // now (app/routers/peak_pipeline.py :recheck) — landing metadata only, so it
+  // never carries a state fence of its own.
+  if (/^\/v1\/pipelines\/peak-(report|receipt)\/landing-runs\/[0-9]+:recheck$/.test(clean)) {
+    return !query
+  }
   if (clean !== '/v1/imports:start') return false
   const params = new URLSearchParams(query)
   return [...params.keys()].every((key) => ['profile', 'install'].includes(key))
@@ -352,7 +358,7 @@ function contactCustomerOwner(path, wire) {
   } catch { return null }
 }
 
-function mutationHeaders(path, signature, wire, expectedStateVersion, method = 'POST') {
+function mutationHeaders(path, signature, wire, expectedStateVersion, method = 'POST', noIfMatch = false) {
   const headers = roleHeaders()
   if (signature === null) return headers
   if (pendingStorageCorrupt) throw pendingProblem('operation_outcome_unknown', 'ข้อมูลตรวจสอบงานก่อนหน้าอ่านไม่ได้ กรุณาตรวจสอบประวัติรายการก่อนดำเนินการต่อ')
@@ -381,17 +387,20 @@ function mutationHeaders(path, signature, wire, expectedStateVersion, method = '
     }
   }
   headers['Idempotency-Key'] = operation.key
-  if (operation.expectedVersion !== null && !path.startsWith('/v1/operation-runs/') && !uploadControl(path, method, wire)) headers['If-Match'] = operation.expectedVersion
+  // A manager's forced confirm crosses the review fence on purpose: the request
+  // carries no If-Match at all (the backend's gate accepts none; the force and
+  // its reason are the fence's answer), never the stale one it would 409 on.
+  if (!noIfMatch && operation.expectedVersion !== null && !path.startsWith('/v1/operation-runs/') && !uploadControl(path, method, wire)) headers['If-Match'] = operation.expectedVersion
   return headers
 }
 
 async function mutationFetch(method, path, body, extra = {}) {
-  const { stableUploadIdentity, expectedStateVersion, ...options } = extra
+  const { stableUploadIdentity, expectedStateVersion, noIfMatch, ...options } = extra
   const signature = await operationFingerprint(method, path, body, extra.headers, stableUploadIdentity)
   if (extra.signal?.aborted) throw new DOMException('aborted', 'AbortError')
   const response = await fetch(BASE + path, {
     ...options, method, body,
-    headers: { ...mutationHeaders(path, signature, body, expectedStateVersion, method), ...extra.headers },
+    headers: { ...mutationHeaders(path, signature, body, expectedStateVersion, method, !!noIfMatch), ...extra.headers },
   })
   if (signature !== null) {
     const contactOwner = method === 'POST' ? contactCustomerOwner(path, body) : null
@@ -888,8 +897,10 @@ export const api = {
     const query = profile ? `?profile=${encodeURIComponent(profile)}` : ''
     return postOperation(`/v1/imports:start${query}`, file, {}, operationOptions)
   },
+  // A manager's forced confirm crosses the review fence on purpose, so the
+  // request carries no If-Match at all (the force + reason are the answer).
   applyImportPreview: (uid, payload) => post(`/v1/imports/previews/${encodeURIComponent(uid)}:apply`, payload,
-    { expectedStateVersion: payload.review_state_version }),
+    { expectedStateVersion: payload.review_state_version, noIfMatch: !!payload.force_state_change }),
   confirmInstallation: (uid, payload) => post(`/v1/contracts/${encodeURIComponent(uid)}/installation-confirmation`, payload),
   // Fix-all leg S (Arina 2026-09-24): a manager installs the checked New Order Master
   // as the book; the review list names where PEAK and the sheet disagree.
@@ -939,6 +950,13 @@ export const api = {
     { ...options, expectedStateVersion: body?.review_state_version }),
   peakConflicts: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts`, params),
   peakConflictsDecide: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts:decide`, body),
+  // The review fence: one source for every undecided conflict of the run, the
+  // re-check that re-binds a staged run to the version that stands now, and the
+  // acts that committed after the fence was stamped (what a state_conflict means).
+  peakConflictsDecideAll: (runId, body) => post(`/v1/pipelines/peak-report/landing-runs/${runId}/conflicts:decide-all`, body || {}),
+  peakReportRecheck: (runId) => post(`/v1/pipelines/peak-report/landing-runs/${runId}:recheck`, {}),
+  peakReceiptRecheck: (runId) => post(`/v1/pipelines/peak-receipt/landing-runs/${runId}:recheck`, {}),
+  peakRunChanges: (runId, params) => get(`/v1/pipelines/peak-report/landing-runs/${runId}/changes`, params),
   peakDecisionRetire: (uid) => post(`/v1/pipelines/peak-report/field-decisions/${uid}:retire`, {}),
   casePeakCodes: (uid, q) => get(`/v1/cases/by-customer/${uid}/peak-codes`, { q }),
   casePeakLink: (uid, body) => post(`/v1/cases/by-customer/${uid}/peak-link`, body),

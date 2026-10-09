@@ -3,7 +3,6 @@ import { screen, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { renderScreen } from '../test-utils.jsx'
 import { ConflictList } from './ConflictList.jsx'
-
 vi.mock('../lib/api.js', () => ({
   api: new Proxy({}, {
     get: (target, prop) => {
@@ -33,6 +32,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   api.peakConflicts.mockResolvedValue(OPEN)
   api.peakConflictsDecide.mockResolvedValue({ customer_no: '28005096535', decisions: 1 })
+  api.peakConflictsDecideAll.mockResolvedValue({ run_id: 7, source: 'PEAK', decisions: 2, customers: 1 })
   api.peakDecisionRetire.mockResolvedValue({ decision: {} })
 })
 
@@ -97,5 +97,19 @@ describe('the conflict list (D02, target/07)', () => {
     expect(screen.getByText(/ตัดสินแล้ว โดย settasak เมื่อ 23\/09\/2026 · PEAK wins/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'ยกเลิกการตัดสิน' }))
     await waitFor(() => expect(api.peakDecisionRetire).toHaveBeenCalledWith(3))
+  })
+
+  it('decides every undecided field of the run in one act, after a confirmation', async () => {
+    const user = userEvent.setup()
+    renderScreen(<ConflictList runId={7} onChanged={() => {}} />)
+    await screen.findByText('ปัทมวรรณ สุขเจริญ')
+    expect(screen.getByText('ยังไม่ตัดสิน 2 ฟิลด์')).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'ตัดสินทุกฟิลด์ของทุกลูกค้า' }))
+    // the confirmation names what the act does and what it never does
+    expect(screen.getByText(/ฟิลด์ที่ยังไม่ตัดสินของทุกลูกค้าในรอบนี้จะใช้ค่าจาก PEAK/)).toBeInTheDocument()
+    expect(screen.getByText(/volt_id ไม่รวมในการตัดสินรวม/)).toBeInTheDocument()
+    await user.click(within(screen.getByRole('dialog')).getByRole('button', { name: 'บันทึกการตัดสิน' }))
+    await waitFor(() => expect(api.peakConflictsDecideAll).toHaveBeenCalledWith(7, { source: 'PEAK' }))
+    expect(await screen.findByText('ตัดสินทั้ง 1 ลูกค้า (2 ฟิลด์) แล้ว')).toBeInTheDocument()
   })
 })

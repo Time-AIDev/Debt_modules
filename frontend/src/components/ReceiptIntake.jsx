@@ -7,7 +7,7 @@ import { StatusIcon, StatusPill } from './StatusIcon.jsx'
 import { Icon } from './Icon.jsx'
 import { LoadError, Problem } from './Problem.jsx'
 import { useToast } from './Toast.jsx'
-import { ApplyDialog, Dropzone, Fig, FileInput, Progress, ReviewRows, RowSheet, runProblem } from './import/parts.jsx'
+import { ApplyDialog, ChangesDrawer, Dropzone, Fig, FileInput, Progress, ReviewRows, RowSheet, runProblem } from './import/parts.jsx'
 import { SchemaFeedback } from './import/SchemaFeedback.jsx'
 import { isRunActive } from '../lib/operation.js'
 import { RejectedDocuments } from './import/RejectedDocuments.jsx'
@@ -54,6 +54,8 @@ export function ReceiptIntake({ modes, schema }) {
   const [applied, setApplied] = useState(null)
   const [applyOpen, setApplyOpen] = useState(false)
   const [applyProblem, setApplyProblem] = useState(null)
+  const [stale, setStale] = useState(false)
+  const [changesOpen, setChangesOpen] = useState(false)
   const [allowOlder, setAllowOlder] = useState(false)
   const [sheetRow, setSheetRow] = useState(null)
   const [sheetProblem, setSheetProblem] = useState(null)
@@ -160,20 +162,44 @@ export function ReceiptIntake({ modes, schema }) {
     loadRows(reviewId, 'UNMATCHED')
   }, [run, reviewId, loadRows])
 
-  async function apply() {
+  const STALE_CODES = ['state_conflict', 'preview_stale']
+
+  async function apply(force = false, reason = '') {
     setBusy(true)
     setApplyProblem(null)
     try {
       const result = await api.peakReceiptApply(stagedId, {
         ...(atLeast('MANAGER') && allowOlder ? { allow_older: true } : {}),
+        ...(force ? { force_state_change: true, reason } : {}),
         ...((staged?.meta?.review_state_version || run?.review_state_version) ? {
           review_state_version: staged?.meta?.review_state_version || run?.review_state_version,
         } : {}),
       })
       setApplied(result)
+      setStale(false)
       setApplyOpen(false)
       toast(t('peak.appliedToast'))
       loadLast()
+    } catch (e) {
+      const problem = e?.problem || { code: 'request_failed' }
+      setApplyProblem(problem)
+      setStale(STALE_CODES.includes(problem.code))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function recheckReport() {
+    if (!stagedId || busy) return
+    setBusy(true)
+    setApplyProblem(null)
+    try {
+      await api.peakReceiptRecheck(stagedId)
+      setStale(false)
+      loadLast()
+      loadRows(stagedId, 'CANDIDATE')
+      loadRows(stagedId, 'UNMATCHED')
+      toast(t('peak.rechecked'))
     } catch (e) {
       setApplyProblem(e?.problem || { code: 'request_failed' })
     } finally {
@@ -257,7 +283,7 @@ export function ReceiptIntake({ modes, schema }) {
           </button>
           {waiting ? (
             <button type="button" className="btn btn--primary" disabled={busy || !!lastProblem}
-                    onClick={() => { setApplyProblem(null); setAllowOlder(false); setApplyOpen(true) }}>
+                    onClick={() => { setApplyProblem(null); setStale(false); setAllowOlder(false); setApplyOpen(true) }}>
               {t('peak.apply')}
             </button>
           ) : alreadyApplied ? <StatusPill kind="done">{t('peak.applied')}</StatusPill> : null}
@@ -357,11 +383,16 @@ export function ReceiptIntake({ modes, schema }) {
         facts={[t('peak.receiptCounts', { receipts: int(receipts), matched: int(matched) })]}
         busy={busy}
         problem={applyProblem}
+        stale={stale}
         allowOlder={allowOlder}
         onAllowOlder={setAllowOlder}
+        onRecheck={recheckReport}
+        onShowChanges={() => setChangesOpen(true)}
+        onForce={(reason) => apply(true, reason)}
         onClose={() => setApplyOpen(false)}
-        onConfirm={apply}
+        onConfirm={() => apply()}
       />
+      <ChangesDrawer open={changesOpen} runId={reviewId} onClose={() => setChangesOpen(false)} />
     </>
   )
 }

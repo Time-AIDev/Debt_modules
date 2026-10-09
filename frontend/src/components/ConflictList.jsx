@@ -6,6 +6,7 @@ import { importStatus } from '../lib/status.js'
 import { StatusIcon, StatusPill } from './StatusIcon.jsx'
 import { Icon } from './Icon.jsx'
 import { Drawer } from './Drawer.jsx'
+import { ConfirmDialog } from './ConfirmDialog.jsx'
 import { Problem } from './Problem.jsx'
 import { SegmentedControl } from './SegmentedControl.jsx'
 import { useToast } from './Toast.jsx'
@@ -27,6 +28,7 @@ export function ConflictList({ runId, busy, onChanged }) {
   const [reasonOpen, setReasonOpen] = useState({})
   const [saving, setSaving] = useState(false)
   const [openNo, setOpenNo] = useState(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
 
   const load = useCallback((offset = 0) => {
     if (!runId) return
@@ -94,6 +96,27 @@ export function ConflictList({ runId, busy, onChanged }) {
     }
   }
 
+  // Every undecided field of the run takes PEAK in one act (the same source the
+  // per-field sheet picks, decided for every customer at once). volt_id keeps a
+  // person's decision — only a person decides it (fix-all P5).
+  async function decideAll() {
+    setSaving(true)
+    setProblem(null)
+    try {
+      const result = await api.peakConflictsDecideAll(runId, { source: 'PEAK' })
+      toast(t('peak.decisionsAllSaved', {
+        n: int(result.decisions ?? 0), customers: int(result.customers ?? 0),
+      }))
+      setBulkOpen(false)
+      onChanged?.()
+      load(0)
+    } catch (e) {
+      setProblem(e?.problem || { code: 'request_failed' })
+    } finally {
+      setSaving(false)
+    }
+  }
+
   // Closing the sheet drops that customer's unsaved picks and reasons.
   function close() {
     const drop = (o) => Object.fromEntries(Object.entries(o).filter(([k]) => !k.startsWith(`${openNo}:`)))
@@ -141,6 +164,20 @@ export function ConflictList({ runId, busy, onChanged }) {
           </button>
         ) : null}
       </div>
+      {page.undecided_fields ? (
+        <div className="imp-conf__bulk">
+          <span className="imp-conf__bulkCount">{t('peak.undecidedLeft', { n: int(page.undecided_fields) })}</span>
+          <button type="button" className="btn btn--sm" disabled={disabled} onClick={() => { setProblem(null); setBulkOpen(true) }}>
+            {t('peak.decideAll')}
+          </button>
+        </div>
+      ) : null}
+      <ConfirmDialog open={bulkOpen} title={t('peak.decideAll')} confirmLabel={t('peak.saveDecisions')}
+                     busy={saving} onClose={() => setBulkOpen(false)} onConfirm={decideAll}>
+        <p>{t('peak.decideAllNote')}</p>
+        <p>{t('peak.decideAllVoltId')}</p>
+        <Problem problem={problem} />
+      </ConfirmDialog>
 
       {open ? (
         <Drawer

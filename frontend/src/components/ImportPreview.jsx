@@ -9,7 +9,7 @@ import { Problem } from './Problem.jsx'
 import { useToast } from './Toast.jsx'
 
 /** A reviewed supplement overlays the current cases; it never replaces the book. */
-export function ImportPreview({ preview, canApply, onApplied }) {
+export function ImportPreview({ preview, canApply, onApplied, onRecheck }) {
   const { t, lang } = usePrefs()
   const location = useLocation()
   const toast = useToast()
@@ -20,6 +20,8 @@ export function ImportPreview({ preview, canApply, onApplied }) {
   const [busy, setBusy] = useState(false)
   const [problem, setProblem] = useState(null)
   const [applied, setApplied] = useState(false)
+  const [force, setForce] = useState(false)
+  const [reason, setReason] = useState('')
   const [page, setPage] = useState(1)
   const [idempotencyKey] = useState(() => crypto.randomUUID())
   const entries = preview.entries || []
@@ -29,6 +31,10 @@ export function ImportPreview({ preview, canApply, onApplied }) {
   const terminating = chosen.filter((r) => r.termination_candidate?.completed_evidence && termination[r.key]?.requested)
   const complete = terminating.every((r) => termination[r.key]?.cause
     && termination[r.key]?.reason?.trim() && termination[r.key]?.scope_confirmed)
+  // The review fence answered a refusal: data changed after the review. The
+  // honest repair is to re-check (re-upload the same file for a fresh preview);
+  // a manager's forced confirm may cross it on record, with a reason.
+  const stale = ['state_conflict', 'preview_stale'].includes(problem?.code)
   function toggle(key, checked) {
     setSelected((current) => {
       const next = new Set(current)
@@ -48,12 +54,14 @@ export function ImportPreview({ preview, canApply, onApplied }) {
   }
   async function apply() {
     if (busy || !canApply || !chosen.length || !complete) return
+    if (force && !reason.trim()) return
     setBusy(true)
     setProblem(null)
     try {
       const result = await api.applyImportPreview(preview.uid, {
         preview_version: preview.version, idempotency_key: idempotencyKey,
         ...(preview.review_state_version ? { review_state_version: preview.review_state_version } : {}),
+        ...(force ? { force_state_change: true, reason: reason.trim() } : {}),
         selected_keys: chosen.map((r) => r.key),
         termination_confirmations: terminating.map((r) => ({ key: r.key,
           cause: termination[r.key].cause, reason: termination[r.key].reason.trim(),
@@ -77,12 +85,39 @@ export function ImportPreview({ preview, canApply, onApplied }) {
         <button type="button" className="btn btn--sm" disabled={busy || applied || !canApply}
           onClick={() => setSelected((current) => new Set([...current, ...visible.filter((r) => r.eligible).map((r) => r.key)]))}>
           {t('supplement.reviewPage')}</button>
-        <button type="button" className="btn btn--primary" disabled={busy || applied || !canApply || !chosen.length || !complete}
-          onClick={() => setConfirmOpen(true)}>{applied ? t('supplement.applied') : t('supplement.reviewApply')}</button>
+        <button type="button" className="btn btn--primary" disabled={busy || applied || !canApply || !chosen.length || !complete || (force && !reason.trim())}
+          onClick={() => { setProblem(null); setConfirmOpen(true) }}>{applied ? t('supplement.applied') : t('supplement.reviewApply')}</button>
       </div>
       {!canApply ? <p>{t('data.managerOnly')}</p> : null}
       {chosen.length && !complete ? <p role="note">{t('supplement.terminationRequired')}</p> : null}
       <Problem problem={problem} />
+      {stale ? (
+        <div className="imp-apply__fence" role="alert">
+          <p>{t('supplement.staleNote')}</p>
+          <div className="imp-apply__fenceActs">
+            {onRecheck ? (
+              <button type="button" className="btn btn--sm" disabled={busy || applied} onClick={onRecheck}>
+                {t('supplement.recheck')}
+              </button>
+            ) : null}
+          </div>
+          {canApply ? (
+            <label className="imp-apply__check">
+              <input type="checkbox" checked={force} disabled={busy || applied}
+                     onChange={(e) => { setForce(e.target.checked); setProblem(null) }} />
+              {t('supplement.forceState')}
+            </label>
+          ) : null}
+          {force ? (
+            <label className="label">
+              {t('supplement.forceReason')}
+              <input className="field" value={reason} disabled={busy || applied}
+                     placeholder={t('supplement.forceReasonHint')} onChange={(e) => setReason(e.target.value)} />
+            </label>
+          ) : null}
+          {force && !reason.trim() ? <p className="imp-apply__reason">{t('supplement.forceReasonRequired')}</p> : null}
+        </div>
+      ) : null}
       <ul className="case__rows supplement__rows">{visible.map((row) => {
         const candidate = row.termination_candidate
         const selectable = row.eligible
@@ -147,7 +182,9 @@ export function ImportPreview({ preview, canApply, onApplied }) {
       <p>{t('supplement.confirmCount', { n: chosen.length })}</p>
       <ul>{chosen.map((row) => <li key={row.key}>{row.customer_no || row.customer_uid || row.key} · {row.contract_uid || '—'}</li>)}</ul>
       {terminating.length ? <p>{t('supplement.confirmTerminate', { n: terminating.length })}</p> : null}
-      <p>{t('supplement.overlayNote')}</p><Problem problem={problem} />
+      <p>{t('supplement.overlayNote')}</p>
+      {force ? <p>{t('supplement.confirmForce', { reason: reason.trim() })}</p> : null}
+      <Problem problem={problem} />
     </ConfirmDialog>
   </section>
 }

@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Volt Debt PRODUCTION backup at 03:15 Bangkok time
+
+[Timer]
+OnCalendar=*-*-* 03:15:00 Asia/Bangkok
+RandomizedDelaySec=10min
+Persistent=true
+Unit=volt-debt-backup-production.service
+
+[Install]
+WantedBy=timers.target

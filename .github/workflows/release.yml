@@ -1,0 +1,128 @@
+# Production: push a tag `v*` → build & push :vX.Y.Z images to GHCR.
+# Deployment is a separate manual step (ssh in and switch the tag) — the
+# workflow never auto-redeploys production.
+#
+# Required GitHub secrets: none beyond the default GITHUB_TOKEN.
+# Optional: RELEASE_HOST + RELEASE_SSH_KEY if you want the workflow to
+#   prepare the VPS (it still won't switch traffic without a confirmation).
+
+name: Build Production Release
+
+on:
+  push:
+    tags: ['v*']
+
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Run backend tests
+        run: |
+          cd backend
+          pip install -r requirements.txt
+          pytest
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Run frontend tests
+        run: |
+          cd frontend
+          npm ci --no-audit --no-fund
+          npm test
+
+  build:
+    needs: test
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - name: api
+            context: .
+            file: infra/production/Dockerfile.api
+            tag: volt-debt-api
+          - name: web
+            context: frontend
+            file: frontend/Dockerfile
+            tag: volt-debt-web
+          - name: scanner
+            context: .
+            file: infra/vps/Dockerfile.scanner
+            tag: volt-debt-scanner
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build & push
+        uses: docker/build-push-action@v5
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.file }}
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.tag }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.tag }}:latest
+          build-args: |
+            VOLT_GIT_REVISION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # Creates a GitHub Release with a deployment reminder.
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          body: |
+            ## Deploy to production
+            
+            ### Option A: SSH and run manually
+            ```bash
+            ssh root@<PRODUCTION_HOST>
+            cd /srv/volt-debt-platform
+            git fetch origin && git checkout ${{ github.ref_name }}
+            sed -i 's|API_IMAGE=.*|API_IMAGE=ghcr.io/OWNER/volt-debt-api:${{ github.ref_name }}|' .env.production
+            sed -i 's|WEB_IMAGE=.*|WEB_IMAGE=ghcr.io/OWNER/volt-debt-web:${{ github.ref_name }}|' .env.production
+            docker compose -f infra/vps/compose.production.yaml --env-file .env.production pull
+            docker compose -f infra/vps/compose.production.yaml --env-file .env.production --profile production up -d --remove-orphans
+            ```
+            
+            ### Option B: Initialize production database (first run only)
+            ```bash
+            ssh root@<PRODUCTION_HOST>
+            cd /srv/volt-debt-platform
+            docker compose -f infra/vps/compose.production.yaml --env-file .env.production --profile setup run migrate-prd
+            ```

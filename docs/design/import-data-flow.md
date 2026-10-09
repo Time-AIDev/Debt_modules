@@ -167,3 +167,44 @@ sequenceDiagram
 | `peak_documents.state` | flag `source_missing` จาก reconcile | สถานะเอกสาร, transport, idempotency key |
 | `orders.*` | reconcile กับชุดที่ serve (volt_id) | approvals/added/removed ของ session นั้น |
 | `imports.state` (manual) | — (staged อย่างเดียว) | ทั้งหมด — ไม่มี epoch, ไม่แตะ landing |
+
+---
+
+## 6 — The review fence: upload many, confirm one at a time
+
+ทุกไฟล์ (PEAK invoices · PEAK receipts · New Order Master) ส่งเข้ามาพร้อมกันได้ — upload transport
+เป็น control request (คิว durable `app.task_outbox`, ไม่ถือล็อกสมุดงาน), PEAK land ถือ advisory lock
+ของตัวเอง (`peak_run_in_progress` ถ้าสองไฟล์ PEAK ทับกัน), business mutation ทุกตัว serialize ผ่าน
+`pg_advisory_xact_lock(LOCK_KEY)`. ส่งพร้อมกัน = ปลอดภัย แต่ "ยืนยัน" (apply) เป็นทีละไฟล์เสมอ:
+ทุก mutation ขยับ `app.business_version`, และ staged run ถูกล็อกเข้ากับเวอร์ชัน ณ ตอนตรวจ
+(`preview_review.publish` → `meta.review_state_version`).
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant UI as PeakIntake / ReceiptIntake / ImportPreview
+  participant R as routers/peak_pipeline · debt_imports
+  participant DB as landing.import_run / business_version
+
+  UI->>R: upload A (PEAK) + upload B (sheet) — พร้อมกันได้
+  Note over R,DB: staging commit = version v1 (A.fence=v1) → v2 (B.fence=v2)
+  UI->>R: POST A:apply
+  alt fence ยัง current
+    R-->>UI: 202 → apply (version v2 → v3)
+  else ข้อมูลขยับแล้วหลังตรวจ
+    R-->>UI: 409 preview_stale / state_conflict (DEBT-PRD-001)<br/>"ข้อมูลเปลี่ยนหลังตรวจ กรุณาตรวจตัวอย่างล่าสุดก่อนยืนยันอีกครั้ง"
+    UI->>R: GET A/changes (acts ที่ commit หลัง fence)
+    R-->>UI: [{act, actor, at, subject}] — ไม่มี detail (ล็อกเป็นเจ้าของ)
+    UI->>R: POST A:recheck (ตรวจใหม่ ณ เวอร์ชันปัจจุบัน)
+    R->>DB: meta.review_state_version = เวอร์ชันปัจจุบัน + _at
+    R-->>UI: 200 {review_state_version}
+    UI->>R: POST A:apply อีกครั้ง — ผ่าน
+    opt ผู้จัดการข้าม fence โดยตั้งใจ
+      UI->>R: POST A:apply {force_state_change, reason}
+    Note over R: manager-only · reason บังคับ · job ไม่ carry fence<br/>audit row เก็บ force_reason
+    end
+  end
+```
+
+ทางออกอื่น ๆ ของเรา: conflicts tab ตัดสินรายฟิลด์ (PEAK/ODOO + เหตุผล) หรือ **"ตัดสินทุกฟิลด์ของทุกลูกค้า"**
+(`conflicts:decide-all`) — `volt_id` ไม่เคยถูกตัดสินรวม และ apply ยัง default ไปทาง PEAK ตามเดิม

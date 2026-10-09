@@ -18,6 +18,9 @@ vi.mock('../lib/api.js', () => ({
     peakReceiptRows: vi.fn(), peakReceiptApply: vi.fn(),
     peakReportSchemas: vi.fn(),
     workbook: vi.fn(),
+    // the review fence: the re-check, the changes read and the bulk decision.
+    peakReportRecheck: vi.fn(), peakReceiptRecheck: vi.fn(), peakRunChanges: vi.fn(),
+    peakConflictsDecideAll: vi.fn(),
   },
   CHANGED_EVENT: 'volt:changed',
   AUTH_REQUIRED_EVENT: 'volt:auth-required',
@@ -282,5 +285,69 @@ describe('PeakIntake', () => {
     await user.click(screen.getByRole('button', { name: 'ยืนยันใช้รายงาน' }))
 
     expect(await screen.findByText('รายงานนี้เก่ากว่ารายงานที่ใช้อยู่')).toBeInTheDocument()
+  })
+
+  it('answers the review fence with a re-check, the changes read and a manager’s forced confirm', async () => {
+    api.peakReportStart.mockResolvedValue(DONE)
+    api.peakReportApply.mockResolvedValue({ run: APPLIED, served: true, moved_cases: 3 })
+    // The first confirm is refused by the fence: data moved after the review.
+    api.peakReportApply.mockRejectedValueOnce({
+      problem: { code: 'preview_stale', message_th: 'ข้อมูลเปลี่ยนหลังตรวจ กรุณาตรวจตัวอย่างล่าสุดก่อนยืนยันอีกครั้ง' },
+    })
+    api.peakReportRecheck.mockResolvedValue({ run_id: 9, review_state_version: '42' })
+    api.peakRunChanges.mockResolvedValue({ run_id: 9, since: '2026-10-08T10:00:00.000000',
+      review_state_version: '42', rows: [], total: 0 })
+
+    const user = userEvent.setup()
+    renderScreen(<PeakIntake />)
+    await screen.findByText('ยังไม่เคยใช้รายงาน PEAK')
+    await user.upload(screen.getByLabelText('เลือกไฟล์รายงาน PEAK'),
+                      new File(['x'], 'invoice_export.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    await user.click(await screen.findByRole('button', { name: 'ใช้รายงานนี้กับระบบ' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันใช้รายงาน' }))
+
+    // The refusal stays in the dialog with the fence's own honest answers under it.
+    expect(await screen.findByText(/ข้อมูลเปลี่ยนหลังตรวจ/)).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ตรวจข้อมูลล่าสุดอีกครั้ง' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'ดูว่าอะไรเปลี่ยน' })).toBeInTheDocument()
+    // An officer never gets the forced confirm.
+    expect(screen.queryByRole('checkbox', { name: /ยืนยันใช้รายงานทับถึงกระนั้น/ })).toBeNull()
+
+    // The changes read opens its own list, even an empty one is an answer.
+    await user.click(screen.getByRole('button', { name: 'ดูว่าอะไรเปลี่ยน' }))
+    expect(await screen.findByText('สิ่งที่เปลี่ยนหลังจากตรวจตัวอย่าง')).toBeInTheDocument()
+    await user.keyboard('{Escape}')
+
+    act(() => setRole('MANAGER'))
+    // No reason, no crossing: the forced confirm keeps its reason field.
+    await user.click(screen.getByRole('checkbox', { name: /ยืนยันใช้รายงานทับถึงกระนั้น/ }))
+    expect(screen.getByText('กรุณาระบุเหตุผลก่อนยืนยันทับ')).toBeInTheDocument()
+    await user.type(screen.getByLabelText('เหตุผลในการยืนยันทับ'), 'my own other import moved it')
+    await user.click(screen.getByRole('button', { name: 'ยืนยันทับ' }))
+    await waitFor(() => expect(api.peakReportApply).toHaveBeenCalledWith(9, expect.objectContaining({
+      force_state_change: true, reason: 'my own other import moved it',
+    })))
+  })
+
+  it('re-checks a staged run against the version that stands now when the fence refuses', async () => {
+    api.peakReportStart.mockResolvedValue(DONE)
+    api.peakReportApply.mockRejectedValue({
+      problem: { code: 'state_conflict', message_th: 'ข้อมูลเปลี่ยนหลังตรวจ กรุณาตรวจตัวอย่างล่าสุดก่อนยืนยันอีกครั้ง' },
+    })
+    api.peakReportRecheck.mockResolvedValue({ run_id: 9, review_state_version: '42' })
+
+    const user = userEvent.setup()
+    renderScreen(<PeakIntake />)
+    await screen.findByText('ยังไม่เคยใช้รายงาน PEAK')
+    await user.upload(screen.getByLabelText('เลือกไฟล์รายงาน PEAK'),
+                      new File(['x'], 'invoice_export.xlsx', { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+    await user.click(await screen.findByRole('button', { name: 'ใช้รายงานนี้กับระบบ' }))
+    await user.click(screen.getByRole('button', { name: 'ยืนยันใช้รายงาน' }))
+    await user.click(await screen.findByRole('button', { name: 'ตรวจข้อมูลล่าสุดอีกครั้ง' }))
+
+    await waitFor(() => expect(api.peakReportRecheck).toHaveBeenCalledWith(9))
+    // The fence's own refusal leaves the dialog once the review is current again.
+    expect(await screen.findByText('ตรวจข้อมูลล่าสุดแล้ว — ยืนยันใช้รายงานได้เลย')).toBeInTheDocument()
+    expect(screen.queryByText(/ข้อมูลเปลี่ยนหลังตรวจ/)).toBeNull()
   })
 })
