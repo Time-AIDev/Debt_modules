@@ -1,0 +1,23 @@
+[Unit]
+Description=Volt Debt STAGING local health checks
+After=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/volt-debt-health-staging
+User=root
+TimeoutStartSec=60
+UMask=0077
+Environment=VOLT_ENV=staging
+Environment=COMPOSE_FILE=/srv/volt-debt-platform/infra/vps/compose.staging.yaml
+Environment=COMPOSE_ENV_FILE=/srv/volt-debt-platform/.env.staging
+Environment=API_SERVICE=api-stg
+Environment=WEB_SERVICE=web-stg
+Environment=API_HEALTH_URL=http://127.0.0.1:8081/readyz
+Environment=WEB_HEALTH_URL=http://127.0.0.1:8080/healthz
+StateDirectory=volt-debt-ops-staging
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes

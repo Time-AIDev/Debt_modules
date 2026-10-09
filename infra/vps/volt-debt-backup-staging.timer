@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily Volt Debt STAGING backup at 02:15 Bangkok time
+
+[Timer]
+OnCalendar=*-*-* 02:15:00 Asia/Bangkok
+RandomizedDelaySec=10min
+Persistent=true
+Unit=volt-debt-backup-staging.service
+
+[Install]
+WantedBy=timers.target

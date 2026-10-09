@@ -1,0 +1,24 @@
+#!/usr/bin/env python3
+# volt-debt-health-staging — wrapper for staging environment health checks
+# Called by volt-debt-health-staging.service
+import os
+import sys
+from pathlib import Path
+
+# Set environment for staging
+os.environ['VOLT_ENV'] = 'staging'
+os.environ['COMPOSE_FILE'] = '/srv/volt-debt-platform/infra/vps/compose.staging.yaml'
+os.environ['COMPOSE_ENV_FILE'] = '/srv/volt-debt-platform/.env.staging'
+os.environ['API_SERVICE'] = 'api-stg'
+os.environ['WEB_SERVICE'] = 'web-stg'
+os.environ['API_HEALTH_URL'] = 'http://127.0.0.1:8091/readyz'
+os.environ['WEB_HEALTH_URL'] = 'http://127.0.0.1:8090/healthz'
+
+# Add ops library to path
+sys.path.insert(0, '/usr/local/lib/volt-debt-ops')
+
+# Import and run healthcheck
+import healthcheck
+
+if __name__ == '__main__':
+    sys.exit(healthcheck.main())

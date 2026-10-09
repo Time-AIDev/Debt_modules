@@ -1,0 +1,27 @@
+[Unit]
+Description=Volt Debt STAGING database and private object backup
+Requires=docker.service
+After=docker.service
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+UMask=0077
+Environment=VOLT_ENV=staging
+Environment=COMPOSE_FILE=/srv/volt-debt-platform/infra/vps/compose.staging.yaml
+Environment=COMPOSE_ENV_FILE=/srv/volt-debt-platform/.env.staging
+Environment=DATA_DIR=/srv/volt-debt-data-staging
+Environment=DB_SERVICE=db-stg
+Environment=API_SERVICE=api-stg
+Environment=QUIESCE_WRITERS=1
+ExecStart=/usr/local/sbin/volt-debt-backup-staging
+TimeoutStartSec=45min
+TimeoutStopSec=180s
+KillMode=control-group
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+PrivateTmp=true
+ProtectHome=true
+NoNewPrivileges=true
